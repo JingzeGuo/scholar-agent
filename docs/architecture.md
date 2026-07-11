@@ -41,7 +41,8 @@ User query
 | Prototype loop | `scholar_agent.agents.prototype_loop` | LangGraph decide→retrieve→verify loop |
 | Compatibility script | `scripts/deepseek_compatibility.py` | Live provider spike |
 | Ingestion | `scholar_agent.ingestion` | PDF → pages → sections → chunks |
-| CLI | `scholar_agent.cli` | `version`, `config`, `prototype`, `corpus`, `ingest` |
+| Retrieval | `scholar_agent.retrieval` | Dense + BM25 + RRF + rerank + Naive RAG |
+| CLI | `scholar_agent.cli` | `ingest`, `index build`, `retrieve`, `ask-naive`, … |
 
 ## Prototype loop
 

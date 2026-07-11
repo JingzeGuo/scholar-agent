@@ -44,6 +44,18 @@ ingest:
 ingest-smoke:
 	uv run scholar-agent ingest --manifest data/corpus_manifest.jsonl --limit 5
 
+index-build:
+	uv run scholar-agent index build --embedding-backend hash
+
+index-build-st:
+	uv run scholar-agent index build --embedding-backend st --force
+
+retrieve-demo:
+	uv run scholar-agent retrieve "What is Self-RAG?" --mode hybrid_rerank --embedding-backend hash --debug
+
+ask-naive-demo:
+	uv run scholar-agent ask-naive "What is Self-RAG?" --embedding-backend hash
+
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -22,6 +22,10 @@ dependencies = [
     "langgraph>=0.2",
     "tiktoken>=0.7",
     "pymupdf>=1.24",
+    "rank-bm25>=0.2",
+    "numpy>=1.26",
+    "chromadb>=0.5",
+    "sentence-transformers>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -34,11 +38,8 @@ dev = [
     "types-requests>=2.32",
 ]
 
-# Heavy runtime deps introduced in later phases (kept optional for Phase 0 spike)
+# Remaining heavy stacks for later phases
 retrieval = [
-    "chromadb>=0.5",
-    "rank-bm25>=0.2",
-    "sentence-transformers>=3.0",
     "networkx>=3.3",
 ]
 ui = [
@@ -105,7 +106,7 @@ ignore = [
 known-first-party = ["scholar_agent"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -127,5 +128,11 @@ module = [
     "langchain_core.*",
     "fitz",
     "pymupdf.*",
+    "chromadb.*",
+    "rank_bm25.*",
+    "sentence_transformers.*",
+    "numpy",
+    "numpy.*",
 ]
 ignore_missing_imports = true
+follow_imports = "skip"

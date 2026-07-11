@@ -47,12 +47,21 @@ from scholar_agent.models.ingestion import (
     SectionBlock,
 )
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
+from scholar_agent.models.retrieval import (
+    CitationRef,
+    NaiveRAGAnswer,
+    RankTrace,
+    RetrievalFilters,
+    RetrievalHit,
+    RetrievalResult,
+)
 from scholar_agent.models.workflow import ResearchRunState, VerificationResult
 
 __all__ = [
     "BudgetStatus",
     "Chunk",
     "CitationIssue",
+    "CitationRef",
     "CitationReport",
     "ClaimWithCitations",
     "CorpusIngestionReport",
@@ -68,6 +77,7 @@ __all__ = [
     "ExtractionSeverity",
     "FinalAnswer",
     "IngestionStatus",
+    "NaiveRAGAnswer",
     "Paper",
     "PaperExtractionReport",
     "PaperPage",
@@ -77,9 +87,13 @@ __all__ = [
     "PrototypeResult",
     "QueryPlan",
     "QueryType",
+    "RankTrace",
     "Relation",
     "RelationType",
     "ResearchRunState",
+    "RetrievalFilters",
+    "RetrievalHit",
+    "RetrievalResult",
     "SubQuestion",
     "SubQuestionStatus",
     "TokenUsage",

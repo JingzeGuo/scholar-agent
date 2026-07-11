@@ -6,7 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–2 implemented (compatibility, domain models, PDF ingestion).
+**Status:** Phases 0–3 implemented (compatibility, models, ingestion, hybrid retrieval).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -32,6 +32,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Header/footer cleanup + section heuristics
 - Token-aware chunker (`tiktoken`)
 - `scholar-agent ingest` → `data/processed/{papers,chunks}.jsonl` + quality report
+
+### Phase 3
+
+- Dense index (Chroma + BGE or offline hashing embedder)
+- Persistent BM25 aligned to stable `chunk_id`s
+- Explicit Reciprocal Rank Fusion + optional cross-encoder / lexical rerank
+- Typed tools + `retrieve` / `ask-naive` CLI
 
 ## Quick start
 
@@ -64,6 +71,10 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent corpus summary -m tests/fixtures/corpus_manifest.jsonl` | Manifest table |
 | `uv run scholar-agent ingest --manifest data/corpus_manifest.jsonl` | Ingest PDFs → processed JSONL |
 | `uv run scholar-agent ingest --limit 5` | Smoke-ingest first N papers |
+| `uv run scholar-agent index build --embedding-backend hash` | Build BM25 + dense indexes (offline) |
+| `uv run scholar-agent index build --embedding-backend st` | Build with BGE embeddings |
+| `uv run scholar-agent retrieve "What is Self-RAG?" --mode hybrid_rerank` | Search |
+| `uv run scholar-agent ask-naive "What is Self-RAG?"` | Naive RAG + page citations |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 

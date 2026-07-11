@@ -3,12 +3,14 @@
 Phase 0: version, config, prototype loop.
 Phase 1: corpus validate / summary against the manifest.
 Phase 2: PDF ingestion into canonical paper/chunk stores.
+Phase 3: index build, retrieve, Naive RAG baseline.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
 
 import typer
 from rich.console import Console
@@ -34,6 +36,8 @@ app = typer.Typer(
 )
 corpus_app = typer.Typer(help="Corpus manifest utilities.")
 app.add_typer(corpus_app, name="corpus")
+index_app = typer.Typer(help="Build and inspect retrieval indexes.")
+app.add_typer(index_app, name="index")
 console = Console()
 
 # Typer Option defaults as module-level callables avoid Ruff B008 on arg defaults.
@@ -270,6 +274,163 @@ def ingest_cmd(
     console.print(f"report: {cfg.paths.processed_dir / 'ingestion_report.json'}")
     if report.papers_failed and report.papers_ingested == 0 and report.papers_skipped == 0:
         raise typer.Exit(code=1)
+
+
+_EMBED_BACKEND_OPT = typer.Option(
+    "auto",
+    "--embedding-backend",
+    help="auto | hash (offline) | st (sentence-transformers)",
+)
+_FORCE_INDEX_OPT = typer.Option(False, "--force", help="Rebuild indexes even if fingerprints match")
+_MODE_OPT = typer.Option(
+    "hybrid_rerank",
+    "--mode",
+    help="dense | sparse | hybrid | hybrid_rerank",
+)
+_TOP_K_OPT = typer.Option(None, "--k", help="Result count override")
+_JSON_OPT = typer.Option(False, "--json", help="Machine-readable JSON output")
+_DEBUG_OPT = typer.Option(False, "--debug", help="Include retrieval debug ranks")
+_USE_LLM_OPT = typer.Option(
+    False,
+    "--llm",
+    help="Call the configured LLM for Naive RAG (otherwise extractive baseline)",
+)
+
+
+@index_app.command("build")
+def index_build_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    embedding_backend: str = _EMBED_BACKEND_OPT,
+    force: bool = _FORCE_INDEX_OPT,
+) -> None:
+    """Build dense (Chroma) + BM25 indexes from data/processed/chunks.jsonl."""
+    from scholar_agent.retrieval.index_builder import build_indexes
+
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    if embedding_backend not in {"auto", "hash", "st"}:
+        console.print("[red]embedding-backend must be auto|hash|st[/red]")
+        raise typer.Exit(code=1)
+    backend = embedding_backend  # narrowed below
+    built = build_indexes(
+        config=cfg,
+        embedding_backend=backend,  # type: ignore[arg-type]
+        force=force,
+    )
+    console.print(
+        f"[green]Indexes ready[/green]: chunks={len(built.store)} "
+        f"fingerprint={built.store.fingerprint[:16]}…"
+    )
+    console.print(f"  dense:  {built.dense_dir}")
+    console.print(f"  sparse: {built.sparse_dir}")
+    console.print(f"  embedder: {built.dense.embedder.model_name}")
+
+
+@app.command("retrieve")
+def retrieve_cmd(
+    query: str = typer.Argument(..., help="Search query"),
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    mode: str = _MODE_OPT,
+    k: int | None = _TOP_K_OPT,
+    embedding_backend: str = _EMBED_BACKEND_OPT,
+    json_output: bool = _JSON_OPT,
+    debug: bool = _DEBUG_OPT,
+) -> None:
+    """Run dense / sparse / hybrid retrieval against built indexes."""
+    from scholar_agent.retrieval.index_builder import load_toolkit
+
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    if mode not in {"dense", "sparse", "hybrid", "hybrid_rerank"}:
+        console.print("[red]mode must be dense|sparse|hybrid|hybrid_rerank[/red]")
+        raise typer.Exit(code=1)
+    if embedding_backend not in {"auto", "hash", "st"}:
+        embedding_backend = "auto"
+    toolkit = load_toolkit(
+        config=cfg,
+        embedding_backend=embedding_backend,  # type: ignore[arg-type]
+        reranker_backend="lexical" if embedding_backend == "hash" else "auto",
+    )
+    result = toolkit.search(
+        query,
+        mode=mode,  # type: ignore[arg-type]
+        k=k,
+    )
+    if json_output:
+        payload = result.model_dump(mode="json")
+        if debug:
+            payload["debug_view"] = toolkit.debug_dict(result)
+        console.print_json(json.dumps(payload))
+        return
+
+    console.print(f"[bold]method[/bold]: {result.method}  hits={len(result.hits)}")
+    for i, hit in enumerate(result.hits, start=1):
+        console.print(
+            f"[cyan]{i}.[/cyan] {hit.paper_id} {hit.page_label()} "
+            f"score={hit.score!s} dense={hit.dense_rank} sparse={hit.sparse_rank} "
+            f"rerank={hit.rerank_score}"
+        )
+        console.print(f"   chunk={hit.chunk_id}", markup=False)
+        console.print(f"   {hit.snippet(200)}", markup=False)
+    if debug:
+        console.print_json(json.dumps(toolkit.debug_dict(result)))
+
+
+@app.command("ask-naive")
+def ask_naive_cmd(
+    query: str = typer.Argument(..., help="Question for Naive RAG baseline"),
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    mode: str = _MODE_OPT,
+    k: int | None = _TOP_K_OPT,
+    embedding_backend: str = _EMBED_BACKEND_OPT,
+    use_llm: bool = _USE_LLM_OPT,
+    json_output: bool = _JSON_OPT,
+) -> None:
+    """Naive RAG baseline: retrieve top-k and answer with page citations."""
+    from scholar_agent.llm.client import create_llm_client
+    from scholar_agent.retrieval.index_builder import load_toolkit
+    from scholar_agent.retrieval.naive_rag import NaiveRAG
+
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    if embedding_backend not in {"auto", "hash", "st"}:
+        embedding_backend = "auto"
+    toolkit = load_toolkit(
+        config=cfg,
+        embedding_backend=embedding_backend,  # type: ignore[arg-type]
+        reranker_backend="lexical" if embedding_backend == "hash" else "auto",
+    )
+    llm = None
+    if use_llm:
+        try:
+            llm = create_llm_client(cfg)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]LLM unavailable ({exc}); using extractive baseline[/yellow]")
+    search_mode: Literal["dense", "sparse", "hybrid", "hybrid_rerank"] = (
+        mode  # type: ignore[assignment]
+        if mode in {"dense", "sparse", "hybrid", "hybrid_rerank"}
+        else "hybrid_rerank"
+    )
+    rag = NaiveRAG(
+        toolkit,
+        llm=llm,
+        mode=search_mode,
+        top_k=k or cfg.retrieval.reranker.top_k,
+    )
+    answer = rag.answer(query, use_llm=use_llm and llm is not None)
+    if json_output:
+        console.print_json(json.dumps(answer.model_dump(mode="json")))
+        return
+    console.print(f"[bold]method[/bold]: {answer.method}  llm={answer.used_llm}")
+    # markup=False: citation brackets like [paper_id p.3] must not be parsed as Rich tags
+    console.print(answer.answer, markup=False)
+    if answer.citations:
+        console.print("[bold]citations[/bold]:")
+        for c in answer.citations:
+            console.print(
+                f"  - {c.marker} {c.format_inline()} chunk={c.chunk_id}",
+                markup=False,
+            )
 
 
 def main() -> None:

@@ -3742,17 +3742,22 @@ name = "scholar-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "chromadb" },
     { name = "httpx" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pymupdf" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "rank-bm25" },
     { name = "rich" },
+    { name = "sentence-transformers" },
     { name = "tenacity" },
     { name = "tiktoken" },
     { name = "typer" },
@@ -3772,10 +3777,7 @@ eval = [
     { name = "ragas" },
 ]
 retrieval = [
-    { name = "chromadb" },
     { name = "networkx" },
-    { name = "rank-bm25" },
-    { name = "sentence-transformers" },
 ]
 ui = [
     { name = "streamlit" },
@@ -3793,7 +3795,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "chromadb", marker = "extra == 'retrieval'", specifier = ">=0.5" },
+    { name = "chromadb", specifier = ">=0.5" },
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=2.20" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-core", specifier = ">=0.3" },
@@ -3801,6 +3803,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=0.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "networkx", marker = "extra == 'retrieval'", specifier = ">=3.3" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "openai", specifier = ">=1.40" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
@@ -3810,10 +3813,10 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.1" },
-    { name = "rank-bm25", marker = "extra == 'retrieval'", specifier = ">=0.2" },
+    { name = "rank-bm25", specifier = ">=0.2" },
     { name = "rich", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "sentence-transformers", marker = "extra == 'retrieval'", specifier = ">=3.0" },
+    { name = "sentence-transformers", specifier = ">=3.0" },
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.36" },
     { name = "tenacity", specifier = ">=8.3" },
     { name = "tiktoken", specifier = ">=0.7" },

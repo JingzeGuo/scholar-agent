@@ -160,8 +160,38 @@ Rebuilt chunks keep stable IDs when text is unchanged.
 
 ---
 
+## Phase 3
+
+### ADR-016: Canonical chunk store is the only index source
+
+**Decision:** Dense (Chroma) and BM25 indexes are built only from
+`data/processed/chunks.jsonl`. Both persist a `corpus_fingerprint` of sorted
+`chunk_id:content_hash` pairs and refuse to load on mismatch.
+
+**Rationale:** Plan §8.3–8.4 — every index must share stable chunk IDs with the
+canonical store.
+
+### ADR-017: Explicit RRF + injectable embedder/reranker
+
+**Decision:** Hybrid fusion is hand-written Reciprocal Rank Fusion
+(`retrieval/fusion.py`). Embeddings default to sentence-transformers BGE, but
+tests and offline CI use `HashingEmbedder` + `LexicalReranker` via
+`--embedding-backend hash`.
+
+**Rationale:** Keeps fusion auditable; avoids paid/model downloads in unit tests
+while still supporting production models.
+
+### ADR-018: Naive RAG baseline is extractive by default
+
+**Decision:** `ask-naive` produces an evidence-backed answer with `[paper_id p.N]`
+citations without requiring an LLM. Optional `--llm` uses DeepSeek when configured.
+
+**Rationale:** Acceptance requires page references in baseline answers; offline
+reproducibility must not depend on live APIs.
+
+---
+
 ## Pending (later phases)
 
-- Dense/sparse indexes share the canonical chunk store (Phase 3)
 - Graph triples require evidence spans (Phase 4)
 - Research agent tool budgets and evidence reducers (Phase 5–6)
