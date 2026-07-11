@@ -39,6 +39,7 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Persistent BM25 aligned to stable `chunk_id`s
 - Explicit Reciprocal Rank Fusion + optional cross-encoder / lexical rerank
 - Typed tools + `retrieve` / `ask-naive` CLI
+- Production BGE/CrossEncoder weights are cached under ignored `.cache/huggingface/`
 
 ## Quick start
 

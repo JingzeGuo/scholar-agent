@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scholar_agent.ids import content_hash, make_chunk_id
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.retrieval import RetrievalFilters
 from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.retrieval.dense import DenseIndex
-from scholar_agent.retrieval.embeddings import HashingEmbedder
+from scholar_agent.retrieval.embeddings import HashingEmbedder, model_cache_folder
 from scholar_agent.retrieval.fusion import ranks_map, reciprocal_rank_fusion
 from scholar_agent.retrieval.naive_rag import NaiveRAG
 from scholar_agent.retrieval.reranker import LexicalReranker
@@ -221,3 +223,18 @@ def test_get_chunk_and_paper_tools(tmp_path: Path) -> None:
 
 def test_tokenize_basic() -> None:
     assert "retrieval" in tokenize("Retrieval-Augmented Generation")
+
+
+def test_model_cache_defaults_to_ignored_project_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    repo_root: Path,
+) -> None:
+    monkeypatch.delenv("SCHOLAR_MODEL_CACHE", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    assert Path(model_cache_folder()) == repo_root / ".cache" / "huggingface" / "hub"
+
+
+def test_model_cache_honors_hf_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("SCHOLAR_MODEL_CACHE", raising=False)
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert Path(model_cache_folder()) == tmp_path / "hub"

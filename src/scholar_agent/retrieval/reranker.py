@@ -6,6 +6,7 @@ import re
 from typing import Protocol, runtime_checkable
 
 from scholar_agent.models.retrieval import RetrievalHit
+from scholar_agent.retrieval.embeddings import model_cache_folder
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
 
@@ -60,7 +61,10 @@ class CrossEncoderReranker:
         from sentence_transformers import CrossEncoder
 
         self._model_name = model_name
-        self._model = CrossEncoder(model_name)
+        self._model = CrossEncoder(
+            model_name,
+            cache_folder=model_cache_folder(),
+        )
 
     @property
     def model_name(self) -> str:

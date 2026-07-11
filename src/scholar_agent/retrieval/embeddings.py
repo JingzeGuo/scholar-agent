@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+
+from scholar_agent.config import REPO_ROOT
 
 
 @runtime_checkable
@@ -28,6 +32,22 @@ class Embedder(Protocol):
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
+
+
+def model_cache_folder() -> str:
+    """Return the shared Hugging Face cache used by production retrieval models.
+
+    Keep model weights inside the repository's ignored ``.cache`` directory by
+    default so CLI commands reuse downloads consistently. Operators can override
+    it with ``SCHOLAR_MODEL_CACHE`` or the standard ``HF_HOME`` variable.
+    """
+    explicit = os.getenv("SCHOLAR_MODEL_CACHE")
+    if explicit:
+        return str(Path(explicit).expanduser().resolve())
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        return str((Path(hf_home).expanduser() / "hub").resolve())
+    return str((REPO_ROOT / ".cache" / "huggingface" / "hub").resolve())
 
 
 class HashingEmbedder:
@@ -76,7 +96,10 @@ class SentenceTransformerEmbedder:
         from sentence_transformers import SentenceTransformer
 
         self._model_name = model_name
-        self._model = SentenceTransformer(model_name)
+        self._model = SentenceTransformer(
+            model_name,
+            cache_folder=model_cache_folder(),
+        )
         # probe dimension
         probe = self._model.encode(["probe"], normalize_embeddings=True)
         self._dimension = int(probe.shape[1])

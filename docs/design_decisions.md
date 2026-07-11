@@ -189,6 +189,17 @@ citations without requiring an LLM. Optional `--llm` uses DeepSeek when configur
 **Rationale:** Acceptance requires page references in baseline answers; offline
 reproducibility must not depend on live APIs.
 
+### ADR-019: Project-local production model cache
+
+**Decision:** BGE and CrossEncoder use a shared cache under the repository's ignored
+`.cache/huggingface/hub` directory by default. `SCHOLAR_MODEL_CACHE` and `HF_HOME` can override
+the location. The production path was validated on all 5,858 canonical chunks with
+`BAAI/bge-small-en-v1.5` and `cross-encoder/ms-marco-MiniLM-L-6-v2`.
+
+**Rationale:** A deterministic project-local cache makes the production retrieval path reusable
+across CLI commands without manual `HF_HOME` configuration, while keeping model weights out of
+Git. Offline CI continues to use the lightweight hash/lexical backends.
+
 ---
 
 ## Pending (later phases)
