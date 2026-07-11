@@ -59,7 +59,21 @@ uv run python scripts/deepseek_compatibility.py
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 
-Later phases add corpus ingest, retrieval, graph, full agent workflow, evaluation, and Streamlit demo.
+### Corpus (≈120 arXiv PDFs)
+
+PDFs are **not** committed (see `.gitignore`). Download them locally:
+
+```bash
+uv run python scripts/download_corpus.py --target 120 --skip-existing
+uv run scholar-agent corpus validate -m data/corpus_manifest.jsonl --check-pdfs
+uv run scholar-agent corpus summary -m data/corpus_manifest.jsonl
+```
+
+- Seed list: `data/seed_arxiv_ids.yaml` (curated by plan categories)
+- Manifest: `data/corpus_manifest.jsonl` (metadata + content hashes)
+- PDFs: `data/papers/{arxiv_id}.pdf`
+
+Later phases add ingestion, retrieval, graph, full agent workflow, evaluation, and Streamlit demo.
 
 ## Project layout
 

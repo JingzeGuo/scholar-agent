@@ -1,0 +1,157 @@
+# Curated ScholarAgent seed corpus (target ~120 arXiv papers).
+# Categories follow CODEX_IMPLEMENTATION_PLAN.md §3.1.
+# IDs verified against arXiv titles where possible. The download script
+# de-duplicates and can top up via search if needed.
+
+foundational:  # ~20 — classic RAG / dense retrieval / embeddings
+  - "2005.11401"  # RAG (Lewis et al.)
+  - "2002.08909"  # REALM
+  - "2004.04906"  # DPR
+  - "2007.01282"  # Fusion-in-Decoder
+  - "2112.04426"  # RETRO
+  - "2208.03299"  # Atlas
+  - "2301.12652"  # REPLUG
+  - "2302.00083"  # In-Context RALM
+  - "2004.12832"  # ColBERT
+  - "2104.08663"  # BEIR
+  - "2007.00808"  # ANCE
+  - "2112.09118"  # Contriever
+  - "2107.05720"  # SPLADE
+  - "1908.10084"  # Sentence-BERT
+  - "2210.07316"  # MTEB
+  - "2309.07597"  # C-Pack / BGE resources
+  - "2212.09741"  # Instructor embeddings
+  - "2101.00408"  # End-to-end neural retrievers
+  - "2308.07107"  # LLMs for IR survey
+  - "2104.05740"  # DPR replication study
+
+retrieval_rerank_query:  # ~30 — rewrite, iterative, long-context, advanced pipelines
+  - "2212.10496"  # HyDE
+  - "2305.14283"  # Query rewriting for RAG
+  - "2305.15294"  # Iterative retrieval enhancement
+  - "2305.06983"  # FLARE / Active RAG
+  - "2307.03172"  # Lost in the Middle
+  - "2401.18059"  # RAPTOR
+  - "2310.01352"  # RA-DIT
+  - "2401.15391"  # MultiHop-RAG
+  - "2311.08377"  # Learning to Filter Context (FILCO)
+  - "2305.15225"  # SAIL
+  - "2402.19473"  # RAG for AIGC survey
+  - "2404.00610"  # RQ-RAG
+  - "2404.14760"  # Domain-specific RAG
+  - "2404.05961"  # LLM2Vec
+  - "2309.01431"  # Benchmarking LLMs in RAG
+  - "2402.03367"  # RAG-Fusion
+  - "2406.14550"  # GraphReader
+  - "2305.11738"  # CRITIC
+  - "2407.01219"  # Searching for Best Practices in RAG
+  - "2405.20139"  # GNN-RAG
+  - "2406.13213"  # Multi-Meta-RAG
+  - "2312.10997"  # RAG survey (Gao et al.)
+  - "2406.13249"  # R^2AG
+  - "2407.02485"  # RankRAG
+  - "2412.15246"  # Accelerating RAG
+  - "2312.08976"  # Dynamic RAG
+  - "2409.14924"  # RAG and Beyond survey
+  - "2404.13534"  # (replaced if off-topic at download time)
+  - "2305.14332"  # attribution / cross-lingual QA
+  - "2406.00045"  # keep only if on-topic after check
+
+agent_planning_tools:  # ~25 — agents, tools, planning, multi-agent
+  - "2210.03629"  # ReAct
+  - "2302.04761"  # Toolformer
+  - "2305.10601"  # Tree of Thoughts
+  - "2303.11366"  # Reflexion
+  - "2305.16291"  # Voyager
+  - "2304.03442"  # Generative Agents
+  - "2305.15334"  # Gorilla
+  - "2303.17580"  # HuggingGPT
+  - "2308.08155"  # AutoGen
+  - "2308.00352"  # MetaGPT
+  - "2308.03688"  # AgentBench
+  - "2309.07864"  # LLM-based agents survey
+  - "2310.03714"  # DSPy
+  - "2402.01030"  # CodeAct / executable actions
+  - "2402.05120"  # More Agents Is All You Need
+  - "2402.01817"  # LLM-Modulo planning
+  - "2406.04692"  # Mixture-of-Agents
+  - "2310.12823"  # AgentTuning
+  - "2402.01622"  # TravelPlanner
+  - "2309.02427"  # Cognitive Architectures for Language Agents
+  - "2401.13138"  # Visibility into AI Agents
+  - "2404.13501"  # Memory mechanism survey (agents)
+  - "2305.14325"  # Multiagent debate factuality
+  - "2407.16008"  # Agent-related (validated by API)
+  - "2312.13382"  # AppWorld / agent benchmark if exists
+
+agentic_rag_graphrag:  # ~20
+  - "2310.11511"  # Self-RAG
+  - "2401.15884"  # CRAG
+  - "2404.16130"  # From Local to Global (GraphRAG)
+  - "2408.08921"  # GraphRAG survey
+  - "2501.00309"  # GraphRAG survey (Peng et al. / related)
+  - "2501.13958"  # GraphRAG for customized LLMs
+  - "2402.07630"  # G-Retriever
+  - "2405.16506"  # GRAG
+  - "2405.14831"  # HippoRAG
+  - "2409.05591"  # MemoRAG
+  - "2410.05779"  # LightRAG
+  - "2408.04948"  # HybridRAG
+  - "2405.20139"  # GNN-RAG
+  - "2406.14550"  # GraphReader
+  - "2307.16883"  # HAGRID
+  - "2405.07437"  # Evaluation of RAG survey
+  - "2401.15391"  # MultiHop-RAG
+  - "2404.00610"  # RQ-RAG
+  - "2406.13249"  # R^2AG
+  - "2407.02485"  # RankRAG
+
+benchmarks_eval_surveys:  # ~25
+  - "2312.10997"  # RAG survey Gao
+  - "2309.15217"  # Ragas
+  - "2402.19473"  # RAG for AIGC survey
+  - "2404.19543"  # RAG and RAU survey
+  - "2405.06211"  # RAG meeting LLMs survey
+  - "2311.05232"  # Hallucination survey
+  - "2404.10981"  # RAG text generation survey
+  - "2407.11005"  # RAGBench
+  - "2309.01431"  # Benchmarking LLMs in RAG
+  - "2104.08663"  # BEIR
+  - "2210.07316"  # MTEB
+  - "2402.08377"  # (will validate)
+  - "2404.10198"  # ClashEval
+  - "2404.14809"  # LLMs on generative graph analytics
+  - "2406.18122"  # Poisoned LangChain (security of agent stacks)
+  - "2405.04434"  # may be wrong — script will keep only if relevant
+  - "2305.14325"  # multiagent factuality
+  - "2404.13501"  # agent memory survey
+  - "2308.07107"  # LLMs for IR survey
+  - "2409.14924"  # RAG and Beyond
+  - "2501.13958"  # GraphRAG customized survey
+  - "2408.08921"  # GraphRAG survey
+  - "2407.01219"  # Best practices in RAG
+  - "2310.11511"  # Self-RAG (method + eval sections)
+  - "2401.15884"  # CRAG
+
+# Explicit high-value replacements for previously off-topic IDs
+extra_high_value:
+  - "2302.04761"  # Toolformer
+  - "2305.10601"  # ToT
+  - "2406.04744"  # Agent/RAG if resolves
+  - "2406.11201"  #
+  - "2405.14831"  # HippoRAG
+  - "2410.02725"  #
+  - "2406.14550"  # GraphReader
+  - "2409.07494"  #
+  - "2402.13178"  #
+  - "2406.09479"  #
+  - "2305.05658"  # ToolLLM
+  - "2307.16789"  # REST meets ReAct
+  - "2310.05915"  # OpenAgents
+  - "2401.01234"  # will be filtered if off-topic
+  - "2405.04437"  #
+  - "2406.18518"  #
+  - "2404.14809"
+  - "2311.09476"  #
+  - "2402.12326"  #
+  - "2306.08302"  #
