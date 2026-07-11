@@ -28,17 +28,19 @@ User query
   → answer + sources + execution trace
 ```
 
-## Phase 0 components
+## Phase 0–1 components
 
 | Component | Location | Role |
 |---|---|---|
 | Config | `scholar_agent.config` | YAML + env, Pydantic validation |
 | Logging | `scholar_agent.logging` | Secret-safe structured logs |
-| Core models | `scholar_agent.models` | Events, budgets, prototype types |
+| Stable IDs | `scholar_agent.ids` | Content-addressed paper/chunk/entity/evidence IDs |
+| Core models | `scholar_agent.models` | Corpus, plan, evidence, graph, workflow types |
+| Storage | `scholar_agent.storage` | Typed JSONL + corpus manifest |
 | LLM client | `scholar_agent.llm` | DeepSeek OpenAI-compatible wrapper |
 | Prototype loop | `scholar_agent.agents.prototype_loop` | LangGraph decide→retrieve→verify loop |
 | Compatibility script | `scripts/deepseek_compatibility.py` | Live provider spike |
-| CLI | `scholar_agent.cli` | `version`, `config`, `prototype` |
+| CLI | `scholar_agent.cli` | `version`, `config`, `prototype`, `corpus` |
 
 ## Prototype loop
 

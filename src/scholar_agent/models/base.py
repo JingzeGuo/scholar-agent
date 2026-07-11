@@ -1,9 +1,4 @@
-"""Core Pydantic models shared across module boundaries.
-
-Phase 0 defines the minimal models needed for configuration, execution
-events, and the LangGraph prototype loop. Domain models (Paper, Chunk,
-Evidence, etc.) expand in Phase 1.
-"""
+"""Runtime events, budgets, and Phase 0 prototype models."""
 
 from __future__ import annotations
 
@@ -13,11 +8,6 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
-
-
-def new_run_id() -> str:
-    """Generate a stable-looking run identifier (not content-addressed)."""
-    return f"run_{uuid4().hex[:16]}"
 
 
 def utc_now_iso() -> str:

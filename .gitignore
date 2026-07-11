@@ -52,9 +52,9 @@ data/evaluation/**
 !data/evaluation/fixtures/**
 !tests/fixtures/**
 
-# Model caches
+# Model caches (do not ignore src/scholar_agent/models package)
 .cache/
-models/
+/models/
 **/sentence-transformers/
 **/torch_cache/
 .huggingface/

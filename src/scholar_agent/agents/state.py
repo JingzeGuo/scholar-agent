@@ -1,14 +1,14 @@
 """Shared agent state helpers for LangGraph reducers.
 
-Phase 0 defines reducer utilities used by the prototype loop. Full Research
-workflow state expands in later phases.
+Reducers for execution events and evidence must append / dedupe rather than
+blindly overwriting repeated retrieval results.
 """
 
 from __future__ import annotations
 
 from typing import Annotated, TypedDict
 
-from scholar_agent.models import ExecutionEvent
+from scholar_agent.models import EvidenceItem, EvidenceLedger, ExecutionEvent
 
 
 def append_events(
@@ -18,6 +18,24 @@ def append_events(
     """Append execution events without deduplicating (events are unique by id)."""
     additions = [new] if isinstance(new, ExecutionEvent) else list(new)
     return list(existing) + additions
+
+
+def merge_evidence(
+    existing: list[EvidenceItem] | EvidenceLedger,
+    new: list[EvidenceItem] | EvidenceItem | EvidenceLedger,
+) -> list[EvidenceItem]:
+    """Merge evidence with chunk+span deduplication (prefer higher scores)."""
+    if isinstance(existing, EvidenceLedger):
+        base = existing
+    else:
+        base = EvidenceLedger(items=list(existing))
+
+    if isinstance(new, EvidenceLedger):
+        incoming: list[EvidenceItem] | EvidenceItem = new.items
+    else:
+        incoming = new
+
+    return base.merge(incoming).items
 
 
 def replace_if_set(existing: str | None, new: str | None) -> str | None:
@@ -33,4 +51,5 @@ class BaseAgentState(TypedDict, total=False):
     iteration: int
     tool_call_count: int
     events: Annotated[list[ExecutionEvent], append_events]
+    evidence: Annotated[list[EvidenceItem], merge_evidence]
     terminated_reason: str | None

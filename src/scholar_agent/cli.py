@@ -1,7 +1,7 @@
 """Typer CLI entrypoint for ScholarAgent.
 
-Phase 0 exposes scaffolding commands: version, config show, and prototype loop.
-Full corpus / ask / evaluate commands arrive in later phases.
+Phase 0: version, config, prototype loop.
+Phase 1: corpus validate / summary against the manifest.
 """
 
 from __future__ import annotations
@@ -17,6 +17,11 @@ from scholar_agent import __version__
 from scholar_agent.agents.prototype_loop import PrototypeLoopConfig, run_prototype_loop
 from scholar_agent.config import load_config
 from scholar_agent.logging import setup_logging
+from scholar_agent.storage.manifest import (
+    ManifestError,
+    load_corpus_manifest,
+    validate_corpus_manifest,
+)
 
 app = typer.Typer(
     name="scholar-agent",
@@ -24,6 +29,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+corpus_app = typer.Typer(help="Corpus manifest utilities.")
+app.add_typer(corpus_app, name="corpus")
 console = Console()
 
 # Typer Option defaults as module-level callables avoid Ruff B008 on arg defaults.
@@ -129,6 +136,94 @@ def prototype_cmd(
     console.print("[bold]events[/bold]:")
     for event in result.events:
         console.print(f"  - {event.event_type.value}: {event.summary}")
+
+
+_MANIFEST_OPT = typer.Option(
+    None,
+    "--manifest",
+    "-m",
+    help="Path to corpus_manifest.jsonl (default: from config)",
+    exists=False,
+)
+_PAPERS_DIR_OPT = typer.Option(
+    None,
+    "--papers-dir",
+    help="Directory containing PDFs (default: from config)",
+    exists=False,
+)
+_CHECK_PDFS_OPT = typer.Option(
+    False,
+    "--check-pdfs",
+    help="Verify that listed PDF files exist on disk",
+)
+
+
+@corpus_app.command("validate")
+def corpus_validate_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    manifest: Path | None = _MANIFEST_OPT,
+    papers_dir: Path | None = _PAPERS_DIR_OPT,
+    check_pdfs: bool = _CHECK_PDFS_OPT,
+) -> None:
+    """Validate corpus manifest schema and optional PDF presence."""
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    manifest_path = manifest or cfg.paths.corpus_manifest
+    pdf_dir = papers_dir or (cfg.paths.papers_dir if check_pdfs else None)
+
+    issues = validate_corpus_manifest(
+        manifest_path,
+        papers_dir=pdf_dir if check_pdfs else None,
+    )
+    if issues:
+        console.print(f"[red]Manifest invalid[/red]: {manifest_path}")
+        for issue in issues:
+            console.print(f"  - {issue}")
+        raise typer.Exit(code=1)
+
+    try:
+        loaded = load_corpus_manifest(manifest_path)
+    except ManifestError as exc:
+        console.print(f"[red]Manifest invalid[/red]: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]Manifest OK[/green]: {manifest_path}")
+    console.print(f"entries: {len(loaded)}")
+    by_status: dict[str, int] = {}
+    for entry in loaded.entries:
+        key = entry.ingestion_status.value
+        by_status[key] = by_status.get(key, 0) + 1
+    for status, count in sorted(by_status.items()):
+        console.print(f"  {status}: {count}")
+
+
+@corpus_app.command("summary")
+def corpus_summary_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    manifest: Path | None = _MANIFEST_OPT,
+) -> None:
+    """Print a short corpus manifest summary table."""
+    cfg = load_config(config_path)
+    manifest_path = manifest or cfg.paths.corpus_manifest
+    try:
+        loaded = load_corpus_manifest(manifest_path)
+    except ManifestError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title=f"Corpus manifest ({len(loaded)} papers)")
+    table.add_column("paper_id", style="cyan")
+    table.add_column("year")
+    table.add_column("status")
+    table.add_column("title")
+    for entry in loaded.entries:
+        table.add_row(
+            entry.paper_id,
+            str(entry.year or ""),
+            entry.ingestion_status.value,
+            entry.title[:60] + ("…" if len(entry.title) > 60 else ""),
+        )
+    console.print(table)
 
 
 def main() -> None:

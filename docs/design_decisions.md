@@ -97,9 +97,41 @@ acceptance needs a reproducible result for every required capability.
 
 ---
 
+## Phase 1
+
+### ADR-010: Content-addressed IDs with arXiv/DOI preference
+
+**Decision:** `scholar_agent.ids` generates stable paper IDs preferring
+normalized arXiv IDs, then DOIs, then title+year hashes. Chunk, entity,
+relation, and within-run evidence IDs are SHA-256–based compositions of their
+identity fields. Run IDs remain random UUIDs for audit uniqueness.
+
+**Rationale:** Re-ingestion and evidence reconstruction must not churn IDs used
+by indexes, graphs, and citation trails.
+
+### ADR-011: Models package + JSONL as canonical persistence
+
+**Decision:** Domain models live under `scholar_agent.models` (package). Papers,
+chunks, entities, relations, and the corpus manifest persist as typed JSONL via
+`JsonlRepository`. Invalid lines fail with path+line diagnostics.
+
+**Rationale:** The plan requires Pydantic at module boundaries and a canonical
+chunk store as source of truth for every index. JSONL is portable, diffable, and
+easy to fixture in tests.
+
+### ADR-012: Evidence ledger dedupes by chunk + normalized span
+
+**Decision:** `EvidenceLedger.merge` and the `merge_evidence` LangGraph reducer
+deduplicate on `(chunk_id, normalize_text(evidence_text))`, keeping the higher
+score and preserving contradiction flags.
+
+**Rationale:** Plan §7.3 — avoid duplicate retrieval pollution without dropping
+stronger scores.
+
+---
+
 ## Pending (later phases)
 
-- Canonical content-addressed IDs for papers/chunks (Phase 1)
 - Chunk store as sole source of truth for all indexes (Phase 2–3)
 - Graph triples require evidence spans (Phase 4)
 - Research agent tool budgets and evidence reducers (Phase 5–6)

@@ -6,16 +6,26 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phase 0 implementation complete; live provider acceptance requires an API key.
+**Status:** Phase 0 complete (including live DeepSeek compatibility). Phase 1 domain
+models and canonical storage implemented.
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
-## Phase 0
+## Implemented phases
+
+### Phase 0
 
 - Repository scaffold (`uv` + `pyproject.toml` + lockfile)
 - Validated YAML/env configuration
 - DeepSeek OpenAI-compatible client + live compatibility script
 - LangGraph conditional loop with a deterministic fake model
 - Architecture notes and design decision records
+
+### Phase 1
+
+- Core Pydantic domain models (paper, chunk, plan, evidence, graph, workflow)
+- Deterministic ID helpers
+- Typed JSONL repositories + corpus manifest loader/validator
+- Test fixtures under `tests/fixtures/`
 
 ## Quick start
 
@@ -44,6 +54,8 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent version` | Package version |
 | `uv run scholar-agent config` | Show validated config |
 | `uv run scholar-agent prototype "…"` | Run fake-model LangGraph loop |
+| `uv run scholar-agent corpus validate -m tests/fixtures/corpus_manifest.jsonl` | Validate manifest |
+| `uv run scholar-agent corpus summary -m tests/fixtures/corpus_manifest.jsonl` | Manifest table |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 
