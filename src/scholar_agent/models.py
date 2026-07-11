@@ -1,0 +1,136 @@
+"""Core Pydantic models shared across module boundaries.
+
+Phase 0 defines the minimal models needed for configuration, execution
+events, and the LangGraph prototype loop. Domain models (Paper, Chunk,
+Evidence, etc.) expand in Phase 1.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any, Literal
+from uuid import uuid4
+
+from pydantic import BaseModel, Field, field_validator
+
+
+def new_run_id() -> str:
+    """Generate a stable-looking run identifier (not content-addressed)."""
+    return f"run_{uuid4().hex[:16]}"
+
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+class QueryType(StrEnum):
+    SEMANTIC = "semantic"
+    KEYWORD = "keyword"
+    COMPARISON = "comparison"
+    RELATIONAL = "relational"
+    SYNTHESIS = "synthesis"
+
+
+class EventType(StrEnum):
+    RUN_STARTED = "run_started"
+    RUN_FINISHED = "run_finished"
+    PLAN_CREATED = "plan_created"
+    TOOL_SELECTED = "tool_selected"
+    TOOL_RESULT = "tool_result"
+    EVIDENCE_ADDED = "evidence_added"
+    VERIFICATION = "verification"
+    CORRECTIVE = "corrective"
+    BUDGET_HIT = "budget_hit"
+    ERROR = "error"
+    # Prototype-loop events
+    ITERATION = "iteration"
+    DECISION = "decision"
+    TERMINATED = "terminated"
+
+
+class ExecutionEvent(BaseModel):
+    """Auditable agent event. Never stores private chain-of-thought."""
+
+    event_id: str = Field(default_factory=lambda: f"evt_{uuid4().hex[:12]}")
+    run_id: str
+    event_type: EventType
+    timestamp: str = Field(default_factory=utc_now_iso)
+    component: str
+    summary: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("summary")
+    @classmethod
+    def _summary_not_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("summary must be non-empty")
+        return cleaned
+
+
+class TokenUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    def add(self, other: TokenUsage) -> TokenUsage:
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+        )
+
+
+class BudgetStatus(BaseModel):
+    tool_call_count: int = 0
+    max_tool_calls: int = 4
+    iteration: int = 0
+    max_iterations: int = 3
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
+    max_total_tokens: int = 100_000
+    latency_ms: int = 0
+    max_latency_ms: int = 120_000
+    terminated_reason: str | None = None
+
+    def tool_budget_remaining(self) -> int:
+        return max(0, self.max_tool_calls - self.tool_call_count)
+
+    def iteration_budget_remaining(self) -> int:
+        return max(0, self.max_iterations - self.iteration)
+
+    def is_exhausted(self) -> bool:
+        return (
+            self.tool_call_count >= self.max_tool_calls
+            or self.iteration >= self.max_iterations
+            or self.token_usage.total_tokens >= self.max_total_tokens
+            or self.latency_ms >= self.max_latency_ms
+        )
+
+
+class PrototypeDecision(BaseModel):
+    """Deterministic decision surface for the Phase 0 LangGraph spike."""
+
+    action: Literal["retrieve", "verify", "finish"]
+    reason: str
+    need_more_evidence: bool = False
+
+
+class PrototypeObservation(BaseModel):
+    tool_name: str
+    content: str
+    score: float | None = None
+    is_useful: bool = True
+
+
+class PrototypeResult(BaseModel):
+    """Final result of the Phase 0 prototype loop."""
+
+    run_id: str
+    query: str
+    answer: str
+    iterations: int
+    tool_call_count: int
+    events: list[ExecutionEvent]
+    terminated_reason: str
+    success: bool

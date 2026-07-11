@@ -1,0 +1,129 @@
+[project]
+name = "scholar-agent"
+version = "0.1.0"
+description = "Evidence-driven multi-agent GraphRAG for literature research"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ScholarAgent" }]
+keywords = ["rag", "agents", "literature", "graphrag", "langgraph"]
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "typer>=0.12",
+    "rich>=13.7",
+    "httpx>=0.27",
+    "tenacity>=8.3",
+    "openai>=1.40",
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langgraph>=0.2",
+    "tiktoken>=0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+    "types-requests>=2.32",
+]
+
+# Heavy runtime deps introduced in later phases (kept optional for Phase 0 spike)
+retrieval = [
+    "chromadb>=0.5",
+    "rank-bm25>=0.2",
+    "sentence-transformers>=3.0",
+    "networkx>=3.3",
+    "pymupdf>=1.24",
+]
+ui = [
+    "streamlit>=1.36",
+]
+eval = [
+    "ragas>=0.1",
+    "datasets>=2.20",
+]
+
+[project.scripts]
+scholar-agent = "scholar_agent.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scholar_agent"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+    "types-requests>=2.32",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = [
+    "live: tests that call paid/live providers (opt-in)",
+    "slow: slower integration tests",
+]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "N",   # pep8-naming
+]
+ignore = [
+    "E501",  # line length handled by formatter preference
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scholar_agent"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+packages = ["scholar_agent"]
+mypy_path = "src"
+exclude = [
+    "tests/",
+    "scripts/",
+    "notebooks/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "langgraph.*",
+    "langchain_core.*",
+]
+ignore_missing_imports = true

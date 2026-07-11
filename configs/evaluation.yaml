@@ -1,0 +1,32 @@
+# Evaluation configuration (skeleton for later phases)
+
+dataset:
+  questions_path: data/evaluation/questions.jsonl
+  reference_evidence_path: data/evaluation/reference_evidence.jsonl
+  frozen_split_path: data/evaluation/frozen_split.json
+
+systems:
+  - naive_rag
+  - hybrid_rag
+  - hybrid_rerank
+  - hybrid_graph
+  - full_agent
+
+metrics:
+  retrieval:
+    - recall_at_k
+    - mrr
+    - ndcg_at_k
+  citation:
+    - citation_precision
+    - citation_recall
+    - unsupported_claim_rate
+  answer:
+    - ragas_faithfulness
+    - ragas_answer_relevancy
+    - human_review_subset
+
+budgets:
+  max_questions: 50
+  max_latency_ms_per_question: 120000
+  use_live_llm: false
