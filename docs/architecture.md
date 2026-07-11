@@ -42,7 +42,8 @@ User query
 | Compatibility script | `scripts/deepseek_compatibility.py` | Live provider spike |
 | Ingestion | `scholar_agent.ingestion` | PDF → pages → sections → chunks |
 | Retrieval | `scholar_agent.retrieval` | Dense + BM25 + RRF + rerank + Naive RAG |
-| CLI | `scholar_agent.cli` | `ingest`, `index build`, `retrieve`, `ask-naive`, … |
+| Knowledge graph | `scholar_agent.graph` | Extract, resolve, MultiDiGraph, graph retrieve |
+| CLI | `scholar_agent.cli` | `ingest`, `index`, `graph`, `retrieve`, `ask-naive`, … |
 
 ## Prototype loop
 

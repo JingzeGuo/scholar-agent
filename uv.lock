@@ -3747,6 +3747,7 @@ dependencies = [
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langgraph" },
+    { name = "networkx" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "openai" },
@@ -3776,9 +3777,6 @@ eval = [
     { name = "datasets" },
     { name = "ragas" },
 ]
-retrieval = [
-    { name = "networkx" },
-]
 ui = [
     { name = "streamlit" },
 ]
@@ -3802,7 +3800,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=0.2" },
     { name = "langgraph", specifier = ">=0.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "networkx", marker = "extra == 'retrieval'", specifier = ">=3.3" },
+    { name = "networkx", specifier = ">=3.3" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "openai", specifier = ">=1.40" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -3824,7 +3822,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.32" },
 ]
-provides-extras = ["dev", "retrieval", "ui", "eval"]
+provides-extras = ["dev", "ui", "eval"]
 
 [package.metadata.requires-dev]
 dev = [

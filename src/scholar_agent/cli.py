@@ -4,6 +4,7 @@ Phase 0: version, config, prototype loop.
 Phase 1: corpus validate / summary against the manifest.
 Phase 2: PDF ingestion into canonical paper/chunk stores.
 Phase 3: index build, retrieve, Naive RAG baseline.
+Phase 4: knowledge graph build / inspect / graph retrieval.
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ corpus_app = typer.Typer(help="Corpus manifest utilities.")
 app.add_typer(corpus_app, name="corpus")
 index_app = typer.Typer(help="Build and inspect retrieval indexes.")
 app.add_typer(index_app, name="index")
+graph_app = typer.Typer(help="Knowledge graph build and inspection.")
+app.add_typer(graph_app, name="graph")
 console = Console()
 
 # Typer Option defaults as module-level callables avoid Ruff B008 on arg defaults.
@@ -285,8 +288,15 @@ _FORCE_INDEX_OPT = typer.Option(False, "--force", help="Rebuild indexes even if 
 _MODE_OPT = typer.Option(
     "hybrid_rerank",
     "--mode",
-    help="dense | sparse | hybrid | hybrid_rerank",
+    help="dense | sparse | hybrid | hybrid_rerank | graph",
 )
+_GRAPH_FORCE_OPT = typer.Option(False, "--force", help="Rebuild graph even if artifacts exist")
+_GRAPH_LIMIT_OPT = typer.Option(
+    None,
+    "--limit-chunks",
+    help="Only process first N chunks (debug)",
+)
+_GRAPH_SAMPLE_OPT = typer.Option(8, help="Number of sample edges to show")
 _TOP_K_OPT = typer.Option(None, "--k", help="Result count override")
 _JSON_OPT = typer.Option(False, "--json", help="Machine-readable JSON output")
 _DEBUG_OPT = typer.Option(False, "--debug", help="Include retrieval debug ranks")
@@ -341,8 +351,8 @@ def retrieve_cmd(
 
     cfg = load_config(config_path)
     setup_logging(cfg)
-    if mode not in {"dense", "sparse", "hybrid", "hybrid_rerank"}:
-        console.print("[red]mode must be dense|sparse|hybrid|hybrid_rerank[/red]")
+    if mode not in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"}:
+        console.print("[red]mode must be dense|sparse|hybrid|hybrid_rerank|graph[/red]")
         raise typer.Exit(code=1)
     if embedding_backend not in {"auto", "hash", "st"}:
         embedding_backend = "auto"
@@ -431,6 +441,93 @@ def ask_naive_cmd(
                 f"  - {c.marker} {c.format_inline()} chunk={c.chunk_id}",
                 markup=False,
             )
+
+
+@graph_app.command("build")
+def graph_build_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    force: bool = _GRAPH_FORCE_OPT,
+    limit_chunks: int | None = _GRAPH_LIMIT_OPT,
+) -> None:
+    """Extract entities/relations and persist the evidence-linked knowledge graph."""
+    from scholar_agent.graph.pipeline import build_knowledge_graph
+
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    result = build_knowledge_graph(
+        config=cfg,
+        force=force,
+        limit_chunks=limit_chunks,
+    )
+    stats = result.stats
+    console.print(
+        f"[green]Graph ready[/green]: nodes={stats.n_nodes} edges={stats.n_edges} "
+        f"isolated={stats.n_isolated_nodes} "
+        f"isolated_rate={stats.isolated_node_rate:.3f}"
+    )
+    console.print(f"  entities:  {result.entities_path}")
+    console.print(f"  relations: {result.relations_path}")
+    console.print(f"  graph:     {result.graph_path}")
+    console.print(f"  stats:     {result.stats_path}")
+    console.print("  node types:", stats.node_type_counts)
+    console.print("  relation types:", stats.relation_type_counts)
+    if stats.n_relations_missing_evidence:
+        console.print(
+            f"[yellow]warning[/yellow]: {stats.n_relations_missing_evidence} edges missing evidence"
+        )
+
+
+@graph_app.command("inspect")
+def graph_inspect_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    sample: int = _GRAPH_SAMPLE_OPT,
+) -> None:
+    """Print graph statistics and sample evidence-linked edges."""
+    from scholar_agent.graph.stats import compute_graph_stats
+    from scholar_agent.graph.store import KnowledgeGraphStore
+
+    cfg = load_config(config_path)
+    graph_path = cfg.paths.processed_dir / "knowledge_graph.json"
+    if not graph_path.is_file():
+        console.print(f"[red]Graph not found:[/red] {graph_path}. Run graph build first.")
+        raise typer.Exit(code=1)
+    store = KnowledgeGraphStore.load_node_link_json(graph_path)
+    stats = compute_graph_stats(store)
+    console.print(
+        f"nodes={stats.n_nodes} edges={stats.n_edges} "
+        f"isolated={stats.n_isolated_nodes} rate={stats.isolated_node_rate:.3f}"
+    )
+    console.print("node_types:", stats.node_type_counts)
+    console.print("relation_types:", stats.relation_type_counts)
+    console.print(
+        f"evidence coverage: {stats.n_relations_with_evidence}/"
+        f"{stats.n_relations_with_evidence + stats.n_relations_missing_evidence}"
+    )
+    rels = store.relations()[:sample]
+    console.print(f"[bold]sample edges[/bold] ({len(rels)}):")
+    for rel in rels:
+        console.print(
+            f"  - {rel.relation_type.value}: {rel.subject_surface!r} → {rel.object_surface!r} "
+            f"[{rel.paper_id} p.{rel.page_number}] chunk={rel.chunk_id}",
+            markup=False,
+        )
+        console.print(f"    evidence: {rel.evidence_span[:160]}", markup=False)
+
+
+@graph_app.command("stats")
+def graph_stats_cmd(config_path: Path | None = _CONFIG_PATH_OPT) -> None:
+    """Emit graph statistics as JSON."""
+    from scholar_agent.graph.stats import compute_graph_stats
+    from scholar_agent.graph.store import KnowledgeGraphStore
+
+    cfg = load_config(config_path)
+    graph_path = cfg.paths.processed_dir / "knowledge_graph.json"
+    if not graph_path.is_file():
+        console.print(f"[red]Graph not found:[/red] {graph_path}")
+        raise typer.Exit(code=1)
+    store = KnowledgeGraphStore.load_node_link_json(graph_path)
+    stats = compute_graph_stats(store)
+    console.print_json(json.dumps(stats.model_dump(mode="json")))
 
 
 def main() -> None:

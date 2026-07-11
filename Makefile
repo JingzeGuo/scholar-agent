@@ -56,6 +56,12 @@ retrieve-demo:
 ask-naive-demo:
 	uv run scholar-agent ask-naive "What is Self-RAG?" --embedding-backend hash
 
+graph-build:
+	uv run scholar-agent graph build --force
+
+graph-inspect:
+	uv run scholar-agent graph inspect
+
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

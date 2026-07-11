@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from scholar_agent.graph.retrieve import GraphRetriever
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.retrieval import (
     RankTrace,
@@ -19,7 +20,7 @@ from scholar_agent.retrieval.sparse import BM25Index
 
 
 class RetrievalToolkit:
-    """Independently testable retrieval façade over dense/sparse indexes."""
+    """Independently testable retrieval façade over dense/sparse/graph indexes."""
 
     def __init__(
         self,
@@ -27,6 +28,7 @@ class RetrievalToolkit:
         *,
         dense: DenseIndex | None = None,
         sparse: BM25Index | None = None,
+        graph: GraphRetriever | None = None,
         reranker: Reranker | None = None,
         dense_top_k: int = 12,
         sparse_top_k: int = 12,
@@ -37,6 +39,7 @@ class RetrievalToolkit:
         self.store = store
         self.dense = dense
         self.sparse = sparse
+        self.graph = graph
         self.reranker = reranker or LexicalReranker()
         self.dense_top_k = dense_top_k
         self.sparse_top_k = sparse_top_k
@@ -177,11 +180,32 @@ class RetrievalToolkit:
             },
         )
 
+    def graph_search(
+        self,
+        query: str,
+        *,
+        max_hops: int = 2,
+        relation_filters: list[str] | None = None,
+        k: int | None = None,
+        exclude_chunk_ids: set[str] | None = None,
+    ) -> RetrievalResult:
+        if self.graph is None:
+            raise RuntimeError(
+                "graph index is not loaded; run `scholar-agent graph build` first"
+            )
+        return self.graph.search(
+            query,
+            max_hops=max_hops,
+            relation_filters=relation_filters,
+            k=k or self.rerank_top_k,
+            exclude_chunk_ids=exclude_chunk_ids,
+        )
+
     def search(
         self,
         query: str,
         *,
-        mode: Literal["dense", "sparse", "hybrid", "hybrid_rerank"] = "hybrid_rerank",
+        mode: Literal["dense", "sparse", "hybrid", "hybrid_rerank", "graph"] = "hybrid_rerank",
         k: int | None = None,
         filters: RetrievalFilters | None = None,
     ) -> RetrievalResult:
@@ -189,6 +213,8 @@ class RetrievalToolkit:
             return self.dense_search(query, k=k, filters=filters)
         if mode == "sparse":
             return self.sparse_search(query, k=k, filters=filters)
+        if mode == "graph":
+            return self.graph_search(query, k=k)
         if mode == "hybrid":
             return self.hybrid_search(query, k=k, filters=filters, rerank=False)
         return self.hybrid_search(query, k=k, filters=filters, rerank=True)

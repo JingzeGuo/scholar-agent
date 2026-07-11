@@ -61,7 +61,7 @@ class RankTrace(BaseModel):
 
 class RetrievalResult(BaseModel):
     query: str
-    method: Literal["dense", "sparse", "hybrid", "hybrid_rerank"]
+    method: Literal["dense", "sparse", "hybrid", "hybrid_rerank", "graph"]
     hits: list[RetrievalHit] = Field(default_factory=list)
     traces: list[RankTrace] = Field(default_factory=list)
     debug: dict[str, Any] = Field(default_factory=dict)

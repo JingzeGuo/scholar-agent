@@ -128,6 +128,7 @@ def load_toolkit(
     config: AppConfig | None = None,
     embedding_backend: Literal["auto", "hash", "st"] = "auto",
     reranker_backend: Literal["auto", "lexical", "cross-encoder"] = "auto",
+    load_graph: bool = True,
 ) -> RetrievalToolkit:
     """Load indexes from disk (rebuild sparse/dense if missing)."""
     cfg = config or load_config()
@@ -152,4 +153,21 @@ def load_toolkit(
             logger.warning("cross-encoder unavailable; using lexical reranker")
             reranker = create_reranker("lexical-overlap-v1")
     built.toolkit.reranker = reranker
+
+    if load_graph:
+        graph_path = Path(cfg.paths.processed_dir) / "knowledge_graph.json"
+        if graph_path.is_file():
+            try:
+                from scholar_agent.graph.retrieve import GraphRetriever
+                from scholar_agent.graph.store import KnowledgeGraphStore
+
+                kg = KnowledgeGraphStore.load_node_link_json(graph_path)
+                built.toolkit.graph = GraphRetriever(
+                    kg,
+                    built.store,
+                    max_hops=cfg.retrieval.graph.max_hops,
+                )
+                logger.info("loaded knowledge graph (%s nodes)", kg.number_of_nodes())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to load knowledge graph: %s", exc)
     return built.toolkit

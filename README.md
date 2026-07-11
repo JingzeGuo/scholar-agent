@@ -6,7 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–3 implemented (compatibility, models, ingestion, hybrid retrieval).
+**Status:** Phases 0–4 implemented (through evidence-linked knowledge graph).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -39,6 +39,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Persistent BM25 aligned to stable `chunk_id`s
 - Explicit Reciprocal Rank Fusion + optional cross-encoder / lexical rerank
 - Typed tools + `retrieve` / `ask-naive` CLI
+
+### Phase 4
+
+- Schema-constrained relation extraction with evidence-span validation
+- Staged entity resolver + alias fixtures
+- NetworkX `MultiDiGraph` node-link JSON persistence
+- `graph build|inspect|stats` CLI and `retrieve --mode graph`
 - Production BGE/CrossEncoder weights are cached under ignored `.cache/huggingface/`
 
 ## Quick start
@@ -76,6 +83,9 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent index build --embedding-backend st` | Build with BGE embeddings |
 | `uv run scholar-agent retrieve "What is Self-RAG?" --mode hybrid_rerank` | Search |
 | `uv run scholar-agent ask-naive "What is Self-RAG?"` | Naive RAG + page citations |
+| `uv run scholar-agent graph build` | Build evidence-linked knowledge graph |
+| `uv run scholar-agent graph inspect` | Stats + sample edges |
+| `uv run scholar-agent retrieve "Self-RAG HotpotQA" --mode graph` | Graph retrieval |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 

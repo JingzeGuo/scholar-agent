@@ -202,7 +202,36 @@ Git. Offline CI continues to use the lightweight hash/lexical backends.
 
 ---
 
+## Phase 4
+
+### ADR-019: Offline heuristic extraction first; LLM optional later
+
+**Decision:** Default graph extraction is schema-constrained and heuristic
+(seed aliases + cue patterns + co-occurrence), fully offline. Relations are
+discarded unless `evidence_span` is grounded in the source chunk. Optional LLM
+extraction prompt is documented but not required for acceptance.
+
+**Rationale:** Phase 4 acceptance must not depend on paid APIs; grounding is
+non-negotiable.
+
+### ADR-020: Staged entity resolver without LLM in the happy path
+
+**Decision:** Resolver stages: normalize → acronym map → exact/seed alias →
+string similarity. LLM disambiguation is deferred for ambiguous residual pairs.
+
+**Rationale:** Plan §8.6 staged design; alias fixtures must resolve
+deterministically for tests and demos.
+
+### ADR-021: Node-link JSON MultiDiGraph; triples never standalone facts
+
+**Decision:** Persist NetworkX `MultiDiGraph` as portable node-link JSON.
+`graph_search` returns supporting chunks/pages along paths (≤2 hops), not bare
+triples.
+
+**Rationale:** Plan §8.7 and §9.4.
+
+---
+
 ## Pending (later phases)
 
-- Graph triples require evidence spans (Phase 4)
 - Research agent tool budgets and evidence reducers (Phase 5–6)
