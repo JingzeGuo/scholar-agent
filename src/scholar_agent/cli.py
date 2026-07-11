@@ -2,6 +2,7 @@
 
 Phase 0: version, config, prototype loop.
 Phase 1: corpus validate / summary against the manifest.
+Phase 2: PDF ingestion into canonical paper/chunk stores.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from rich.table import Table
 from scholar_agent import __version__
 from scholar_agent.agents.prototype_loop import PrototypeLoopConfig, run_prototype_loop
 from scholar_agent.config import load_config
+from scholar_agent.ingestion.pipeline import IngestOptions, ingest_corpus
+from scholar_agent.ingestion.quality import summarize_report
 from scholar_agent.logging import setup_logging
 from scholar_agent.storage.manifest import (
     ManifestError,
@@ -224,6 +227,49 @@ def corpus_summary_cmd(
             entry.title[:60] + ("…" if len(entry.title) > 60 else ""),
         )
     console.print(table)
+
+
+_FORCE_OPT = typer.Option(False, "--force", help="Re-ingest even if content_hash unchanged")
+_LIMIT_OPT = typer.Option(None, "--limit", help="Max papers to ingest this run")
+_PAPER_ID_OPT = typer.Option(
+    None,
+    "--paper-id",
+    help="Ingest only this paper_id (repeatable)",
+)
+_NO_MANIFEST_UPDATE_OPT = typer.Option(
+    False,
+    "--no-manifest-update",
+    help="Do not write ingestion_status back to the manifest",
+)
+
+
+@app.command("ingest")
+def ingest_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    manifest: Path | None = _MANIFEST_OPT,
+    force: bool = _FORCE_OPT,
+    limit: int | None = _LIMIT_OPT,
+    paper_id: list[str] | None = _PAPER_ID_OPT,
+    no_manifest_update: bool = _NO_MANIFEST_UPDATE_OPT,
+) -> None:
+    """Ingest PDFs from the corpus manifest into data/processed/."""
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    # Allow CLI papers override via config path only; papers_dir comes from config
+    report = ingest_corpus(
+        config=cfg,
+        manifest_path=manifest,
+        options=IngestOptions(
+            force=force,
+            limit=limit,
+            paper_ids=list(paper_id) if paper_id else None,
+            update_manifest=not no_manifest_update,
+        ),
+    )
+    console.print(summarize_report(report))
+    console.print(f"report: {cfg.paths.processed_dir / 'ingestion_report.json'}")
+    if report.papers_failed and report.papers_ingested == 0 and report.papers_skipped == 0:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:

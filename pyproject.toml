@@ -21,6 +21,7 @@ dependencies = [
     "langchain-openai>=0.2",
     "langgraph>=0.2",
     "tiktoken>=0.7",
+    "pymupdf>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -39,7 +40,6 @@ retrieval = [
     "rank-bm25>=0.2",
     "sentence-transformers>=3.0",
     "networkx>=3.3",
-    "pymupdf>=1.24",
 ]
 ui = [
     "streamlit>=1.36",
@@ -125,5 +125,7 @@ exclude = [
 module = [
     "langgraph.*",
     "langchain_core.*",
+    "fitz",
+    "pymupdf.*",
 ]
 ignore_missing_imports = true

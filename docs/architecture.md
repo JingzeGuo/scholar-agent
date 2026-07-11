@@ -40,7 +40,8 @@ User query
 | LLM client | `scholar_agent.llm` | DeepSeek OpenAI-compatible wrapper |
 | Prototype loop | `scholar_agent.agents.prototype_loop` | LangGraph decide→retrieve→verify loop |
 | Compatibility script | `scripts/deepseek_compatibility.py` | Live provider spike |
-| CLI | `scholar_agent.cli` | `version`, `config`, `prototype`, `corpus` |
+| Ingestion | `scholar_agent.ingestion` | PDF → pages → sections → chunks |
+| CLI | `scholar_agent.cli` | `version`, `config`, `prototype`, `corpus`, `ingest` |
 
 ## Prototype loop
 

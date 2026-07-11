@@ -38,6 +38,12 @@ corpus-download:
 corpus-validate:
 	uv run scholar-agent corpus validate -m data/corpus_manifest.jsonl --check-pdfs
 
+ingest:
+	uv run scholar-agent ingest --manifest data/corpus_manifest.jsonl
+
+ingest-smoke:
+	uv run scholar-agent ingest --manifest data/corpus_manifest.jsonl --limit 5
+
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

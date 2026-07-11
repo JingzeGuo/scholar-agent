@@ -130,8 +130,38 @@ stronger scores.
 
 ---
 
+## Phase 2
+
+### ADR-013: PyMuPDF page-preserving extraction; OCR out of scope
+
+**Decision:** Use PyMuPDF (`fitz`) as the only PDF parser. Extract text per page
+with 1-indexed page numbers. Flag empty and scan-like pages; never index an empty
+paper. Complex table/formula structure is out of scope.
+
+**Rationale:** Plan §8.1. OCR would expand scope and dependencies without
+improving the interview narrative for text-native arXiv PDFs.
+
+### ADR-014: Token-aware chunking via tiktoken
+
+**Decision:** Chunk sizes are measured with `tiktoken` (`cl100k_base`), not
+character counts. Defaults: target 600 tokens, overlap 80, min 80. Prefer
+section boundaries; split long sections with overlapping token windows.
+
+**Rationale:** Plan §8.2 explicitly forbids marketing character splits as token
+splits.
+
+### ADR-015: Idempotent ingest keyed by PDF content hash
+
+**Decision:** Skip re-processing when `Paper.content_hash` matches the on-disk
+PDF hash and chunks already exist for that `paper_id`. `--force` rebuilds.
+Rebuilt chunks keep stable IDs when text is unchanged.
+
+**Rationale:** Plan acceptance requires idempotent duplicate ingestion.
+
+---
+
 ## Pending (later phases)
 
-- Chunk store as sole source of truth for all indexes (Phase 2–3)
+- Dense/sparse indexes share the canonical chunk store (Phase 3)
 - Graph triples require evidence spans (Phase 4)
 - Research agent tool budgets and evidence reducers (Phase 5–6)

@@ -39,6 +39,13 @@ from scholar_agent.models.graph import (
     Relation,
     RelationType,
 )
+from scholar_agent.models.ingestion import (
+    CorpusIngestionReport,
+    ExtractionIssue,
+    ExtractionSeverity,
+    PaperExtractionReport,
+    SectionBlock,
+)
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
 from scholar_agent.models.workflow import ResearchRunState, VerificationResult
 
@@ -48,6 +55,7 @@ __all__ = [
     "CitationIssue",
     "CitationReport",
     "ClaimWithCitations",
+    "CorpusIngestionReport",
     "CorpusManifestEntry",
     "DraftAnswer",
     "Entity",
@@ -56,10 +64,14 @@ __all__ = [
     "EvidenceItem",
     "EvidenceLedger",
     "ExecutionEvent",
+    "ExtractionIssue",
+    "ExtractionSeverity",
     "FinalAnswer",
     "IngestionStatus",
     "Paper",
+    "PaperExtractionReport",
     "PaperPage",
+    "SectionBlock",
     "PrototypeDecision",
     "PrototypeObservation",
     "PrototypeResult",

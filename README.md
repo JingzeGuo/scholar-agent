@@ -6,8 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phase 0 complete (including live DeepSeek compatibility). Phase 1 domain
-models and canonical storage implemented.
+**Status:** Phases 0–2 implemented (compatibility, domain models, PDF ingestion).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -26,6 +25,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Deterministic ID helpers
 - Typed JSONL repositories + corpus manifest loader/validator
 - Test fixtures under `tests/fixtures/`
+
+### Phase 2
+
+- PyMuPDF page-preserving PDF loader
+- Header/footer cleanup + section heuristics
+- Token-aware chunker (`tiktoken`)
+- `scholar-agent ingest` → `data/processed/{papers,chunks}.jsonl` + quality report
 
 ## Quick start
 
@@ -56,6 +62,8 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent prototype "…"` | Run fake-model LangGraph loop |
 | `uv run scholar-agent corpus validate -m tests/fixtures/corpus_manifest.jsonl` | Validate manifest |
 | `uv run scholar-agent corpus summary -m tests/fixtures/corpus_manifest.jsonl` | Manifest table |
+| `uv run scholar-agent ingest --manifest data/corpus_manifest.jsonl` | Ingest PDFs → processed JSONL |
+| `uv run scholar-agent ingest --limit 5` | Smoke-ingest first N papers |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 
