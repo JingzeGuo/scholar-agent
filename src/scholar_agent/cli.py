@@ -297,6 +297,17 @@ _GRAPH_LIMIT_OPT = typer.Option(
     help="Only process first N chunks (debug)",
 )
 _GRAPH_SAMPLE_OPT = typer.Option(8, help="Number of sample edges to show")
+_GRAPH_LLM_RESOLUTION_OPT = typer.Option(
+    False,
+    "--llm-resolution",
+    help="Use DeepSeek only for ambiguous entity candidate pairs",
+)
+_GRAPH_MAX_LLM_OPT = typer.Option(
+    50,
+    "--max-llm-resolutions",
+    min=0,
+    help="Maximum ambiguous entity pairs sent to the LLM",
+)
 _TOP_K_OPT = typer.Option(None, "--k", help="Result count override")
 _JSON_OPT = typer.Option(False, "--json", help="Machine-readable JSON output")
 _DEBUG_OPT = typer.Option(False, "--debug", help="Include retrieval debug ranks")
@@ -448,6 +459,8 @@ def graph_build_cmd(
     config_path: Path | None = _CONFIG_PATH_OPT,
     force: bool = _GRAPH_FORCE_OPT,
     limit_chunks: int | None = _GRAPH_LIMIT_OPT,
+    llm_resolution: bool = _GRAPH_LLM_RESOLUTION_OPT,
+    max_llm_resolutions: int = _GRAPH_MAX_LLM_OPT,
 ) -> None:
     """Extract entities/relations and persist the evidence-linked knowledge graph."""
     from scholar_agent.graph.pipeline import build_knowledge_graph
@@ -458,6 +471,8 @@ def graph_build_cmd(
         config=cfg,
         force=force,
         limit_chunks=limit_chunks,
+        use_llm_resolution=llm_resolution,
+        max_llm_resolutions=max_llm_resolutions,
     )
     stats = result.stats
     console.print(

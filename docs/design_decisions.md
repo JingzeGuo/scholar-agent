@@ -214,19 +214,24 @@ extraction prompt is documented but not required for acceptance.
 **Rationale:** Phase 4 acceptance must not depend on paid APIs; grounding is
 non-negotiable.
 
-### ADR-020: Staged entity resolver without LLM in the happy path
+### ADR-020: Staged entity resolver with bounded LLM arbitration
 
 **Decision:** Resolver stages: normalize → acronym map → exact/seed alias →
-string similarity. LLM disambiguation is deferred for ambiguous residual pairs.
+string candidate retrieval → embedding similarity. Deterministic high-confidence
+matches avoid model calls; ambiguous residual candidates may use DeepSeek through
+`graph build --llm-resolution`, capped by `--max-llm-resolutions`.
 
 **Rationale:** Plan §8.6 staged design; alias fixtures must resolve
-deterministically for tests and demos.
+deterministically for tests and demos, while difficult variants still have a
+schema-constrained adjudication path.
 
 ### ADR-021: Node-link JSON MultiDiGraph; triples never standalone facts
 
 **Decision:** Persist NetworkX `MultiDiGraph` as portable node-link JSON.
 `graph_search` returns supporting chunks/pages along paths (≤2 hops), not bare
-triples.
+triples. Ranking combines query relevance, relation confidence, evidence quality,
+query-entity path coverage, and a hop penalty. Longest-span entity linking avoids
+matching `RAG` inside `Self-RAG`; low-relevance tails are filtered.
 
 **Rationale:** Plan §8.7 and §9.4.
 

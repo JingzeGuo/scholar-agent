@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 from scholar_agent.graph.aliases import SEED_ALIASES
 from scholar_agent.graph.evidence import find_evidence_span
-from scholar_agent.ids import make_relation_id
+from scholar_agent.ids import make_relation_id, normalize_text
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.graph import EntityType, Relation, RelationType
 
@@ -71,6 +71,47 @@ _CUE_PATTERNS: list[tuple[re.Pattern[str], RelationType]] = [
     ),
 ]
 
+_NOISY_SURFACE_PREFIXES = (
+    "a ",
+    "an ",
+    "the ",
+    "this ",
+    "these ",
+    "those ",
+    "we ",
+    "our ",
+    "it ",
+    "they ",
+    "results ",
+    "experiments ",
+    "figure ",
+    "table ",
+)
+
+
+def _select_entity_surface(
+    raw: str,
+    mentions: list[tuple[str, str, EntityType]],
+) -> str | None:
+    """Prefer a known literal mention; reject clause-like entity surfaces."""
+    cleaned = re.sub(r"\s+", " ", raw).strip(" ,;:()[]")
+    contained = [surface for surface, _canonical, _type in mentions if surface.lower() in cleaned.lower()]
+    if contained:
+        return max(contained, key=len)
+    words = cleaned.split()
+    low = cleaned.lower()
+    if not cleaned or len(cleaned) > 60 or len(words) > 8:
+        return None
+    if low in {"we", "our", "this", "these", "those", "it", "they"}:
+        return None
+    if len(words) > 1 and low.startswith(_NOISY_SURFACE_PREFIXES):
+        return None
+    if any(char in cleaned for char in ("\n", "=", "→", "▷")):
+        return None
+    if sum(char.isalpha() for char in cleaned) < 2:
+        return None
+    return cleaned
+
 
 def _find_known_mentions(text: str) -> list[tuple[str, str, EntityType]]:
     """Return (surface, canonical, type) mentions found in text."""
@@ -119,9 +160,11 @@ def extract_from_chunk(chunk: Chunk) -> list[Relation]:
             match = pattern.search(sent)
             if not match:
                 continue
-            sub = match.group("sub").strip(" ,;:")
-            obj = match.group("obj").strip(" ,;:")
-            if len(sub) < 2 or len(obj) < 2:
+            sub = _select_entity_surface(match.group("sub"), sent_mentions)
+            obj = _select_entity_surface(match.group("obj"), sent_mentions)
+            if sub is None or obj is None:
+                continue
+            if normalize_text(sub) == normalize_text(obj):
                 continue
             span = find_evidence_span(text, match.group(0).strip()) or find_evidence_span(
                 text, sent.strip()
@@ -144,11 +187,14 @@ def extract_from_chunk(chunk: Chunk) -> list[Relation]:
             )
 
         # Co-occurrence of two known methods/datasets → USES / EVALUATES_ON / COMPARES_WITH
-        if len(sent_mentions) >= 2:
+        digit_ratio = sum(char.isdigit() for char in sent) / max(1, len(sent))
+        if 2 <= len(sent_mentions) <= 5 and len(sent) <= 600 and digit_ratio < 0.20:
             for i in range(len(sent_mentions)):
                 for j in range(i + 1, len(sent_mentions)):
                     s_surf, s_can, s_type = sent_mentions[i]
                     o_surf, o_can, o_type = sent_mentions[j]
+                    if normalize_text(s_can) == normalize_text(o_can):
+                        continue
                     rel_type = _infer_pair_relation(s_type, o_type, sent)
                     span = find_evidence_span(text, sent.strip())
                     if span is None:

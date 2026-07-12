@@ -8,15 +8,70 @@ from pathlib import Path
 from scholar_agent.graph.evidence import find_evidence_span, validate_relation_against_chunk
 from scholar_agent.graph.extract import extract_from_chunk
 from scholar_agent.graph.pipeline import build_knowledge_graph
-from scholar_agent.graph.resolver import EntityResolver
+from scholar_agent.graph.resolver import (
+    EntityResolutionJudgment,
+    EntityResolver,
+    LLMEntityDisambiguator,
+    ResolutionCandidate,
+)
 from scholar_agent.graph.retrieve import GraphRetriever
 from scholar_agent.graph.stats import compute_graph_stats
 from scholar_agent.graph.store import KnowledgeGraphStore
 from scholar_agent.ids import content_hash, make_chunk_id, make_entity_id, make_relation_id
+from scholar_agent.llm.client import ChatResponse
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.graph import Entity, EntityType, Relation, RelationType
 from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.storage.jsonl import JsonlRepository
+
+
+class SemanticTestEmbedder:
+    model_name = "semantic-test"
+    dimension = 2
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed_query(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        low = text.lower()
+        if "alpha" in low or "semantic passage" in low:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+
+
+class SelectFirstDisambiguator:
+    calls = 0
+
+    def choose(
+        self,
+        surface: str,
+        entity_type: EntityType,
+        candidates: list[ResolutionCandidate],
+    ) -> EntityResolutionJudgment:
+        del surface, entity_type
+        self.calls += 1
+        return EntityResolutionJudgment(
+            selected_entity_id=candidates[0].entity_id,
+            confidence=0.91,
+            rationale_summary="Fixture surfaces denote the same organization",
+        )
+
+
+class FakeEntityJudgeClient:
+    def __init__(self, selected_entity_id: str) -> None:
+        self.selected_entity_id = selected_entity_id
+
+    def chat_json(self, *_args: object, **_kwargs: object) -> ChatResponse:
+        return ChatResponse(
+            content=json.dumps(
+                {
+                    "selected_entity_id": self.selected_entity_id,
+                    "confidence": 0.88,
+                    "rationale_summary": "The surface is an alias of the candidate",
+                }
+            ),
+            model="fake",
+        )
 
 
 def _chunk(paper_id: str, text: str, page: int = 1, section: str | None = "Method") -> Chunk:
@@ -79,6 +134,48 @@ def test_string_similarity_merges_near_duplicates() -> None:
     # High similarity to existing canonical
     e2 = resolver.register_surface("dense passage retrieval", EntityType.METHOD)
     assert e1.entity_id == e2.entity_id
+
+
+def test_embedding_similarity_merges_semantic_candidate() -> None:
+    resolver = EntityResolver(embedder=SemanticTestEmbedder())
+    first = resolver.register_surface("Alpha Research Laboratory", EntityType.ORGANIZATION)
+    second = resolver.register_surface("Alpha semantic passage center", EntityType.ORGANIZATION)
+    assert first.entity_id == second.entity_id
+    assert resolver.decisions[-1].method == "embedding_similarity"
+
+
+def test_ambiguous_candidate_can_use_llm_disambiguator() -> None:
+    judge = SelectFirstDisambiguator()
+    resolver = EntityResolver(
+        embedder=SemanticTestEmbedder(),
+        disambiguator=judge,
+        candidate_floor=0.0,
+        ambiguity_margin=1.0,
+        embedding_threshold=1.1,
+    )
+    first = resolver.register_surface("Alpha Research Laboratory", EntityType.ORGANIZATION)
+    calls_before_second = judge.calls
+    second = resolver.register_surface("Alpha experimental center", EntityType.ORGANIZATION)
+    assert first.entity_id == second.entity_id
+    assert judge.calls == calls_before_second + 1
+    assert resolver.decisions[-1].method == "llm_ambiguous"
+
+
+def test_llm_disambiguator_returns_structured_bounded_choice() -> None:
+    candidate = ResolutionCandidate(
+        entity_id="ent_alpha",
+        canonical_name="Alpha Lab",
+        string_score=0.7,
+        embedding_score=0.9,
+        combined_score=0.77,
+    )
+    judge = LLMEntityDisambiguator(
+        FakeEntityJudgeClient(candidate.entity_id),  # type: ignore[arg-type]
+        max_calls=1,
+    )
+    result = judge.choose("Alpha Laboratory", EntityType.ORGANIZATION, [candidate])
+    assert result.selected_entity_id == candidate.entity_id
+    assert result.confidence == 0.88
 
 
 def test_extract_and_build_graph_with_supporting_chunks(tmp_path: Path) -> None:
@@ -247,3 +344,100 @@ def test_extractor_emits_grounded_relations() -> None:
     for rel in rels:
         assert rel.evidence_span
         assert find_evidence_span(chunk.text, rel.evidence_span) is not None
+
+
+def test_extractor_rejects_clause_like_entity_surfaces() -> None:
+    chunk = _chunk(
+        "paper_noise",
+        "We introduce a substantially improved system that uses retrieval for generation.",
+    )
+    assert extract_from_chunk(chunk) == []
+
+
+def test_graph_ranking_uses_query_relevance_and_evidence_quality() -> None:
+    method = Entity(
+        entity_id=make_entity_id("Method", "Self-RAG"),
+        entity_type=EntityType.METHOD,
+        canonical_name="Self-RAG",
+    )
+    dataset = Entity(
+        entity_id=make_entity_id("Dataset", "HotpotQA"),
+        entity_type=EntityType.DATASET,
+        canonical_name="HotpotQA",
+    )
+    retriever_entity = Entity(
+        entity_id=make_entity_id("Method", "Generic Retriever"),
+        entity_type=EntityType.METHOD,
+        canonical_name="Generic Retriever",
+    )
+    rag_entity = Entity(
+        entity_id=make_entity_id("Method", "Retrieval-Augmented Generation"),
+        entity_type=EntityType.METHOD,
+        canonical_name="Retrieval-Augmented Generation",
+        aliases=["RAG"],
+    )
+    relevant_chunk = _chunk(
+        "paper_self_rag",
+        "Self-RAG evaluates on HotpotQA using reflection tokens.",
+        page=3,
+    )
+    noise_chunk = _chunk(
+        "paper_self_rag",
+        "Self-RAG uses a generic retriever for generation.",
+        page=8,
+    )
+    relevant = Relation(
+        relation_id="rel_relevant",
+        subject_surface="Self-RAG",
+        object_surface="HotpotQA",
+        subject_entity_id=method.entity_id,
+        object_entity_id=dataset.entity_id,
+        subject_type=EntityType.METHOD,
+        object_type=EntityType.DATASET,
+        relation_type=RelationType.EVALUATES_ON,
+        evidence_span=relevant_chunk.text,
+        paper_id=relevant_chunk.paper_id,
+        chunk_id=relevant_chunk.chunk_id,
+        page_number=3,
+        confidence=0.55,
+    )
+    noise = Relation(
+        relation_id="rel_noise",
+        subject_surface="Self-RAG",
+        object_surface="Generic Retriever",
+        subject_entity_id=method.entity_id,
+        object_entity_id=retriever_entity.entity_id,
+        subject_type=EntityType.METHOD,
+        object_type=EntityType.METHOD,
+        relation_type=RelationType.USES,
+        evidence_span=noise_chunk.text,
+        paper_id=noise_chunk.paper_id,
+        chunk_id=noise_chunk.chunk_id,
+        page_number=8,
+        confidence=0.99,
+    )
+    graph = KnowledgeGraphStore.from_entities_relations(
+        [method, dataset, retriever_entity, rag_entity],
+        [relevant, noise],
+    )
+    papers = [
+        Paper(
+            paper_id="paper_self_rag",
+            title="Self-RAG",
+            pdf_path="self-rag.pdf",
+            content_hash=content_hash("paper_self_rag"),
+        )
+    ]
+    chunk_store = ChunkStore([relevant_chunk, noise_chunk], papers)
+    graph_retriever = GraphRetriever(graph, chunk_store)
+    linked = graph_retriever.link_entities("Self-RAG evaluates on HotpotQA")
+    assert method.entity_id in linked
+    assert dataset.entity_id in linked
+    assert rag_entity.entity_id not in linked
+    result = graph_retriever.search(
+        "How does Self-RAG evaluate on HotpotQA?",
+        k=2,
+    )
+    assert result.hits[0].chunk_id == relevant_chunk.chunk_id
+    assert all(hit.chunk_id != noise_chunk.chunk_id for hit in result.hits)
+    assert result.debug["score_components"][0]["query_relevance"] > 0

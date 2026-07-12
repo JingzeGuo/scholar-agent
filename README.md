@@ -43,8 +43,9 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 ### Phase 4
 
 - Schema-constrained relation extraction with evidence-span validation
-- Staged entity resolver + alias fixtures
+- Staged entity resolver: acronym/alias + string/embedding candidates + optional DeepSeek judge
 - NetworkX `MultiDiGraph` node-link JSON persistence
+- Query-aware graph path ranking with confidence and evidence-quality scoring
 - `graph build|inspect|stats` CLI and `retrieve --mode graph`
 - Production BGE/CrossEncoder weights are cached under ignored `.cache/huggingface/`
 

@@ -9,10 +9,11 @@ from pathlib import Path
 from scholar_agent.config import AppConfig, load_config
 from scholar_agent.graph.evidence import validate_relations
 from scholar_agent.graph.extract import extract_from_chunk, extract_paper_structure
-from scholar_agent.graph.resolver import EntityResolver
+from scholar_agent.graph.resolver import EntityResolver, LLMEntityDisambiguator
 from scholar_agent.graph.stats import GraphStats, compute_graph_stats
 from scholar_agent.graph.store import KnowledgeGraphStore
 from scholar_agent.ids import make_relation_id
+from scholar_agent.llm.client import create_llm_client
 from scholar_agent.logging import get_logger
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.graph import Entity, EntityType, Relation
@@ -40,6 +41,9 @@ def build_knowledge_graph(
     processed_dir: Path | str | None = None,
     limit_chunks: int | None = None,
     force: bool = False,
+    resolver: EntityResolver | None = None,
+    use_llm_resolution: bool = False,
+    max_llm_resolutions: int = 50,
 ) -> GraphBuildResult:
     """Extract → resolve → validate → persist graph artifacts."""
     cfg = config or load_config()
@@ -85,7 +89,14 @@ def build_knowledge_graph(
     for ch in chunks:
         chunks_by_paper.setdefault(ch.paper_id, []).append(ch)
 
-    resolver = EntityResolver()
+    if resolver is None:
+        disambiguator = None
+        if use_llm_resolution:
+            disambiguator = LLMEntityDisambiguator(
+                create_llm_client(cfg),
+                max_calls=max_llm_resolutions,
+            )
+        resolver = EntityResolver(disambiguator=disambiguator)
     raw_relations: list[Relation] = []
 
     # Paper structural edges
@@ -120,6 +131,8 @@ def build_knowledge_graph(
         obj_type = rel.object_type or EntityType.METHOD
         sub = resolver.register_surface(rel.subject_surface, sub_type)
         obj = resolver.register_surface(rel.object_surface, obj_type)
+        if sub.entity_id == obj.entity_id:
+            continue
         rid = make_relation_id(
             subject_entity_id=sub.entity_id,
             relation_type=rel.relation_type.value,
