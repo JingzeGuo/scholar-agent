@@ -106,6 +106,12 @@ class ResearchAgent:
             missing_aspect=missing_aspect,
         )
         modes = policy_to_tool_modes(routing.recommended_policy)
+        # Reserve evidence slots across planned modes so multi-tool policies
+        # (e.g. hybrid+graph) are not starved by the first tool filling the budget.
+        per_tool_cap = max(
+            1,
+            self.config.max_evidence_per_sub_question // max(1, len(modes)),
+        )
 
         events: list[ExecutionEvent] = [
             ExecutionEvent(
@@ -154,12 +160,14 @@ class ResearchAgent:
                 )
                 break
 
+            remaining = self.config.max_evidence_per_sub_question - len(ledger.items)
             action, result, new_items = self._execute_mode(
                 run_id=rid,
                 sub_question=sub_question,
                 mode=mode,
                 routing=routing,
                 existing=ledger,
+                max_new=min(per_tool_cap, remaining),
             )
             actions.append(action)
             tool_calls += 1
@@ -364,6 +372,7 @@ class ResearchAgent:
         mode: str,
         routing: RoutingDecision,
         existing: EvidenceLedger,
+        max_new: int | None = None,
     ) -> tuple[ToolAction, RetrievalResult, list[EvidenceItem]]:
         policy = _mode_to_policy(mode)
         overridden = policy != routing.recommended_policy and mode not in policy_to_tool_modes(
@@ -382,12 +391,17 @@ class ResearchAgent:
             ),
         )
         result = self._call_toolkit(mode, sub_question.question)
+        budget = (
+            max_new
+            if max_new is not None
+            else self.config.max_evidence_per_sub_question - len(existing.items)
+        )
         new_items = hits_to_evidence(
             result.hits,
             run_id=run_id,
             sub_question_id=sub_question.id,
             existing=existing,
-            max_new=self.config.max_evidence_per_sub_question - len(existing.items),
+            max_new=max(0, budget),
         )
         return action, result, new_items
 
