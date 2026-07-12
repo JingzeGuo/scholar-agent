@@ -5,6 +5,7 @@ Phase 1: corpus validate / summary against the manifest.
 Phase 2: PDF ingestion into canonical paper/chunk stores.
 Phase 3: index build, retrieve, Naive RAG baseline.
 Phase 4: knowledge graph build / inspect / graph retrieval.
+Phase 5: adaptive routing + Research Agent tool loop.
 """
 
 from __future__ import annotations
@@ -543,6 +544,122 @@ def graph_stats_cmd(config_path: Path | None = _CONFIG_PATH_OPT) -> None:
     store = KnowledgeGraphStore.load_node_link_json(graph_path)
     stats = compute_graph_stats(store)
     console.print_json(json.dumps(stats.model_dump(mode="json")))
+
+
+_RESEARCH_MAX_TOOLS_OPT = typer.Option(
+    None,
+    "--max-tools",
+    help="Max tool calls per sub-question (default from config)",
+)
+_RESEARCH_MAX_EVIDENCE_OPT = typer.Option(
+    None,
+    "--max-evidence",
+    help="Max evidence items per sub-question",
+)
+_NO_PARALLEL_OPT = typer.Option(
+    False,
+    "--no-parallel",
+    help="Disable parallel sub-question research",
+)
+
+
+@app.command("research")
+def research_cmd(
+    query: str = typer.Argument(..., help="Research question for the Research Agent"),
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    embedding_backend: str = _EMBED_BACKEND_OPT,
+    max_tools: int | None = _RESEARCH_MAX_TOOLS_OPT,
+    max_evidence: int | None = _RESEARCH_MAX_EVIDENCE_OPT,
+    no_parallel: bool = _NO_PARALLEL_OPT,
+    json_output: bool = _JSON_OPT,
+) -> None:
+    """Run Phase 5 Research Agent: route → tool loop → evidence ledger."""
+    from scholar_agent.agents.researcher import ResearchAgent, ResearchAgentConfig
+    from scholar_agent.models.planning import SubQuestion, SubQuestionStatus
+    from scholar_agent.retrieval.index_builder import load_toolkit
+    from scholar_agent.retrieval.router import classify_query_type, recommend_policy
+
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    if embedding_backend not in {"auto", "hash", "st"}:
+        embedding_backend = "auto"
+    toolkit = load_toolkit(
+        config=cfg,
+        embedding_backend=embedding_backend,  # type: ignore[arg-type]
+        reranker_backend="lexical" if embedding_backend == "hash" else "auto",
+        load_graph=True,
+    )
+    agent_cfg = ResearchAgentConfig(
+        max_tool_calls_per_pass=max_tools
+        or cfg.budgets.max_tool_calls_per_research_pass,
+        max_evidence_per_sub_question=max_evidence
+        or cfg.budgets.max_evidence_per_sub_question,
+    )
+    agent = ResearchAgent(toolkit, config=agent_cfg)
+
+    # Light multi-subquestion split for comparison queries (full Planner is Phase 6)
+    qtype, _ = classify_query_type(query)
+    routing_preview = recommend_policy(
+        query, query_type=qtype, has_graph=toolkit.graph is not None
+    )
+    sub_questions = [
+        SubQuestion(
+            id="sq_0",
+            question=query,
+            query_type=qtype,
+            required_evidence=["supporting passages"],
+            status=SubQuestionStatus.PENDING,
+        )
+    ]
+    lowered = query.lower()
+    if qtype.value == "comparison" and (" vs " in lowered or " versus " in lowered):
+        # Optional second focus sub-question for diversity (full Planner is Phase 6)
+        sub_questions.append(
+            SubQuestion(
+                id="sq_1",
+                question=f"Key differences for: {query}",
+                query_type=qtype,
+                required_evidence=["comparative evidence"],
+                status=SubQuestionStatus.PENDING,
+            )
+        )
+
+    result = agent.research_many(
+        sub_questions,
+        original_query=query,
+        parallel=not no_parallel,
+    )
+
+    if json_output:
+        console.print_json(json.dumps(result.model_dump(mode="json")))
+        return
+
+    console.print(f"[bold]run_id[/bold]: {result.run_id}")
+    console.print(
+        f"[bold]router[/bold]: {routing_preview.query_type.value} → "
+        f"{routing_preview.recommended_policy.value}"
+    )
+    console.print(f"  {routing_preview.rationale}", markup=False)
+    console.print(
+        f"[bold]tools[/bold]: {result.tool_call_count}  "
+        f"evidence={len(result.evidence_ledger.items)}  "
+        f"parallel={result.parallel}"
+    )
+    for p in result.passes:
+        tools = ", ".join(a.tool_name for a in p.actions) or "(none)"
+        console.print(
+            f"  - {p.sub_question_id}: policy={p.routing.recommended_policy.value} "
+            f"tools=[{tools}] evidence={len(p.evidence)} end={p.terminated_reason}",
+            markup=False,
+        )
+    if result.evidence_ledger.items:
+        console.print("[bold]evidence sample[/bold]:")
+        for item in result.evidence_ledger.items[:5]:
+            console.print(
+                f"  - [{item.paper_id} p.{item.page_start}-{item.page_end}] "
+                f"{item.retrieval_method}: {item.claim[:120]}",
+                markup=False,
+            )
 
 
 def main() -> None:

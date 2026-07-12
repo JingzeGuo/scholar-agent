@@ -55,6 +55,7 @@ from scholar_agent.models.retrieval import (
     RetrievalHit,
     RetrievalResult,
 )
+from scholar_agent.models.routing import RetrievalPolicy, RoutingDecision, ToolAction
 from scholar_agent.models.workflow import ResearchRunState, VerificationResult
 
 __all__ = [
@@ -93,10 +94,13 @@ __all__ = [
     "ResearchRunState",
     "RetrievalFilters",
     "RetrievalHit",
+    "RetrievalPolicy",
     "RetrievalResult",
+    "RoutingDecision",
     "SubQuestion",
     "SubQuestionStatus",
     "TokenUsage",
+    "ToolAction",
     "VerificationResult",
     "new_run_id",
     "utc_now_iso",

@@ -62,6 +62,9 @@ graph-build:
 graph-inspect:
 	uv run scholar-agent graph inspect
 
+research-demo:
+	uv run scholar-agent research "Compare Self-RAG and CRAG" --embedding-backend hash
+
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -43,7 +43,9 @@ User query
 | Ingestion | `scholar_agent.ingestion` | PDF → pages → sections → chunks |
 | Retrieval | `scholar_agent.retrieval` | Dense + BM25 + RRF + rerank + Naive RAG |
 | Knowledge graph | `scholar_agent.graph` | Extract, resolve, MultiDiGraph, graph retrieve |
-| CLI | `scholar_agent.cli` | `ingest`, `index`, `graph`, `retrieve`, `ask-naive`, … |
+| Router | `scholar_agent.retrieval.router` | Query type → retrieval policy |
+| Research Agent | `scholar_agent.agents.researcher` | Tool loop + budgets + evidence ledger |
+| CLI | `scholar_agent.cli` | `ingest`, `index`, `graph`, `retrieve`, `research`, … |
 
 ## Prototype loop
 

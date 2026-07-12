@@ -237,6 +237,37 @@ matching `RAG` inside `Self-RAG`; low-relevance tails are filtered.
 
 ---
 
+## Phase 5
+
+### ADR-022: Rule-based router offline; agent may override within budget
+
+**Decision:** Query classification and default retrieval policy use deterministic
+rules (acronyms, comparison/relation/synthesis cues, seed entity lexicon). The
+Research Agent logs both the recommendation and any complementary-tool override.
+
+**Rationale:** Acceptance requires different tools for labeled query types
+without live LLM dependency.
+
+### ADR-023: Hard tool and evidence budgets in the Research Agent
+
+**Decision:** Per sub-question caps (`max_tool_calls_per_pass`,
+`max_evidence_per_sub_question`) are enforced in code paths, not prompts.
+Exceeding a cap emits `BUDGET_HIT` execution events and stops the loop.
+
+**Rationale:** Plan §10.2 safety budgets; tests assert budgets cannot be
+exceeded.
+
+### ADR-024: Parallel sub-question research with deterministic merge
+
+**Decision:** Independent sub-questions may run via a thread pool; evidence is
+merged with the existing chunk+span ledger reducer in original sub-question
+order.
+
+**Rationale:** Plan allows fan-out where safe; reducers must remain deterministic.
+
+---
+
 ## Pending (later phases)
 
-- Research agent tool budgets and evidence reducers (Phase 5–6)
+- Planner + Verifier + corrective loop (Phase 6)
+- Writer and citation validator (Phase 7)

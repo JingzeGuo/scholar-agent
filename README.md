@@ -6,7 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–4 implemented (through evidence-linked knowledge graph).
+**Status:** Phases 0–5 implemented (through adaptive Research Agent).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -49,6 +49,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - `graph build|inspect|stats` CLI and `retrieve --mode graph`
 - Production BGE/CrossEncoder weights are cached under ignored `.cache/huggingface/`
 
+### Phase 5
+
+- Adaptive query classifier / retrieval router (rule-based, offline)
+- Research Agent tool loop with hard tool & evidence budgets
+- Evidence ledger merge + structured execution events
+- Optional parallel multi-sub-question research
+
 ## Quick start
 
 ```bash
@@ -87,6 +94,7 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent graph build` | Build evidence-linked knowledge graph |
 | `uv run scholar-agent graph inspect` | Stats + sample edges |
 | `uv run scholar-agent retrieve "Self-RAG HotpotQA" --mode graph` | Graph retrieval |
+| `uv run scholar-agent research "Compare Self-RAG and CRAG"` | Research Agent loop |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 

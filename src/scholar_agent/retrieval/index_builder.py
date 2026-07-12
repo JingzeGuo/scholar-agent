@@ -74,18 +74,22 @@ def build_indexes(
         sparse.save(sparse_dir)
         logger.info("wrote BM25 index → %s", sparse_dir)
 
-    # Dense
+    # Dense — when loading an existing index, use the embedder recorded in meta
+    # so query vectors match collection dimensionality (hash=64 vs BGE=384).
     dense_meta = dense_dir / "meta.json"
     if not force and dense_meta.is_file():
         try:
             dense = DenseIndex.load(
                 dense_dir,
                 store,
-                embedder=embedder,
+                embedder=None,
                 verify=True,
                 collection_name=cfg.retrieval.dense.collection_name,
             )
-            logger.info("loaded existing dense index")
+            logger.info(
+                "loaded existing dense index (embedder=%s)",
+                dense.embedder.model_name,
+            )
         except (ValueError, FileNotFoundError, Exception) as exc:
             logger.info("dense reload failed (%s); rebuilding", exc)
             dense = DenseIndex.build(
