@@ -9,6 +9,7 @@ Phase 5: adaptive routing + Research Agent tool loop.
 Phase 6: Planner, Verifier, and corrective LangGraph workflow.
 Phase 7: Evidence-constrained Writer + citation validator.
 Phase 8: Evaluation framework (frozen split, ablations, metrics).
+Phase 9: Streamlit demo + saved-run replay.
 """
 
 from __future__ import annotations
@@ -912,6 +913,76 @@ def evaluate_cmd(
             f"[yellow]failures logged[/yellow]: {len(result.report.failures)} "
             f"→ {result.output_paths.get('failures_json')}"
         )
+
+
+_DEMO_PORT_OPT = typer.Option(8501, "--port", help="Streamlit server port")
+_DEMO_REPLAY_OPT = typer.Option(
+    None,
+    "--replay",
+    help="Print a saved demo run as JSON instead of launching Streamlit",
+)
+
+
+@app.command("demo")
+def demo_cmd(
+    port: int = _DEMO_PORT_OPT,
+    replay: str | None = _DEMO_REPLAY_OPT,
+    json_output: bool = _JSON_OPT,
+) -> None:
+    """Launch Streamlit demo, or dump a saved offline replay."""
+    if replay:
+        from scholar_agent.app.demo_runs import find_saved_run
+
+        saved = find_saved_run(replay)
+        if saved is None:
+            console.print(f"[red]Saved demo not found:[/red] {replay}")
+            console.print("Available:")
+            from scholar_agent.app.demo_runs import list_saved_runs
+
+            for run in list_saved_runs():
+                console.print(f"  - {run.demo_id}: {run.title}")
+            raise typer.Exit(code=1)
+        if json_output:
+            console.print_json(json.dumps(saved.model_dump(mode="json")))
+        else:
+            console.print(f"[bold]{saved.title}[/bold] (`{saved.demo_id}`)")
+            console.print(saved.query, markup=False)
+            console.print(saved.session.answer_markdown, markup=False)
+        return
+
+    import shutil
+    import subprocess
+    import sys
+
+    if shutil.which("streamlit") is None and not _streamlit_importable():
+        console.print(
+            "[red]Streamlit not installed.[/red] Install with: "
+            "[cyan]uv sync --extra ui[/cyan]"
+        )
+        raise typer.Exit(code=1)
+
+    app_path = Path(__file__).resolve().parent / "app" / "streamlit_app.py"
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+    ]
+    console.print(f"Starting demo: {' '.join(cmd)}")
+    raise typer.Exit(code=subprocess.call(cmd))
+
+
+def _streamlit_importable() -> bool:
+    try:
+        import importlib
+
+        importlib.import_module("streamlit")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def main() -> None:

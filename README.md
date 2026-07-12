@@ -6,7 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–8 implemented (through evaluation framework).
+**Status:** Phases 0–9 implemented (through Streamlit demo + observability).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -79,6 +79,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
   (`--ragas`) wired to the configured provider and retrieval embeddings
 - Reports: JSON/CSV, per-category tables, SVG charts, failure log + notebook
 
+### Phase 9
+
+- Streamlit chat UI with answer, sources, and research trace panels
+- Ablation toggles: Naive RAG compare, graph on/off, corrective on/off, static tools
+- Offline saved-run replay under `data/demo/runs/` (interview-safe, no API)
+- Corpus / index health indicator; claim → PDF page source cards
+
 ## Quick start
 
 ```bash
@@ -121,6 +128,8 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent ask "Compare Self-RAG versus CRAG"` | Full plan→verify→write→cite loop |
 | `uv run scholar-agent evaluate --max-questions 5 --embedding-backend hash` | Frozen-split ablation smoke |
 | `make evaluate-smoke` / `make evaluate` | Evaluation shortcuts |
+| `make demo` / `uv run scholar-agent demo` | Streamlit demo (needs `uv sync --extra ui`) |
+| `uv run scholar-agent demo --replay selfrag_vs_crag` | Print offline saved run |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 
@@ -138,9 +147,9 @@ uv run scholar-agent corpus summary -m data/corpus_manifest.jsonl
 - Manifest: `data/corpus_manifest.jsonl` (metadata + content hashes)
 - PDFs: `data/papers/{arxiv_id}.pdf`
 
-Later phases add the Streamlit demo and portfolio hardening.
+Later phases add portfolio hardening (Phase 10).
 
-Evaluation details: [`docs/evaluation.md`](docs/evaluation.md).
+Evaluation: [`docs/evaluation.md`](docs/evaluation.md). Demo: `make demo`.
 
 ## Project layout
 

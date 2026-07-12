@@ -1,4 +1,4 @@
-.PHONY: sync install test lint typecheck quality compatibility prototype clean
+.PHONY: sync install test lint typecheck quality compatibility prototype clean demo evaluate evaluate-smoke
 
 sync:
 	uv sync
@@ -80,6 +80,13 @@ evaluate:
 		--eval-config configs/evaluation.yaml \
 		--embedding-backend hash \
 		--output-dir outputs/evaluation
+
+demo:
+	uv sync --extra ui
+	uv run streamlit run src/scholar_agent/app/streamlit_app.py
+
+demo-precompute:
+	uv run python scripts/precompute_demo_runs.py
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build

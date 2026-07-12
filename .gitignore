@@ -54,6 +54,9 @@ data/evaluation/**
 !data/evaluation/questions.jsonl
 !data/evaluation/reference_evidence.jsonl
 !data/evaluation/frozen_split.json
+# Offline interview demo runs (Phase 9)
+!data/demo/
+!data/demo/**
 !tests/fixtures/**
 
 # Model caches (do not ignore src/scholar_agent/models package)

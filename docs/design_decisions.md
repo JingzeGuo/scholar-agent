@@ -370,7 +370,31 @@ first full top-k list.
 
 ---
 
+## Phase 9
+
+### ADR-033: Streamlit demo with offline saved-run replay
+
+**Decision:** The interview UI is a Streamlit app (`scholar_agent.app.streamlit_app`)
+backed by a non-UI `DemoService`. Live mode runs the full workflow (or static
+all-tools ablation) with sidebar toggles for graph/corrective/static routing and
+Naive RAG comparison. Replay mode loads fingerprint-stable JSON sessions from
+`data/demo/runs/` so demos work without live API access or healthy indexes.
+
+**Rationale:** Plan §12 and Phase-9 acceptance — auditable traces, ablation
+toggles, and interview resilience.
+
+### ADR-034: Trace panel is event-derived, not chain-of-thought
+
+**Decision:** The research trace summarizes plan sub-questions, tool events,
+coverage, corrective queries/iterations, citation validation, latency, and
+token estimates from structured `ExecutionEvent`s and workflow results. No
+provider reasoning fields are displayed.
+
+**Rationale:** Plan constraints on no user-facing CoT; still supports “corrective
+loops are visibly understandable.”
+
+---
+
 ## Pending (later phases)
 
-- Streamlit demo (Phase 9)
 - Hardening and portfolio docs (Phase 10)
