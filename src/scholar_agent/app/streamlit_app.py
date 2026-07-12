@@ -14,6 +14,7 @@ from typing import Literal
 
 from scholar_agent.app.demo_models import DemoSessionResult, DemoSettings, SavedDemoRun
 from scholar_agent.app.demo_service import DemoService
+from scholar_agent.app.source_viewer import render_pdf_page_png, resolve_pdf_path
 from scholar_agent.app.status import SystemStatus
 from scholar_agent.config import load_config
 from scholar_agent.logging import setup_logging
@@ -21,9 +22,7 @@ from scholar_agent.logging import setup_logging
 try:
     import streamlit as st
 except ImportError as exc:  # pragma: no cover - optional UI extra
-    raise SystemExit(
-        "Streamlit is not installed. Install with: uv sync --extra ui"
-    ) from exc
+    raise SystemExit("Streamlit is not installed. Install with: uv sync --extra ui") from exc
 
 
 def _init_state() -> None:
@@ -47,9 +46,7 @@ def _sidebar_settings(status: SystemStatus) -> tuple[DemoSettings, str, str | No
     cols[1].write("BM25 ✅" if status.sparse_index_ready else "BM25 ❌")
     cols[2].write("Graph ✅" if status.graph_ready else "Graph ❌")
     if status.graph_nodes is not None:
-        st.sidebar.caption(
-            f"Graph nodes={status.graph_nodes} edges={status.graph_edges}"
-        )
+        st.sidebar.caption(f"Graph nodes={status.graph_nodes} edges={status.graph_edges}")
     for msg in status.messages:
         st.sidebar.warning(msg)
 
@@ -77,13 +74,9 @@ def _sidebar_settings(status: SystemStatus) -> tuple[DemoSettings, str, str | No
 
     st.sidebar.header("Ablation toggles")
     compare_naive = st.sidebar.checkbox("Compare with Naive RAG", value=True)
-    enable_graph = st.sidebar.checkbox(
-        "Enable graph retrieval", value=status.graph_ready
-    )
+    enable_graph = st.sidebar.checkbox("Enable graph retrieval", value=status.graph_ready)
     enable_corrective = st.sidebar.checkbox("Enable corrective loop", value=True)
-    static_routing = st.sidebar.checkbox(
-        "Static all-tools (disable adaptive routing)", value=False
-    )
+    static_routing = st.sidebar.checkbox("Static all-tools (disable adaptive routing)", value=False)
     verified_only = st.sidebar.checkbox("Show only verified evidence", value=True)
     embedding_backend_raw = st.sidebar.selectbox(
         "Embedding backend",
@@ -92,9 +85,7 @@ def _sidebar_settings(status: SystemStatus) -> tuple[DemoSettings, str, str | No
         help="hash = offline; st/auto may load BGE weights",
     )
     embedding_backend: Literal["hash", "auto", "st"] = (
-        embedding_backend_raw
-        if embedding_backend_raw in {"hash", "auto", "st"}
-        else "hash"
+        embedding_backend_raw if embedding_backend_raw in {"hash", "auto", "st"} else "hash"
     )
     max_corr = st.sidebar.slider("Max corrective iterations", 0, 3, 2)
     top_k = st.sidebar.slider("Top-k", 3, 16, 8)
@@ -134,14 +125,22 @@ def _render_sources(session: DemoSessionResult) -> None:
             ):
                 st.markdown(f"**Claim:** {item.claim}")
                 st.write(item.evidence_text)
-                st.caption(
-                    f"chunk=`{item.chunk_id}` · evidence=`{item.evidence_id}`"
-                )
+                st.caption(f"chunk=`{item.chunk_id}` · evidence=`{item.evidence_id}`")
         return
 
-    for card in cards:
+    claims_by_evidence: dict[str, list[str]] = {}
+    for claim in session.claims:
+        for evidence_id in claim.get("evidence_ids") or []:
+            claims_by_evidence.setdefault(str(evidence_id), []).append(
+                str(claim.get("text") or claim.get("claim_id") or "")
+            )
+
+    for index, card in enumerate(cards):
         title = card.title or card.paper_id
         with st.expander(f"{title} · {card.page_label()} · {card.paper_id}"):
+            supported_claims = claims_by_evidence.get(card.evidence_id) or []
+            for claim_text in supported_claims:
+                st.markdown(f"**Supports final claim:** {claim_text}")
             st.markdown(f"**Snippet:** {card.snippet or '—'}")
             st.caption(
                 f"chunk=`{card.chunk_id}` · evidence=`{card.evidence_id}`"
@@ -149,9 +148,28 @@ def _render_sources(session: DemoSessionResult) -> None:
             )
             if card.pdf_path:
                 st.caption(f"PDF: `{card.pdf_path}`")
-            # Traceability call-to-action
+                preview = st.checkbox(
+                    f"Preview cited PDF page {card.page_start}",
+                    key=f"pdf-preview-{session.run_id}-{index}-{card.evidence_id}",
+                )
+                if preview:
+                    try:
+                        path = resolve_pdf_path(card.pdf_path)
+                        image = render_pdf_page_png(path, card.page_start)
+                    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+                        st.warning(f"PDF page preview unavailable: {exc}")
+                    else:
+                        st.image(
+                            image,
+                            caption=(
+                                f"{title} — physical PDF page {card.page_start} "
+                                f"(chunk {card.chunk_id})"
+                            ),
+                            width="stretch",
+                        )
             st.success(
-                f"Traceable to PDF page {card.page_label()} of `{card.paper_id}`."
+                f"Claim → evidence `{card.evidence_id}` → chunk `{card.chunk_id}` "
+                f"→ {card.paper_id} {card.page_label()}."
             )
 
 
@@ -176,20 +194,37 @@ def _render_trace(session: DemoSessionResult) -> None:
     if tr.sub_questions:
         st.markdown("#### Sub-questions")
         for sq in tr.sub_questions:
-            st.markdown(
-                f"- `{sq.get('status', '?')}` **{sq.get('id')}**: {sq.get('question')}"
-            )
+            st.markdown(f"- `{sq.get('status', '?')}` **{sq.get('id')}**: {sq.get('question')}")
 
     if tr.corrective_queries:
         st.markdown("#### Corrective queries")
         for q in tr.corrective_queries:
             st.code(q, language=None)
 
+    if tr.corrective_steps:
+        st.markdown("#### Corrective loop timeline")
+        icons = {
+            "verification": "🔎",
+            "corrective": "🔁",
+            "tool_result": "🧰",
+            "run_finished": "✅",
+            "budget_hit": "⛔",
+        }
+        for step in tr.corrective_steps:
+            kind = str(step.get("kind") or "event")
+            detail = []
+            if step.get("is_sufficient") is not None:
+                detail.append(f"sufficient={step['is_sufficient']}")
+            if step.get("method"):
+                detail.append(f"method={step['method']}")
+            suffix = f" · {' · '.join(detail)}" if detail else ""
+            st.markdown(
+                f"{icons.get(kind, '•')} **{step.get('number')}. {kind}** — "
+                f"{step.get('summary')}{suffix}"
+            )
+
     if tr.conflicting_evidence_ids:
-        st.warning(
-            "Conflicting evidence retained: "
-            + ", ".join(tr.conflicting_evidence_ids[:12])
-        )
+        st.warning("Conflicting evidence retained: " + ", ".join(tr.conflicting_evidence_ids[:12]))
 
     if tr.retrieval_methods:
         st.caption("Retrieval methods: " + ", ".join(tr.retrieval_methods))
@@ -202,9 +237,7 @@ def _render_trace(session: DemoSessionResult) -> None:
     with st.expander("Tool / event log", expanded=False):
         if session.events:
             for evt in session.events:
-                st.markdown(
-                    f"- `{evt.event_type.value}` · **{evt.component}**: {evt.summary}"
-                )
+                st.markdown(f"- `{evt.event_type.value}` · **{evt.component}**: {evt.summary}")
         elif tr.tool_events:
             for tool_evt in tr.tool_events:
                 st.markdown(
@@ -230,16 +263,25 @@ def _render_session(session: DemoSessionResult) -> None:
     if session.error:
         st.error(session.error)
     badge = "🔁 Replay" if session.offline_replay else "🔴 Live"
-    st.caption(
-        f"{badge} · run_id=`{session.run_id}` · settings: {session.settings.label()}"
-    )
+    st.caption(f"{badge} · run_id=`{session.run_id}` · settings: {session.settings.label()}")
 
     tab_answer, tab_trace, tab_sources, tab_naive = st.tabs(
         ["Answer", "Trace", "Sources", "Naive RAG"]
     )
     with tab_answer:
         st.subheader("Final answer")
-        if session.answer_markdown:
+        if session.naive is not None:
+            full_col, naive_col = st.columns(2)
+            with full_col:
+                st.markdown("#### ScholarAgent")
+                st.markdown(session.answer_markdown or "_No answer text._")
+            with naive_col:
+                st.markdown("#### Naive RAG baseline")
+                st.caption(
+                    f"hits={session.naive.hit_count} · latency={session.naive.latency_ms} ms"
+                )
+                st.markdown(session.naive.answer or "_No baseline answer._")
+        elif session.answer_markdown:
             st.markdown(session.answer_markdown)
         else:
             st.info("No answer text.")

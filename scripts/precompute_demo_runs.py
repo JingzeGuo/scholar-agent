@@ -21,18 +21,35 @@ from scholar_agent.app.demo_models import (
     TraceSummary,
 )
 from scholar_agent.app.demo_runs import save_demo_run
-from scholar_agent.app.demo_service import DemoService
+from scholar_agent.app.demo_service import DemoService, build_corrective_steps
 from scholar_agent.app.status import collect_system_status
 from scholar_agent.config import load_config
 from scholar_agent.logging import setup_logging
-from scholar_agent.models.answer import CitationReport, FinalAnswer, SourceCard
+from scholar_agent.models.answer import (
+    CitationReport,
+    ClaimWithCitations,
+    FinalAnswer,
+    SourceCard,
+)
 from scholar_agent.models.base import EventType, ExecutionEvent, QueryType, utc_now_iso
 from scholar_agent.models.evidence import EvidenceItem
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
 from scholar_agent.models.workflow import VerificationResult
+from scholar_agent.retrieval.chunk_store import ChunkStore
 
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "data" / "demo" / "runs"
+
+SELF_RAG_CHUNK_ID = "chunk_44327db3f15dab2a"
+CRAG_CHUNK_ID = "chunk_80df894da22e4964"
+
+
+def _fixture_provenance() -> tuple[str | None, bool]:
+    try:
+        store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
+    except (FileNotFoundError, ValueError):
+        return None, False
+    return store.fingerprint, True
 
 
 def _fixture_compare() -> SavedDemoRun:
@@ -51,13 +68,17 @@ def _fixture_compare() -> SavedDemoRun:
             sub_question_id="sq_0",
             claim="Self-RAG uses reflection tokens to retrieve on demand.",
             evidence_text=(
-                "Self-RAG retrieves on demand and uses reflection tokens to critique "
-                "generation quality."
+                "This work introduces Self-Reflective Retrieval-augmented Generation "
+                "(SELF-RAG) to improve an LLM's generation quality, including its factual "
+                "accuracy without hurting its versatility, via on-demand retrieval and "
+                "self-reflection. Reflection tokens are categorized into retrieval and "
+                "critique tokens to indicate the need for retrieval and its generation "
+                "quality respectively."
             ),
             paper_id="paper_arxiv_2310_11511",
-            chunk_id="chunk_selfrag_demo",
+            chunk_id=SELF_RAG_CHUNK_ID,
             page_start=1,
-            page_end=2,
+            page_end=1,
             retrieval_method="hybrid_rerank",
             retrieval_score=0.91,
         ),
@@ -66,13 +87,15 @@ def _fixture_compare() -> SavedDemoRun:
             sub_question_id="sq_1",
             claim="CRAG evaluates retrieved documents and triggers corrective retrieval.",
             evidence_text=(
-                "Corrective Retrieval Augmented Generation (CRAG) evaluates retrieved "
-                "documents and triggers corrective retrieval when quality is low."
+                "Specifically, a lightweight retrieval evaluator is designed to assess "
+                "the overall quality of retrieved documents for a query, returning a "
+                "confidence degree based on which different knowledge retrieval actions "
+                "can be triggered."
             ),
             paper_id="paper_arxiv_2401_15884",
-            chunk_id="chunk_crag_demo",
+            chunk_id=CRAG_CHUNK_ID,
             page_start=1,
-            page_end=2,
+            page_end=1,
             retrieval_method="hybrid_rerank",
             retrieval_score=0.88,
         ),
@@ -125,21 +148,21 @@ def _fixture_compare() -> SavedDemoRun:
             "**Question:** Compare Self-RAG versus CRAG\n\n"
             "### Claims\n\n"
             "- Self-RAG uses reflection tokens to retrieve on demand "
-            "[paper_arxiv_2310_11511 p.1-2]\n"
+            "[paper_arxiv_2310_11511 p.1]\n"
             "- CRAG evaluates retrieved documents and triggers corrective retrieval "
-            "[paper_arxiv_2401_15884 p.1-2]\n"
+            "[paper_arxiv_2401_15884 p.1]\n"
         ),
         claims=[
-            {
-                "claim_id": "claim_1",
-                "text": "Self-RAG uses reflection tokens to retrieve on demand.",
-                "evidence_ids": ["ev_selfrag"],
-            },
-            {
-                "claim_id": "claim_2",
-                "text": "CRAG evaluates retrieved documents and triggers corrective retrieval.",
-                "evidence_ids": ["ev_crag"],
-            },
+            ClaimWithCitations(
+                claim_id="claim_1",
+                text="Self-RAG uses reflection tokens to retrieve on demand.",
+                evidence_ids=["ev_selfrag"],
+            ),
+            ClaimWithCitations(
+                claim_id="claim_2",
+                text="CRAG evaluates retrieved documents and triggers corrective retrieval.",
+                evidence_ids=["ev_crag"],
+            ),
         ],
         sources=[c.format_reference() for c in cards],
         source_cards=cards,
@@ -151,28 +174,6 @@ def _fixture_compare() -> SavedDemoRun:
                 "paper_arxiv_2401_15884",
             ],
         ),
-    )
-    # claims need ClaimWithCitations - FinalAnswer expects list[ClaimWithCitations]
-    from scholar_agent.models.answer import ClaimWithCitations
-
-    final = final.model_copy(
-        update={
-            "claims": [
-                ClaimWithCitations(
-                    claim_id="claim_1",
-                    text="Self-RAG uses reflection tokens to retrieve on demand.",
-                    evidence_ids=["ev_selfrag"],
-                ),
-                ClaimWithCitations(
-                    claim_id="claim_2",
-                    text=(
-                        "CRAG evaluates retrieved documents and triggers "
-                        "corrective retrieval."
-                    ),
-                    evidence_ids=["ev_crag"],
-                ),
-            ]
-        }
     )
     events = [
         ExecutionEvent(
@@ -200,6 +201,20 @@ def _fixture_compare() -> SavedDemoRun:
             event_type=EventType.CORRECTIVE,
             component="workflow",
             summary="corrective iteration 1: 1 queries",
+        ),
+        ExecutionEvent(
+            run_id=run_id,
+            event_type=EventType.TOOL_RESULT,
+            component="researcher",
+            summary="hybrid_rerank found CRAG evidence",
+            payload={"method": "hybrid_rerank", "tool_name": "hybrid_search"},
+        ),
+        ExecutionEvent(
+            run_id=run_id,
+            event_type=EventType.VERIFICATION,
+            component="verifier",
+            summary="both comparison sides covered",
+            payload={"is_sufficient": True},
         ),
         ExecutionEvent(
             run_id=run_id,
@@ -260,6 +275,7 @@ def _fixture_compare() -> SavedDemoRun:
             is_sufficient=True,
             corrective_iterations=1,
             corrective_queries=["CRAG corrective retrieval evaluator"],
+            corrective_steps=build_corrective_steps(events),
             citation_valid=True,
             citation_issue_count=0,
             terminated_reason="evidence_sufficient",
@@ -280,6 +296,7 @@ def _fixture_compare() -> SavedDemoRun:
         ),
         status={"ok": True, "offline_fixture": True},
     )
+    fingerprint, verified = _fixture_provenance()
     return SavedDemoRun(
         demo_id="selfrag_vs_crag",
         title="Self-RAG vs CRAG (corrective loop)",
@@ -288,6 +305,8 @@ def _fixture_compare() -> SavedDemoRun:
         created_at=utc_now_iso(),
         offline=True,
         notes="Shows corrective iteration when one comparison side is initially missing.",
+        corpus_fingerprint=fingerprint,
+        provenance_verified=verified,
         session=session,
     )
 
@@ -298,16 +317,19 @@ def _fixture_factual() -> SavedDemoRun:
     card = SourceCard(
         evidence_id="ev_def",
         paper_id="paper_arxiv_2310_11511",
-        chunk_id="chunk_selfrag_def",
+        chunk_id=SELF_RAG_CHUNK_ID,
         page_start=1,
         page_end=1,
-        snippet="Self-RAG learns to retrieve, generate, and critique through self-reflection.",
+        snippet=(
+            "This work introduces Self-Reflective Retrieval-augmented Generation "
+            "(SELF-RAG) to improve an LLM's generation quality, including its factual "
+            "accuracy without hurting its versatility, via on-demand retrieval and "
+            "self-reflection."
+        ),
         retrieval_method="hybrid_rerank",
         title="Self-RAG",
         pdf_path="data/papers/2310.11511.pdf",
     )
-    from scholar_agent.models.answer import ClaimWithCitations
-
     final = FinalAnswer(
         markdown=(
             "## Answer\n\n**Question:** What is Self-RAG?\n\n"
@@ -409,6 +431,7 @@ def _fixture_factual() -> SavedDemoRun:
         ),
         status={"ok": True, "offline_fixture": True},
     )
+    fingerprint, verified = _fixture_provenance()
     return SavedDemoRun(
         demo_id="what_is_selfrag",
         title="What is Self-RAG? (factual)",
@@ -417,6 +440,8 @@ def _fixture_factual() -> SavedDemoRun:
         created_at=utc_now_iso(),
         offline=True,
         notes="Simple single-paper factual path with page-traceable source card.",
+        corpus_fingerprint=fingerprint,
+        provenance_verified=verified,
         session=session,
     )
 
@@ -482,7 +507,7 @@ def _fixture_unanswerable() -> SavedDemoRun:
             verified_evidence_count=0,
             coverage_score=0.0,
             is_sufficient=False,
-            corrective_iterations=1,
+            corrective_iterations=0,
             unanswerable=True,
             terminated_reason="corpus_cannot_answer",
             citation_valid=True,
@@ -498,6 +523,7 @@ def _fixture_unanswerable() -> SavedDemoRun:
         ),
         status={"ok": True, "offline_fixture": True},
     )
+    fingerprint, verified = _fixture_provenance()
     return SavedDemoRun(
         demo_id="unanswerable_market",
         title="Unanswerable market question",
@@ -506,6 +532,8 @@ def _fixture_unanswerable() -> SavedDemoRun:
         created_at=utc_now_iso(),
         offline=True,
         notes="Demonstrates corpus insufficiency / refusal path.",
+        corpus_fingerprint=fingerprint,
+        provenance_verified=verified,
         session=session,
     )
 

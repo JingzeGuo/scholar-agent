@@ -50,6 +50,10 @@ Load JSON sessions from `data/demo/runs/`:
 uv run scholar-agent demo --replay selfrag_vs_crag
 ```
 
+Committed replay sources are checked against the canonical chunk store when
+fixtures are built and in tests. Each saved run records the corpus fingerprint
+and `provenance_verified`; invented demo-only chunk IDs are rejected.
+
 Regenerate fixtures (or live captures when indexes exist):
 
 ```bash
@@ -60,6 +64,8 @@ uv run python scripts/precompute_demo_runs.py --live
 
 ## Acceptance mapping
 
-- **Claim → PDF page:** Sources tab shows paper, pages, chunk, evidence ID, PDF path.
-- **Corrective loop visible:** Trace tab lists corrective iterations/queries and event log.
+- **Claim → PDF page:** Sources tab maps each final claim to its evidence ID,
+  canonical chunk, paper and page, and can render the physical cited PDF page.
+- **Corrective loop visible:** Trace tab presents an ordered
+  verify → corrective retrieval → finish timeline, plus queries and event log.
 - **No live API required:** Replay mode uses only committed JSON under `data/demo/runs/`.

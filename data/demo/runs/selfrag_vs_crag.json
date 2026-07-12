@@ -14,9 +14,11 @@
     "use_llm": false,
     "max_total_tool_calls": 12
   },
-  "created_at": "2026-07-12T08:58:28+00:00",
+  "created_at": "2026-07-12T09:22:35+00:00",
   "offline": true,
   "notes": "Shows corrective iteration when one comparison side is initially missing.",
+  "corpus_fingerprint": "c639ca3f202ab39b7d9b88cbde24b61e",
+  "provenance_verified": true,
   "session": {
     "run_id": "run_demo_selfrag_crag",
     "query": "Compare Self-RAG versus CRAG",
@@ -33,7 +35,7 @@
       "max_total_tool_calls": 12
     },
     "offline_replay": true,
-    "answer_markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1-2]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1-2]\n",
+    "answer_markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1]\n",
     "claims": [
       {
         "claim_id": "claim_1",
@@ -54,10 +56,10 @@
       {
         "evidence_id": "ev_selfrag",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_selfrag_demo",
+        "chunk_id": "chunk_44327db3f15dab2a",
         "page_start": 1,
-        "page_end": 2,
-        "snippet": "Self-RAG retrieves on demand and uses reflection tokens to critique generation quality.",
+        "page_end": 1,
+        "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand ret",
         "retrieval_method": "hybrid_rerank",
         "title": "Self-RAG",
         "pdf_path": "data/papers/2310.11511.pdf"
@@ -65,10 +67,10 @@
       {
         "evidence_id": "ev_crag",
         "paper_id": "paper_arxiv_2401_15884",
-        "chunk_id": "chunk_crag_demo",
+        "chunk_id": "chunk_80df894da22e4964",
         "page_start": 1,
-        "page_end": 2,
-        "snippet": "Corrective Retrieval Augmented Generation (CRAG) evaluates retrieved documents and triggers corrective retrieval when quality is low.",
+        "page_end": 1,
+        "snippet": "Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval",
         "retrieval_method": "hybrid_rerank",
         "title": "CRAG",
         "pdf_path": "data/papers/2401.15884.pdf"
@@ -79,11 +81,11 @@
         "evidence_id": "ev_selfrag",
         "sub_question_id": "sq_0",
         "claim": "Self-RAG uses reflection tokens to retrieve on demand.",
-        "evidence_text": "Self-RAG retrieves on demand and uses reflection tokens to critique generation quality.",
+        "evidence_text": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection. Reflection tokens are categorized into retrieval and critique tokens to indicate the need for retrieval and its generation quality respectively.",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_selfrag_demo",
+        "chunk_id": "chunk_44327db3f15dab2a",
         "page_start": 1,
-        "page_end": 2,
+        "page_end": 1,
         "retrieval_method": "hybrid_rerank",
         "retrieval_score": 0.91,
         "rerank_score": null,
@@ -94,11 +96,11 @@
         "evidence_id": "ev_crag",
         "sub_question_id": "sq_1",
         "claim": "CRAG evaluates retrieved documents and triggers corrective retrieval.",
-        "evidence_text": "Corrective Retrieval Augmented Generation (CRAG) evaluates retrieved documents and triggers corrective retrieval when quality is low.",
+        "evidence_text": "Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval actions can be triggered.",
         "paper_id": "paper_arxiv_2401_15884",
-        "chunk_id": "chunk_crag_demo",
+        "chunk_id": "chunk_80df894da22e4964",
         "page_start": 1,
-        "page_end": 2,
+        "page_end": 1,
         "retrieval_method": "hybrid_rerank",
         "retrieval_score": 0.88,
         "rerank_score": null,
@@ -151,7 +153,7 @@
       "rationale_summary": "Both comparison sides covered after one corrective pass."
     },
     "final_answer": {
-      "markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1-2]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1-2]\n",
+      "markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1]\n",
       "claims": [
         {
           "claim_id": "claim_1",
@@ -169,17 +171,17 @@
         }
       ],
       "sources": [
-        "Self-RAG [paper_arxiv_2310_11511] p.1-2 (chunk=chunk_selfrag_demo, evidence=ev_selfrag) · PDF=data/papers/2310.11511.pdf",
-        "CRAG [paper_arxiv_2401_15884] p.1-2 (chunk=chunk_crag_demo, evidence=ev_crag) · PDF=data/papers/2401.15884.pdf"
+        "Self-RAG [paper_arxiv_2310_11511] p.1 (chunk=chunk_44327db3f15dab2a, evidence=ev_selfrag) · PDF=data/papers/2310.11511.pdf",
+        "CRAG [paper_arxiv_2401_15884] p.1 (chunk=chunk_80df894da22e4964, evidence=ev_crag) · PDF=data/papers/2401.15884.pdf"
       ],
       "source_cards": [
         {
           "evidence_id": "ev_selfrag",
           "paper_id": "paper_arxiv_2310_11511",
-          "chunk_id": "chunk_selfrag_demo",
+          "chunk_id": "chunk_44327db3f15dab2a",
           "page_start": 1,
-          "page_end": 2,
-          "snippet": "Self-RAG retrieves on demand and uses reflection tokens to critique generation quality.",
+          "page_end": 1,
+          "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand ret",
           "retrieval_method": "hybrid_rerank",
           "title": "Self-RAG",
           "pdf_path": "data/papers/2310.11511.pdf"
@@ -187,10 +189,10 @@
         {
           "evidence_id": "ev_crag",
           "paper_id": "paper_arxiv_2401_15884",
-          "chunk_id": "chunk_crag_demo",
+          "chunk_id": "chunk_80df894da22e4964",
           "page_start": 1,
-          "page_end": 2,
-          "snippet": "Corrective Retrieval Augmented Generation (CRAG) evaluates retrieved documents and triggers corrective retrieval when quality is low.",
+          "page_end": 1,
+          "snippet": "Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval",
           "retrieval_method": "hybrid_rerank",
           "title": "CRAG",
           "pdf_path": "data/papers/2401.15884.pdf"
@@ -212,19 +214,19 @@
     },
     "events": [
       {
-        "event_id": "evt_8e8f68c0d356",
+        "event_id": "evt_44a2d31e1635",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "plan_created",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "planner",
         "summary": "plan answer_type=comparison sub_questions=2",
         "payload": {}
       },
       {
-        "event_id": "evt_8e915721c03a",
+        "event_id": "evt_b650f762f2f0",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "tool_result",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "researcher",
         "summary": "hybrid_rerank hits for Self-RAG",
         "payload": {
@@ -233,10 +235,10 @@
         }
       },
       {
-        "event_id": "evt_5890a5db884f",
+        "event_id": "evt_658087c590cd",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "verification",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "verifier",
         "summary": "missing CRAG side",
         "payload": {
@@ -244,19 +246,42 @@
         }
       },
       {
-        "event_id": "evt_41c6e0c6bb14",
+        "event_id": "evt_6fac12859248",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "corrective",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "workflow",
         "summary": "corrective iteration 1: 1 queries",
         "payload": {}
       },
       {
-        "event_id": "evt_2ef717779b00",
+        "event_id": "evt_724e1a7a9413",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "tool_result",
+        "timestamp": "2026-07-12T09:22:35+00:00",
+        "component": "researcher",
+        "summary": "hybrid_rerank found CRAG evidence",
+        "payload": {
+          "method": "hybrid_rerank",
+          "tool_name": "hybrid_search"
+        }
+      },
+      {
+        "event_id": "evt_fd2d3f388b5c",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "verification",
+        "timestamp": "2026-07-12T09:22:35+00:00",
+        "component": "verifier",
+        "summary": "both comparison sides covered",
+        "payload": {
+          "is_sufficient": true
+        }
+      },
+      {
+        "event_id": "evt_6316dc077b4e",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "citation_validated",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "citation_validator",
         "summary": "citation valid=True claims=2",
         "payload": {
@@ -264,10 +289,10 @@
         }
       },
       {
-        "event_id": "evt_ad37c53f6d18",
+        "event_id": "evt_bdbaaefe8dcb",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "run_finished",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "workflow",
         "summary": "workflow finished: evidence_sufficient",
         "payload": {}
@@ -310,6 +335,53 @@
       "corrective_iterations": 1,
       "corrective_queries": [
         "CRAG corrective retrieval evaluator"
+      ],
+      "corrective_steps": [
+        {
+          "number": 1,
+          "kind": "verification",
+          "component": "verifier",
+          "summary": "missing CRAG side",
+          "timestamp": "2026-07-12T09:22:35+00:00",
+          "is_sufficient": false,
+          "method": null
+        },
+        {
+          "number": 2,
+          "kind": "corrective",
+          "component": "workflow",
+          "summary": "corrective iteration 1: 1 queries",
+          "timestamp": "2026-07-12T09:22:35+00:00",
+          "is_sufficient": null,
+          "method": null
+        },
+        {
+          "number": 3,
+          "kind": "tool_result",
+          "component": "researcher",
+          "summary": "hybrid_rerank found CRAG evidence",
+          "timestamp": "2026-07-12T09:22:35+00:00",
+          "is_sufficient": null,
+          "method": "hybrid_rerank"
+        },
+        {
+          "number": 4,
+          "kind": "verification",
+          "component": "verifier",
+          "summary": "both comparison sides covered",
+          "timestamp": "2026-07-12T09:22:35+00:00",
+          "is_sufficient": true,
+          "method": null
+        },
+        {
+          "number": 5,
+          "kind": "run_finished",
+          "component": "workflow",
+          "summary": "workflow finished: evidence_sufficient",
+          "timestamp": "2026-07-12T09:22:35+00:00",
+          "is_sufficient": null,
+          "method": null
+        }
       ],
       "conflicting_evidence_ids": [],
       "citation_valid": true,

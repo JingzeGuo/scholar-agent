@@ -14,9 +14,11 @@
     "use_llm": false,
     "max_total_tool_calls": 12
   },
-  "created_at": "2026-07-12T08:58:28+00:00",
+  "created_at": "2026-07-12T09:22:35+00:00",
   "offline": true,
   "notes": "Demonstrates corpus insufficiency / refusal path.",
+  "corpus_fingerprint": "c639ca3f202ab39b7d9b88cbde24b61e",
+  "provenance_verified": true,
   "session": {
     "run_id": "run_demo_unanswerable",
     "query": "What was the closing stock price of GraphRAG Inc. yesterday?",
@@ -80,19 +82,19 @@
     },
     "events": [
       {
-        "event_id": "evt_9f507493935c",
+        "event_id": "evt_83dec101672b",
         "run_id": "run_demo_unanswerable",
         "event_type": "verification",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "verifier",
         "summary": "corpus_cannot_answer",
         "payload": {}
       },
       {
-        "event_id": "evt_91a2fcfd1f04",
+        "event_id": "evt_f9e810c52c5e",
         "run_id": "run_demo_unanswerable",
         "event_type": "run_finished",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "workflow",
         "summary": "workflow finished: corpus_cannot_answer",
         "payload": {}
@@ -108,8 +110,9 @@
       "verified_evidence_count": 0,
       "coverage_score": 0.0,
       "is_sufficient": false,
-      "corrective_iterations": 1,
+      "corrective_iterations": 0,
       "corrective_queries": [],
+      "corrective_steps": [],
       "conflicting_evidence_ids": [],
       "citation_valid": true,
       "citation_issue_count": 0,

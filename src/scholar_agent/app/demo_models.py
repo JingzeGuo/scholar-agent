@@ -51,6 +51,7 @@ class TraceSummary(BaseModel):
     is_sufficient: bool | None = None
     corrective_iterations: int = 0
     corrective_queries: list[str] = Field(default_factory=list)
+    corrective_steps: list[dict[str, Any]] = Field(default_factory=list)
     conflicting_evidence_ids: list[str] = Field(default_factory=list)
     citation_valid: bool | None = None
     citation_issue_count: int = 0
@@ -101,6 +102,8 @@ class SavedDemoRun(BaseModel):
     created_at: str
     offline: bool = True
     notes: str = ""
+    corpus_fingerprint: str | None = None
+    provenance_verified: bool = False
     session: DemoSessionResult
 
     @field_validator("demo_id", "title", "query")

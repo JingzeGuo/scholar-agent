@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scholar_agent.app.demo_models import DemoSettings
 from scholar_agent.app.demo_runs import find_saved_run, list_saved_runs, load_saved_run
 from scholar_agent.app.demo_service import DemoService, filter_verified_evidence
+from scholar_agent.app.source_viewer import (
+    render_pdf_page_png,
+    resolve_pdf_path,
+    validate_saved_run_provenance,
+)
 from scholar_agent.app.status import collect_system_status
 from scholar_agent.models.answer import SourceCard
 from scholar_agent.models.evidence import EvidenceItem
+from scholar_agent.retrieval.chunk_store import ChunkStore
 
 REPO = Path(__file__).resolve().parents[2]
 DEMO_RUNS = REPO / "data" / "demo" / "runs"
@@ -43,6 +51,27 @@ def test_saved_demo_runs_exist_and_load() -> None:
     assert card.chunk_id
 
 
+def test_saved_runs_have_canonical_pdf_page_provenance() -> None:
+    store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
+    for saved in list_saved_runs(DEMO_RUNS):
+        assert saved.provenance_verified is True
+        assert saved.corpus_fingerprint == store.fingerprint
+        assert validate_saved_run_provenance(saved, store) == []
+
+
+def test_source_viewer_renders_real_cited_page() -> None:
+    saved = load_saved_run(DEMO_RUNS / "what_is_selfrag.json")
+    card = saved.session.source_cards[0]
+    image = render_pdf_page_png(card.pdf_path or "", card.page_start)
+    assert image.startswith(b"\x89PNG\r\n\x1a\n")
+    assert len(image) > 10_000
+
+
+def test_source_viewer_rejects_path_outside_repo() -> None:
+    with pytest.raises(ValueError, match="escapes repository"):
+        resolve_pdf_path("../../etc/passwd.pdf")
+
+
 def test_replay_works_without_indexes() -> None:
     service = DemoService()
     session = service.replay("selfrag_vs_crag")
@@ -51,6 +80,7 @@ def test_replay_works_without_indexes() -> None:
     assert "Self-RAG" in session.answer_markdown or "self-rag" in session.answer_markdown.lower()
     assert session.trace.corrective_iterations >= 1
     assert session.trace.corrective_queries
+    assert any(step["kind"] == "corrective" for step in session.trace.corrective_steps)
     # Source cards support PDF page trace
     assert any(c.page_start >= 1 for c in session.source_cards)
 

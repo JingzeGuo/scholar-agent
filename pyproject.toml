@@ -39,7 +39,7 @@ dev = [
     "types-requests>=2.32",
 ]
 ui = [
-    "streamlit>=1.36",
+    "streamlit>=1.59,<2",
 ]
 eval = [
     "ragas>=0.3.1,<0.4",

@@ -21,7 +21,7 @@ from scholar_agent.config import AppConfig, load_config
 from scholar_agent.ids import new_run_id
 from scholar_agent.logging import get_logger
 from scholar_agent.models.answer import SourceCard
-from scholar_agent.models.base import EventType, utc_now_iso
+from scholar_agent.models.base import EventType, ExecutionEvent, utc_now_iso
 from scholar_agent.models.evidence import EvidenceItem
 from scholar_agent.retrieval.index_builder import load_toolkit
 from scholar_agent.retrieval.naive_rag import NaiveRAG
@@ -33,6 +33,34 @@ logger = get_logger(__name__)
 
 def _token_estimate(text: str) -> int:
     return max(1, len(text) // 4) if text else 0
+
+
+def build_corrective_steps(events: list[ExecutionEvent]) -> list[dict[str, Any]]:
+    """Build a compact verifier/corrective timeline without exposing reasoning."""
+    steps: list[dict[str, Any]] = []
+    for event in events:
+        if event.event_type not in {
+            EventType.VERIFICATION,
+            EventType.CORRECTIVE,
+            EventType.TOOL_RESULT,
+            EventType.RUN_FINISHED,
+            EventType.BUDGET_HIT,
+        }:
+            continue
+        if event.event_type == EventType.TOOL_RESULT and not steps:
+            continue
+        steps.append(
+            {
+                "number": len(steps) + 1,
+                "kind": event.event_type.value,
+                "component": event.component,
+                "summary": event.summary,
+                "timestamp": event.timestamp,
+                "is_sufficient": event.payload.get("is_sufficient"),
+                "method": event.payload.get("method") or event.payload.get("tool_name"),
+            }
+        )
+    return steps[:24]
 
 
 def build_trace_summary(
@@ -110,6 +138,7 @@ def build_trace_summary(
         is_sufficient=result.verification.is_sufficient,
         corrective_iterations=result.iteration,
         corrective_queries=list(result.verification.corrective_queries),
+        corrective_steps=build_corrective_steps(result.events),
         conflicting_evidence_ids=list(result.verification.conflicting_evidence_ids),
         citation_valid=report.is_valid if report else None,
         citation_issue_count=len(report.issues) if report else 0,
@@ -161,6 +190,9 @@ class DemoService:
         session = saved.session.model_copy(deep=True)
         session.offline_replay = True
         session.error = None
+        if not session.trace.corrective_steps and session.events:
+            # Older committed replays remain understandable after schema upgrades.
+            session.trace.corrective_steps = build_corrective_steps(session.events)
         return session
 
     def ensure_toolkit(
@@ -223,9 +255,7 @@ class DemoService:
             session = self._run_static(toolkit, query, settings, status, naive_view)
             return session
 
-        max_corr = (
-            settings.max_corrective_iterations if settings.enable_corrective else 0
-        )
+        max_corr = settings.max_corrective_iterations if settings.enable_corrective else 0
         wf_cfg = WorkflowConfig(
             max_corrective_iterations=max_corr,
             max_total_tool_calls=settings.max_total_tool_calls,
@@ -381,9 +411,7 @@ class DemoService:
                 else result.verification.rationale_summary
             )
         )
-        claims = (
-            [c.model_dump(mode="json") for c in final.claims] if final is not None else []
-        )
+        claims = [c.model_dump(mode="json") for c in final.claims] if final is not None else []
         trace = build_trace_summary(
             query=result.query, result=result, settings=settings, naive=naive
         )
@@ -413,6 +441,7 @@ class DemoService:
         title: str,
         notes: str = "",
     ) -> SavedDemoRun:
+        fingerprint = self.toolkit.store.fingerprint if self.toolkit is not None else None
         return SavedDemoRun(
             demo_id=demo_id,
             title=title,
@@ -421,9 +450,9 @@ class DemoService:
             created_at=utc_now_iso(),
             offline=True,
             notes=notes,
-            session=session.model_copy(
-                update={"offline_replay": True, "error": None}
-            ),
+            corpus_fingerprint=fingerprint,
+            provenance_verified=bool(fingerprint),
+            session=session.model_copy(update={"offline_replay": True, "error": None}),
         )
 
     def persist_session(

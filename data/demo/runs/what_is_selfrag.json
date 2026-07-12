@@ -14,9 +14,11 @@
     "use_llm": false,
     "max_total_tool_calls": 12
   },
-  "created_at": "2026-07-12T08:58:28+00:00",
+  "created_at": "2026-07-12T09:22:35+00:00",
   "offline": true,
   "notes": "Simple single-paper factual path with page-traceable source card.",
+  "corpus_fingerprint": "c639ca3f202ab39b7d9b88cbde24b61e",
+  "provenance_verified": true,
   "session": {
     "run_id": "run_demo_what_is_selfrag",
     "query": "What is Self-RAG?",
@@ -47,10 +49,10 @@
       {
         "evidence_id": "ev_def",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_selfrag_def",
+        "chunk_id": "chunk_44327db3f15dab2a",
         "page_start": 1,
         "page_end": 1,
-        "snippet": "Self-RAG learns to retrieve, generate, and critique through self-reflection.",
+        "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection.",
         "retrieval_method": "hybrid_rerank",
         "title": "Self-RAG",
         "pdf_path": "data/papers/2310.11511.pdf"
@@ -61,9 +63,9 @@
         "evidence_id": "ev_def",
         "sub_question_id": "sq_0",
         "claim": "Self-RAG retrieves on demand and critiques with reflection tokens.",
-        "evidence_text": "Self-RAG learns to retrieve, generate, and critique through self-reflection.",
+        "evidence_text": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection.",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_selfrag_def",
+        "chunk_id": "chunk_44327db3f15dab2a",
         "page_start": 1,
         "page_end": 1,
         "retrieval_method": "hybrid_rerank",
@@ -115,16 +117,16 @@
         }
       ],
       "sources": [
-        "Self-RAG [paper_arxiv_2310_11511] p.1 (chunk=chunk_selfrag_def, evidence=ev_def) · PDF=data/papers/2310.11511.pdf"
+        "Self-RAG [paper_arxiv_2310_11511] p.1 (chunk=chunk_44327db3f15dab2a, evidence=ev_def) · PDF=data/papers/2310.11511.pdf"
       ],
       "source_cards": [
         {
           "evidence_id": "ev_def",
           "paper_id": "paper_arxiv_2310_11511",
-          "chunk_id": "chunk_selfrag_def",
+          "chunk_id": "chunk_44327db3f15dab2a",
           "page_start": 1,
           "page_end": 1,
-          "snippet": "Self-RAG learns to retrieve, generate, and critique through self-reflection.",
+          "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection.",
           "retrieval_method": "hybrid_rerank",
           "title": "Self-RAG",
           "pdf_path": "data/papers/2310.11511.pdf"
@@ -144,10 +146,10 @@
     },
     "events": [
       {
-        "event_id": "evt_86ad17d170bb",
+        "event_id": "evt_5324511d275e",
         "run_id": "run_demo_what_is_selfrag",
         "event_type": "run_finished",
-        "timestamp": "2026-07-12T08:58:28+00:00",
+        "timestamp": "2026-07-12T09:22:35+00:00",
         "component": "workflow",
         "summary": "workflow finished: evidence_sufficient",
         "payload": {}
@@ -174,6 +176,7 @@
       "is_sufficient": true,
       "corrective_iterations": 0,
       "corrective_queries": [],
+      "corrective_steps": [],
       "conflicting_evidence_ids": [],
       "citation_valid": true,
       "citation_issue_count": 0,

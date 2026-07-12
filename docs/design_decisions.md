@@ -393,6 +393,18 @@ provider reasoning fields are displayed.
 **Rationale:** Plan constraints on no user-facing CoT; still supports “corrective
 loops are visibly understandable.”
 
+### ADR-035: Replay provenance is canonical and visually verifiable
+
+**Decision:** Saved source cards must resolve to the canonical chunk store and
+physical PDFs, carry the corpus fingerprint, and use snippets present in the
+referenced chunk. The source viewer renders the cited page inside Streamlit and
+rejects repository-escaping paths. Final claims are grouped with their evidence
+IDs and source cards.
+
+**Rationale:** Merely displaying a PDF path does not prove the claim-to-page
+trace required by Phase 9; committed replay fixtures must meet the same
+provenance standard as live answers.
+
 ---
 
 ## Pending (later phases)

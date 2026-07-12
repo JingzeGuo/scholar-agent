@@ -84,7 +84,9 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Streamlit chat UI with answer, sources, and research trace panels
 - Ablation toggles: Naive RAG compare, graph on/off, corrective on/off, static tools
 - Offline saved-run replay under `data/demo/runs/` (interview-safe, no API)
-- Corpus / index health indicator; claim → PDF page source cards
+- Corpus / index health indicator; canonical claim → chunk → PDF page source
+  cards with in-app page preview
+- Ordered corrective-loop timeline and side-by-side Naive RAG comparison
 
 ## Quick start
 

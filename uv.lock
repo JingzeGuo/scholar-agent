@@ -3815,7 +3815,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "sentence-transformers", specifier = ">=3.0" },
-    { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.36" },
+    { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.59,<2" },
     { name = "tenacity", specifier = ">=8.3" },
     { name = "tiktoken", specifier = ">=0.7" },
     { name = "typer", specifier = ">=0.12" },
