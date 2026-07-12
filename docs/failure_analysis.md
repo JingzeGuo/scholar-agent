@@ -1,76 +1,127 @@
-# Failure analysis (Phase 8 measured run)
+# Failure analysis
 
-The cases below were manually reviewed from the complete offline run
-`run_f23303cfda91408c` (50 frozen questions × 7 systems). Dataset fingerprint:
-`9382ed8119ad4072c3ef45fd6cc5b64b20d0ea91c09271ace302e6105c175d8e`.
-The run used the isolated `hashing-embedder-v1` index, lexical reranking, no live
-LLM/RAGAS calls, and zero configured API cost. These findings describe this
-configuration only; they are not production-BGE claims.
+Evidence source: complete offline run **`run_f23303cfda91408c`**
+(50 frozen questions × 7 systems).
 
-## F1 — Dense-only misses exact terminology (`q_k08`)
-
-| Field | Measured finding |
+| Field | Value |
 |---|---|
-| **Question** | “What does the RAGAs framework evaluate?” |
-| **Result** | `naive_dense` paper Recall@8 = **0.0**; `hybrid_rerank` = **1.0** |
-| **Root cause** | The deterministic hash embedding is weak for exact product names; BM25 supplies the missing exact-token signal. |
-| **Action** | Retain hybrid retrieval for keyword/acronym routes; do not cite this result as evidence about BGE quality. |
+| Dataset fingerprint | `9382ed8119ad4072c3ef45fd6cc5b64b20d0ea91c09271ace302e6105c175d8e` |
+| Local artifact | `outputs/evaluation/phase8-full-audit-v2/` (gitignored) |
+| Summary snapshot | [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md) |
+| Config | `hashing-embedder-v1`, lexical rerank, no live LLM/RAGAS, cost $0.00 |
 
-## F2 — Graph retrieval helps some relational cases but is expensive (`q_r09`)
+These are **real measured cases** from that run, not hypotheticals. They describe
+this configuration only.
 
-| Field | Measured finding |
+---
+
+## F1 — Dense retrieval misses exact terminology (`q_k08`)
+
+| Field | Detail |
 |---|---|
-| **Question** | “How do hallucination surveys motivate automated RAG evaluation metrics like those in RAGAs?” |
-| **Result** | `hybrid_rerank` paper Recall@8 = **0.0**; `hybrid_graph` = **0.5**. Aggregate latency rose from **10.6 ms** to **309.1 ms**. |
-| **Root cause** | Graph paths recover a related gold paper absent from hybrid top-k, but path traversal adds substantial CPU latency. |
-| **Action** | Keep graph routing selective. The graph-evidence recall over graph-expected questions was only **0.0556**, so graph expansion is not a universal win. |
+| **Scenario** | Keyword question: “What does the RAGAs framework evaluate?” |
+| **Observable symptom** | `naive_dense` paper Recall@8 = **0.0**; `hybrid_rerank` = **1.0** |
+| **Affected component** | Dense retrieval / hashing embedder |
+| **Reproduction** | Offline eval row `q_k08` in `per_question_metrics.csv` of run `run_f23303cfda91408c` |
+| **Root cause** | Hash embedding is weak for exact product/framework names; BM25 supplies the exact-token signal. |
+| **Fix** | Keep hybrid (dense+BM25 RRF) as the default keyword/hybrid route; do not present dense-only as production quality. |
+| **Verification after fix** | Hybrid systems recover paper recall on keyword slice to **0.90** aggregate. |
+| **Remaining limitation** | Production BGE quality is **not measured** in this offline run. |
+| **Interview lesson** | Sparse retrieval is not obsolete; hybrid fusion is a measured necessity for exact terms. |
 
-## F3 — Graph fan-out can displace useful hybrid evidence (`q_c15`)
+---
 
-| Field | Measured finding |
+## F2 — Graph helps a relational case but is expensive (`q_r09`)
+
+| Field | Detail |
 |---|---|
-| **Question** | “Compare RETRO and Atlas as retrieval-augmented language models.” |
-| **Result** | `hybrid_rerank` paper Recall@8 = **1.0**; round-robin `hybrid_graph` = **0.5**. |
-| **Root cause** | Reserving top-k slots for graph evidence improves tool diversity but can evict a relevant lexical/dense hit. |
-| **Action** | Future work should fuse by calibrated scores or allocate graph slots dynamically instead of using a fixed 50/50 merge. |
+| **Scenario** | Relational: hallucination surveys → automated RAG evaluation metrics (RAGAs). |
+| **Observable symptom** | `hybrid_rerank` paper R@8 = **0.0**; `hybrid_graph` = **0.5**. Aggregate hybrid latency **~10.6 ms** vs hybrid_graph **~309.1 ms**. |
+| **Affected component** | Graph retrieval / path ranking |
+| **Reproduction** | `q_r09` in the same run; aggregate latencies in `aggregate_metrics.csv`. |
+| **Root cause** | Graph paths recover a related gold paper outside hybrid top-k, but traversal dominates CPU time under this index. |
+| **Fix** | Route graph only for relational/multi-hop policies; keep hybrid-only for simple factual. |
+| **Verification after fix** | Router policies restrict graph; measured graph-evidence recall overall only **0.0556** — selective use is justified. |
+| **Remaining limitation** | Score-calibrated fusion of graph vs hybrid is still future work (round-robin can still hurt; see F3). |
+| **Interview lesson** | GraphRAG is a tool with a latency tax, not a free upgrade. |
 
-## F4 — Planning improves some comparisons but lowers aggregate retrieval recall (`q_c05`)
+---
 
-| Field | Measured finding |
+## F3 — Graph fan-out displaces good hybrid evidence (`q_c15`)
+
+| Field | Detail |
 |---|---|
-| **Question** | “Compare Toolformer and ReAct for tool use in language models.” |
-| **Result** | `hybrid_rerank` paper Recall@8 = **0.5**; `full_agent` = **1.0**. Yet aggregate paper recall was **0.61** for hybrid-rerank versus **0.53** for the full agent. |
-| **Root cause** | Decomposition can retrieve both sides of a comparison, while per-sub-question evidence caps and ledger ordering can omit gold chunks on simpler questions. |
-| **Action** | Report gains by category/question rather than claiming a universal agent improvement; investigate evidence-budget allocation before changing defaults. |
+| **Scenario** | Comparison: RETRO vs Atlas. |
+| **Observable symptom** | `hybrid_rerank` paper R@8 = **1.0**; round-robin `hybrid_graph` = **0.5**. |
+| **Affected component** | Multi-tool merge / graph slot allocation |
+| **Reproduction** | `q_c15` per-question metrics in run `run_f23303cfda91408c`. |
+| **Root cause** | Reserving top-k slots for graph hits improves tool diversity but can evict a relevant hybrid hit. |
+| **Fix (partial)** | Documented as design risk; adaptive slot allocation deferred. Prefer selective graph routing. |
+| **Verification after fix** | Aggregate hybrid_graph paper R@8 still **0.67** (best), but per-question regressions remain. |
+| **Remaining limitation** | No calibrated score fusion yet. |
+| **Interview lesson** | More tools ≠ better ranking without careful fusion. |
 
-## F5 — Unanswerable detection is the largest observed weakness (`q_u01`)
+---
 
-| Field | Measured finding |
+## F4 — Planning helps a comparison but can lower aggregate recall (`q_c05`)
+
+| Field | Detail |
 |---|---|
-| **Question** | “What is the exact GPU price schedule used inside OpenAI's private 2026 training cluster for GPT-6?” |
-| **Result** | `full_agent` refusal accuracy was **0/5** on the unanswerable slice; `q_u01` was answered from weak neighboring evidence instead of refused. |
-| **Root cause** | Lexical overlap with terms such as OpenAI/GPT can make the deterministic Verifier accept topical but non-answering passages. |
-| **Action** | Add explicit required-aspect/entailment checks using a development set; do not tune the Verifier against these frozen evaluation questions. |
+| **Scenario** | Comparison: Toolformer vs ReAct. |
+| **Observable symptom** | `hybrid_rerank` paper R@8 = **0.5**; `full_agent` = **1.0**. Yet aggregate paper recall is **0.61** (hybrid_rerank) vs **0.53** (full_agent). |
+| **Affected component** | Planner decomposition + evidence budgets |
+| **Reproduction** | `q_c05` plus system aggregates in the same run. |
+| **Root cause** | Decomposition can retrieve both comparison sides, while per-sub-question caps and ledger ordering omit gold chunks on simpler questions. |
+| **Fix** | Report **per-category** and per-question gains; avoid claiming universal agent wins from one comparison. |
+| **Verification after fix** | Evaluation report always includes by-type tables; documented in `docs/evaluation.md`. |
+| **Remaining limitation** | Evidence-budget allocation heuristics still manual. |
+| **Interview lesson** | Always pair micro case studies with macro metrics. |
 
-## F6 — Scope evidence can help a simple baseline refuse while the agent over-accepts (`q_u03`)
+---
 
-| Field | Measured finding |
+## F5 — Unanswerable detection fails for the agent (`q_u01`)
+
+| Field | Detail |
 |---|---|
-| **Question** | Pediatric amoxicillin dosage “according to Self-RAG.” |
-| **Result** | `naive_dense` and `hybrid_rerank` refusal score = **1.0**; `full_agent` = **0.0**. |
-| **Root cause** | The gold Self-RAG title page establishes domain mismatch, but the agent treats the matching method name as positive answer evidence. |
-| **Action** | Model “scope evidence” separately from “answer evidence” in a future dataset/schema revision.
+| **Scenario** | Unanswerable private GPU price schedule question. |
+| **Observable symptom** | `full_agent` unanswerable-slice refusal = **0/5** overall; answers from weak neighboring evidence. |
+| **Affected component** | Verifier / Writer refusal path |
+| **Reproduction** | `by_type.unanswerable.refusal_correct` for `full_agent` = **0.0** in results JSON. |
+| **Root cause** | Lexical overlap with topical terms (OpenAI/GPT) can satisfy the deterministic Verifier without true answerability. |
+| **Fix (partial)** | Writer marks corpus insufficiency when verification says unanswerable; stronger entailment checks not yet added (must not tune on frozen eval). |
+| **Verification after fix** | Still **0.0** refusal on unanswerable for full_agent in this run — **open defect**. |
+| **Remaining limitation** | Needs a development set for refusal training/heuristics separate from the frozen split. |
+| **Interview lesson** | Citation validity ≠ answerability; refuse is a first-class product requirement. |
+
+---
+
+## F6 — Scope evidence helps baselines refuse while the agent over-accepts (`q_u03`)
+
+| Field | Detail |
+|---|---|
+| **Scenario** | Pediatric amoxicillin dosage “according to Self-RAG” (domain mismatch). |
+| **Observable symptom** | `naive_dense` / `hybrid_rerank` refusal score **1.0**; `full_agent` **0.0**. |
+| **Affected component** | Agent evidence acceptance / scope modeling |
+| **Reproduction** | `q_u03` in the same run. |
+| **Root cause** | Gold Self-RAG title page is scope evidence of mismatch; agent treats method-name match as positive answer evidence. |
+| **Fix (planned)** | Model “scope evidence” separately from “answer evidence” in a future dataset schema. |
+| **Verification after fix** | Not fixed in this run; documented limitation. |
+| **Remaining limitation** | Schema + verifier change required. |
+| **Interview lesson** | Matching a method name is not answering a medical dosing question. |
+
+---
 
 ## Aggregate interpretation
 
-- `hybrid_graph` had the highest paper Recall@8 (**0.67**) but higher average
-  latency (**309.1 ms**) and modest citation precision (**0.214**).
-- `full_agent` had the best citation precision among measured systems (**0.274**)
-  but lower paper recall (**0.53**) and no correct refusals in this offline run.
-- Citation validity and page traceability were **1.0** because emitted citations
-  mapped to canonical chunks/pages; this does not imply answer correctness.
-- Cost was reported as **$0.00** because the saved configuration used no paid
-  model and `usd_per_1k_tokens=0.0`.
+- Best paper Recall@8: **`hybrid_graph` 0.67** (latency **309.1 ms**).
+- Best citation precision among systems: **`full_agent` 0.274**.
+- Citation validity / page traceability: **1.0** (structural), not semantic correctness.
+- Cost: **$0.00** in this configuration (no paid model).
 
-Raw artifacts are generated under `outputs/evaluation/`; use
-`notebooks/error_analysis.ipynb` to reproduce slices from a saved run.
+## Hypothetical risks (not observed as failures in this run)
+
+Labelled separately so they are not confused with measured cases:
+
+- Prompt injection via PDF text (mitigated by delimiters + regression test; no live exploit measured).
+- Cache serving stale extraction after heuristic change without schema bump (guarded by `EXTRACTION_CACHE_SCHEMA`).
+- Live provider auth misconfiguration (fails fast; live tests opt-in).

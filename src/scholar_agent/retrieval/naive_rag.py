@@ -144,6 +144,4 @@ class NaiveRAG:
             fast=True,
             max_tokens=800,
         )
-        return (response.content or "").strip() or self._extractive_answer(
-            query, hits, citations
-        )
+        return (response.content or "").strip() or self._extractive_answer(query, hits, citations)

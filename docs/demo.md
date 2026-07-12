@@ -1,4 +1,7 @@
-# Streamlit demo (Phase 9)
+# Streamlit demo (Phase 9–10)
+
+Interview timing, offline backup, and recording checklist:
+[`docs/demo_script.md`](demo_script.md).
 
 ## Install UI extra
 

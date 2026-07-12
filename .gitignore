@@ -59,6 +59,10 @@ data/evaluation/**
 !data/demo/**
 !tests/fixtures/**
 
+# Local extraction / embedding disk caches
+**/.cache/
+data/processed/.cache/
+
 # Model caches (do not ignore src/scholar_agent/models package)
 .cache/
 /models/

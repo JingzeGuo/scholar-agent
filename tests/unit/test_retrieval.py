@@ -22,7 +22,9 @@ from scholar_agent.storage.jsonl import JsonlRepository
 
 def _chunk(paper_id: str, text: str, page: int, section: str | None = None) -> Chunk:
     return Chunk(
-        chunk_id=make_chunk_id(paper_id, page_start=page, page_end=page, text=text, section=section),
+        chunk_id=make_chunk_id(
+            paper_id, page_start=page, page_end=page, text=text, section=section
+        ),
         paper_id=paper_id,
         text=text,
         page_start=page,
@@ -203,7 +205,9 @@ def test_naive_rag_includes_page_references() -> None:
     assert answer.hits
     # page references present
     assert any("p." in c.format_inline() for c in answer.citations)
-    assert any(c.format_inline() in answer.answer or "Sources:" in answer.answer for c in answer.citations)
+    assert any(
+        c.format_inline() in answer.answer or "Sources:" in answer.answer for c in answer.citations
+    )
     assert all(c.page_start >= 1 for c in answer.citations)
 
 

@@ -38,7 +38,9 @@ class FakeToolkit(RetrievalToolkit):
         self.rrf_k = 60
         self.calls: list[str] = []
 
-    def search(self, query: str, *, mode: str = "hybrid_rerank", k: int | None = None, filters=None) -> RetrievalResult:  # type: ignore[override]
+    def search(
+        self, query: str, *, mode: str = "hybrid_rerank", k: int | None = None, filters=None
+    ) -> RetrievalResult:  # type: ignore[override]
         self.calls.append(mode)
         # Distinct chunk per mode so multi-tool passes can accumulate evidence
         text = f"Evidence for '{query}' via {mode}. Self-RAG and CRAG are related methods."
@@ -52,7 +54,9 @@ class FakeToolkit(RetrievalToolkit):
             score=0.9,
             retrieval_method=mode,
         )
-        method = mode if mode in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"} else "hybrid"
+        method = (
+            mode if mode in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"} else "hybrid"
+        )
         return RetrievalResult(query=query, method=method, hits=[hit])  # type: ignore[arg-type]
 
 
@@ -144,7 +148,9 @@ def test_duplicate_evidence_is_merged() -> None:
         retrieval_score=0.9,
         rerank_score=0.95,
     )
-    low = high.model_copy(update={"retrieval_score": 0.1, "rerank_score": 0.1, "retrieval_method": "dense"})
+    low = high.model_copy(
+        update={"retrieval_score": 0.1, "rerank_score": 0.1, "retrieval_method": "dense"}
+    )
     # force different evidence_id to test merge by dedupe key
     low = low.model_copy(update={"evidence_id": low.evidence_id + "_low"})
     merged = merge_evidence([low], high)
@@ -242,9 +248,7 @@ def test_evidence_budget_cannot_be_exceeded() -> None:
             allow_policy_override=False,
         ),
     )
-    result = agent.research_sub_question(
-        _sq("sq_e", "What is RAPTOR?", QueryType.SEMANTIC)
-    )
+    result = agent.research_sub_question(_sq("sq_e", "What is RAPTOR?", QueryType.SEMANTIC))
     assert len(result.evidence) <= 1
 
 
@@ -295,9 +299,7 @@ def test_budget_events_emitted() -> None:
         toolkit,  # type: ignore[arg-type]
         config=ResearchAgentConfig(max_tool_calls_per_pass=1, allow_policy_override=False),
     )
-    result = agent.research_sub_question(
-        _sq("sq_x", "Compare A versus B", QueryType.COMPARISON)
-    )
+    result = agent.research_sub_question(_sq("sq_x", "Compare A versus B", QueryType.COMPARISON))
     # hybrid_plus_graph wants 2 tools; with budget 1 should hit tool budget or complete after 1
     assert result.tool_call_count == 1
     assert any(

@@ -187,9 +187,7 @@ class IngestionPipeline:
                     "content_hash": file_hash,
                 }
             )
-            paper = build_paper(
-                entry, pdf_path, page_count=len(cleaned), content_hash=file_hash
-            )
+            paper = build_paper(entry, pdf_path, page_count=len(cleaned), content_hash=file_hash)
             return PaperIngestResult(
                 entry=updated,
                 paper=paper,

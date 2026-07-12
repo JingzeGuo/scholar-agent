@@ -11,9 +11,7 @@ from scholar_agent.storage.jsonl import JsonlRepository
 
 def corpus_fingerprint(chunks: list[Chunk]) -> str:
     """Stable hash over chunk IDs and content hashes (order-independent)."""
-    material = "\n".join(
-        sorted(f"{c.chunk_id}:{c.content_hash}" for c in chunks)
-    )
+    material = "\n".join(sorted(f"{c.chunk_id}:{c.content_hash}" for c in chunks))
     return content_hash(material, length=32)
 
 
@@ -60,9 +58,7 @@ class ChunkStore:
                 f"canonical chunk store missing: {chunks_path}. Run ingest first."
             )
         chunks = JsonlRepository(chunks_path, Chunk).read_all()
-        papers = (
-            JsonlRepository(papers_path, Paper).read_all() if papers_path.is_file() else []
-        )
+        papers = JsonlRepository(papers_path, Paper).read_all() if papers_path.is_file() else []
         if not chunks:
             raise ValueError(f"chunk store is empty: {chunks_path}")
         return cls(chunks, papers, chunks_path=chunks_path, papers_path=papers_path)

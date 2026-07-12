@@ -45,7 +45,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What architecture does Dense Passage Retrieval (DPR) use for open-domain QA?",
         ["2004.04906"],
         [["dense passage", "dual", "encoder"]],
-        ["DPR uses dual-encoder dense representations for questions and passages with MIPS retrieval."],
+        [
+            "DPR uses dual-encoder dense representations for questions and passages with MIPS retrieval."
+        ],
         False,
         "DPR dual-encoder fact.",
     ),
@@ -55,7 +57,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What is Sentence-BERT (SBERT) designed to produce?",
         ["1908.10084"],
         [["sentence-bert", "siamese", "sentence embeddings"]],
-        ["SBERT modifies BERT with siamese/triplet networks to produce semantically meaningful sentence embeddings."],
+        [
+            "SBERT modifies BERT with siamese/triplet networks to produce semantically meaningful sentence embeddings."
+        ],
         False,
         "SBERT purpose.",
     ),
@@ -65,7 +69,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What problem does BEIR evaluate for information retrieval models?",
         ["2104.08663"],
         [["beir", "zero-shot", "heterogen"]],
-        ["BEIR is a heterogeneous benchmark for zero-shot evaluation of information retrieval models."],
+        [
+            "BEIR is a heterogeneous benchmark for zero-shot evaluation of information retrieval models."
+        ],
         False,
         "BEIR scope.",
     ),
@@ -75,7 +81,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What is REALM's key idea for language model pre-training?",
         ["2002.08909"],
         [["realm", "retrieval", "pre-training"]],
-        ["REALM augments language model pre-training with a learned retrieval step over a textual knowledge corpus."],
+        [
+            "REALM augments language model pre-training with a learned retrieval step over a textual knowledge corpus."
+        ],
         False,
         "REALM retrieval-augmented pretraining.",
     ),
@@ -85,7 +93,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What does Fusion-in-Decoder (FiD) do with retrieved passages?",
         ["2007.01282"],
         [["fusion", "decoder", "passage"]],
-        ["FiD encodes retrieved passages independently and fuses them in the decoder for open-domain QA."],
+        [
+            "FiD encodes retrieved passages independently and fuses them in the decoder for open-domain QA."
+        ],
         False,
         "FiD fusion strategy.",
     ),
@@ -95,7 +105,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What is REPLUG's approach to retrieval-augmented black-box LMs?",
         ["2301.12652"],
         [["replug", "black-box", "retrieval"]],
-        ["REPLUG treats the language model as a black box and prepends retrieved documents to improve generation."],
+        [
+            "REPLUG treats the language model as a black box and prepends retrieved documents to improve generation."
+        ],
         False,
         "REPLUG black-box RAG.",
     ),
@@ -136,7 +148,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What are reflection tokens in Self-RAG?",
         ["2310.11511"],
         [["reflection", "self-rag", "retrieve"]],
-        ["Self-RAG uses reflection tokens to decide when to retrieve and to critique generation quality."],
+        [
+            "Self-RAG uses reflection tokens to decide when to retrieve and to critique generation quality."
+        ],
         False,
         "Exact terminology: reflection tokens.",
     ),
@@ -146,7 +160,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What does HyDE stand for and how does it help dense retrieval?",
         ["2212.10496"],
         [["hyde", "hypothetical", "document"]],
-        ["HyDE means Hypothetical Document Embeddings; it generates a hypothetical answer document for zero-shot dense retrieval."],
+        [
+            "HyDE means Hypothetical Document Embeddings; it generates a hypothetical answer document for zero-shot dense retrieval."
+        ],
         False,
         "Exact acronym HyDE.",
     ),
@@ -156,7 +172,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What is the 'lost in the middle' phenomenon for long-context language models?",
         ["2307.03172"],
         [["lost in the middle", "middle", "context"]],
-        ["Models often use information at the beginning or end of long contexts better than information placed in the middle."],
+        [
+            "Models often use information at the beginning or end of long contexts better than information placed in the middle."
+        ],
         False,
         "Exact phrase lost in the middle.",
     ),
@@ -206,7 +224,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What does the RAGAs framework evaluate?",
         ["2309.15217"],
         [["ragas", "faithfulness", "evaluation"]],
-        ["RAGAs provides automated evaluation metrics for retrieval-augmented generation such as faithfulness."],
+        [
+            "RAGAs provides automated evaluation metrics for retrieval-augmented generation such as faithfulness."
+        ],
         False,
         "Exact product name RAGAs.",
     ),
@@ -226,7 +246,9 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "What is HippoRAG inspired by?",
         ["2405.14831"],
         [["hipporag", "hippocamp", "memory"]],
-        ["HippoRAG is neurobiologically inspired by hippocampal memory indexing for long-term memory RAG."],
+        [
+            "HippoRAG is neurobiologically inspired by hippocampal memory indexing for long-term memory RAG."
+        ],
         False,
         "Exact name HippoRAG + inspiration.",
     ),

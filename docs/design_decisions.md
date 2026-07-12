@@ -407,6 +407,102 @@ provenance standard as live answers.
 
 ---
 
-## Pending (later phases)
 
-- Hardening and portfolio docs (Phase 10)
+## Phase 10
+
+### ADR-036: Disk cache only for pure offline computations
+
+**Decision:** Introduce `scholar_agent.storage.cache.DiskCache` for deterministic
+JSON values (initially graph chunk extraction). Keys include namespace, schema
+version, and content hashes. Atomic writes; corrupt entries become misses.
+Mutable workflow state and live LLM outputs are never cached.
+
+**Context:** Phase 10 requires caching with tested invalidation. Graph extraction
+over thousands of chunks is pure and expensive enough to benefit.
+
+**Alternatives considered:** (a) no cache; (b) cache full workflow runs; (c) SQLite
+cache. Selected simple sharded JSON files for inspectability and zero new deps.
+
+**Advantages:** Offline speedups; clear invalidation; easy audit of cache files.
+
+**Trade-offs:** No cross-process locking beyond atomic replace; not a multi-tenant
+cache.
+
+**Evidence:** `tests/unit/test_cache.py`; wiring in `graph/pipeline.py` +
+`graph/extract.py`. Policy documented in `docs/caching.md`.
+
+**Status:** implemented.
+
+### ADR-037: Explicit untrusted-content delimiters
+
+**Decision:** Retrieved paper text is wrapped in
+`<untrusted_retrieved_content>` blocks via `llm/prompts.py`. Nested closers are
+neutralized. System policy states paper text cannot change tools or schema.
+
+**Context:** Plan §13 treats paper content as untrusted data.
+
+**Alternatives considered:** Rely only on system prompts without delimiters;
+sanitize by stripping all instruction-like sentences (too lossy for evidence).
+
+**Advantages:** Clear data/instruction boundary for LLM call sites; regression
+tests for breakout attempts.
+
+**Trade-offs:** Delimiters alone are not a security boundary against a fully
+compromised model; still require schema-constrained outputs.
+
+**Evidence:** `tests/unit/test_hardening.py`.
+
+**Status:** implemented.
+
+### ADR-038: Structured errors and observable degradation
+
+**Decision:** Add `StructuredError` / `ErrorCategory`. Toolkit graph search can
+`allow_degraded` to return empty hits with `degraded=true` debug. Researcher tool
+failures classify errors and always fall back to **empty hits** (never invented
+evidence).
+
+**Context:** Phase 10 graceful degradation and observability requirements.
+
+**Advantages:** Callers can see *why* a tool produced nothing; loops continue
+under budgets.
+
+**Trade-offs:** Broad catch around toolkit calls remains necessary to keep the
+research loop alive; classification + logging prevents “silent success.”
+
+**Evidence:** `tests/unit/test_hardening.py`; researcher `_call_toolkit`.
+
+**Status:** implemented.
+
+### ADR-039: Retry jitter + permanent error classification
+
+**Decision:** Provider retries use exponential backoff with configurable jitter.
+HTTP 401/403/400/404/422 and validation errors are not retried.
+
+**Context:** Plan requires transient vs permanent classification and bounded
+retries.
+
+**Evidence:** `tests/unit/test_retry.py`.
+
+**Status:** implemented.
+
+### ADR-040: Portfolio docs distinguish measured vs fixture vs unavailable
+
+**Decision:** README and evaluation docs label offline hash results, require
+artifact/run IDs for numbers, and never claim production-ready / SOTA. Interview
+and demo materials use committed replay fixtures when APIs are unavailable.
+
+**Deviation from plan marketing-friendly language:** explicit refusal of
+unverified superlatives (plan §18).
+
+**Status:** implemented.
+
+### ADR-041: Local prototype vs production deployment
+
+**Decision:** Keep ScholarAgent as a single-user local prototype: CLI + Streamlit,
+filesystem indexes, env-based secrets. Production multi-user needs (auth, quotas,
+managed vector DB, job queues) are documented as future work, not implemented.
+
+**Rationale:** Phase 10 acceptance is portfolio completeness + reliability, not
+SaaS readiness.
+
+**Status:** documented.

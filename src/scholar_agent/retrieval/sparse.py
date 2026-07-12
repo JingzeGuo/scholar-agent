@@ -98,9 +98,7 @@ class BM25Index:
         pkl_path = root / "bm25.pkl"
         if not meta_path.is_file() or not pkl_path.is_file():
             raise FileNotFoundError(f"BM25 index incomplete under {root}")
-        meta = BM25IndexMeta.from_dict(
-            json.loads(meta_path.read_text(encoding="utf-8"))
-        )
+        meta = BM25IndexMeta.from_dict(json.loads(meta_path.read_text(encoding="utf-8")))
         if verify and meta.corpus_fingerprint != store.fingerprint:
             raise ValueError(
                 "BM25 index fingerprint mismatch with chunk store; rebuild required "
@@ -125,7 +123,9 @@ class BM25Index:
             return []
         scores = self._bm25.get_scores(tokens)
         # argsort descending
-        order = sorted(range(len(scores)), key=lambda i: (-float(scores[i]), self.meta.chunk_ids[i]))
+        order = sorted(
+            range(len(scores)), key=lambda i: (-float(scores[i]), self.meta.chunk_ids[i])
+        )
         hits: list[RetrievalHit] = []
         for rank_idx, doc_i in enumerate(order, start=1):
             chunk_id = self.meta.chunk_ids[doc_i]

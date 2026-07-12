@@ -91,8 +91,6 @@ def test_different_query_types_choose_different_tools() -> None:
     policies = {
         recommend_policy("What is RAPTOR?", has_graph=True).recommended_policy,
         recommend_policy("Compare Self-RAG and CRAG", has_graph=True).recommended_policy,
-        recommend_policy(
-            "Which dataset does DPR evaluate on?", has_graph=True
-        ).recommended_policy,
+        recommend_policy("Which dataset does DPR evaluate on?", has_graph=True).recommended_policy,
     }
     assert len(policies) >= 2

@@ -74,12 +74,8 @@ def test_load_fixture_manifest(repo_root: Path) -> None:
 
 
 def test_load_fixture_papers_and_chunks(repo_root: Path) -> None:
-    papers = JsonlRepository(
-        repo_root / "tests" / "fixtures" / "papers.jsonl", Paper
-    ).read_all()
-    chunks = JsonlRepository(
-        repo_root / "tests" / "fixtures" / "chunks.jsonl", Chunk
-    ).read_all()
+    papers = JsonlRepository(repo_root / "tests" / "fixtures" / "papers.jsonl", Paper).read_all()
+    chunks = JsonlRepository(repo_root / "tests" / "fixtures" / "chunks.jsonl", Chunk).read_all()
     assert len(papers) == 2
     assert len(chunks) == 2
     assert {c.paper_id for c in chunks}.issubset({p.paper_id for p in papers})

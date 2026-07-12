@@ -167,9 +167,7 @@ class KnowledgeGraphStore:
             if source not in self.graph:
                 continue
             # DFS limited depth
-            stack: list[tuple[str, list[str], list[dict[str, Any]]]] = [
-                (source, [source], [])
-            ]
+            stack: list[tuple[str, list[str], list[dict[str, Any]]]] = [(source, [source], [])]
             while stack and len(results) < limit:
                 node, path_nodes, path_edges = stack.pop()
                 if len(path_edges) >= 1:

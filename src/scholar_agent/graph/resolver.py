@@ -208,14 +208,13 @@ class EntityResolver:
             best_entity = self.entities[best.entity_id]
 
             if best.string_score >= self.string_threshold:
-                return self._merge_decision(raw, best_entity, "string_similarity", best.string_score, candidates)
-
-            ambiguous = (
-                best.combined_score >= self.candidate_floor
-                and (
-                    len(candidates) == 1
-                    or best.combined_score - candidates[1].combined_score <= self.ambiguity_margin
+                return self._merge_decision(
+                    raw, best_entity, "string_similarity", best.string_score, candidates
                 )
+
+            ambiguous = best.combined_score >= self.candidate_floor and (
+                len(candidates) == 1
+                or best.combined_score - candidates[1].combined_score <= self.ambiguity_margin
             )
             if ambiguous and self.disambiguator is not None:
                 judgment = self.disambiguator.choose(raw, entity_type, candidates[:5])

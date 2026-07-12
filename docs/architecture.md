@@ -1,85 +1,115 @@
-# Architecture (implemented through Phase 9)
+# Architecture (Phases 0–10)
 
 ScholarAgent is an evidence-driven multi-agent literature research system.
-This document tracks the architecture as implemented; see
-`CODEX_IMPLEMENTATION_PLAN.md` for the full target design.
+This document tracks the architecture **as implemented**.
 
-## High-level paths
+## System diagram
 
-### Offline ingestion (Phases 2–4)
+```mermaid
+flowchart LR
+  subgraph Offline
+    PDF[PDFs] --> Manifest[corpus_manifest]
+    Manifest --> Ingest[ingestion pipeline]
+    Ingest --> Chunks[canonical chunks]
+    Chunks --> Dense[Chroma dense]
+    Chunks --> Sparse[BM25]
+    Chunks --> KG[knowledge graph]
+    Chunks --> ExtCache[extraction DiskCache]
+  end
+
+  subgraph Online
+    User[Query] --> Planner
+    Planner --> Researcher
+    Researcher --> Router[adaptive router]
+    Router --> Tools[dense/sparse/hybrid/graph tools]
+    Tools --> Dense
+    Tools --> Sparse
+    Tools --> KG
+    Researcher --> Ledger[evidence ledger]
+    Ledger --> Verifier
+    Verifier -->|corrective under budget| Researcher
+    Verifier --> Writer
+    Writer --> Cite[citation validator]
+    Cite --> Answer[cited answer + events]
+  end
+```
+
+## Offline path
 
 ```text
 PDF corpus
-  → metadata + page parsing
-  → token-aware section chunking
+  → metadata + page parsing (PyMuPDF)
+  → header/footer cleanup + section heuristics
+  → token-aware chunking (stable chunk_id)
   → canonical chunk store (source of truth)
-  → dense index / BM25 / evidence-linked graph
+  → dense index / BM25 / provenance-linked graph
+  → optional extraction disk cache
 ```
 
-### Online research (Phases 5–7)
+## Online path
 
 ```text
 User query
-  → Planner (structured sub-questions)
-  → Research Agent tool loop
-  → Evidence Ledger
-  → Verifier (corrective retrieval if needed)
-  → Writer + citation validator
+  → Planner (structured QueryPlan)
+  → Research Agent tool loop (budgets + events)
+  → Evidence Ledger (deterministic merge/dedupe)
+  → Verifier (gaps, conflicts, corrective queries)
+  → Writer (verified evidence only)
+  → Citation validator (chunk/page/PDF checks)
   → answer + sources + execution trace
 ```
 
-## Phase 0–1 components
+## Component map
 
 | Component | Location | Role |
 |---|---|---|
 | Config | `scholar_agent.config` | YAML + env, Pydantic validation |
 | Logging | `scholar_agent.logging` | Secret-safe structured logs |
-| Stable IDs | `scholar_agent.ids` | Content-addressed paper/chunk/entity/evidence IDs |
-| Core models | `scholar_agent.models` | Corpus, plan, evidence, graph, workflow types |
-| Storage | `scholar_agent.storage` | Typed JSONL + corpus manifest |
-| LLM client | `scholar_agent.llm` | DeepSeek OpenAI-compatible wrapper |
-| Prototype loop | `scholar_agent.agents.prototype_loop` | LangGraph decide→retrieve→verify loop |
-| Compatibility script | `scripts/deepseek_compatibility.py` | Live provider spike |
-| Ingestion | `scholar_agent.ingestion` | PDF → pages → sections → chunks |
-| Retrieval | `scholar_agent.retrieval` | Dense + BM25 + RRF + rerank + Naive RAG |
-| Knowledge graph | `scholar_agent.graph` | Extract, resolve, MultiDiGraph, graph retrieve |
-| Router | `scholar_agent.retrieval.router` | Query type → retrieval policy |
-| Research Agent | `scholar_agent.agents.researcher` | Adaptive tool loop + bounded safe fan-out + evidence ledger |
-| Planner / Verifier / Workflow | `agents/planner.py`, `verifier.py`, `workflow.py` | Target-bound corrective loop + exhaustive termination |
-| Writer / Citation validator | `agents/writer.py`, `citation_validator.py` | Verified-evidence claims + canonical PDF/page validation |
-| Evaluation | `scholar_agent.evaluation` | Frozen 50-Q split, baselines/ablations, metrics, reports |
-| Demo UI | `scholar_agent.app` | Streamlit chat, trace, sources, ablation toggles, saved-run replay |
-| CLI | `scholar_agent.cli` | `ask`, `research`, `evaluate`, `demo`, `retrieve`, `graph`, … |
+| Stable IDs | `scholar_agent.ids` | Paper/chunk/entity/evidence IDs |
+| Models | `scholar_agent.models` | Domain + `StructuredError` / events |
+| Storage | `scholar_agent.storage` | JSONL, manifest, `DiskCache` |
+| LLM client | `scholar_agent.llm` | DeepSeek-compatible + retry/jitter |
+| Prompts | `scholar_agent.llm.prompts` | Untrusted-content delimiters |
+| Ingestion | `scholar_agent.ingestion` | PDF → pages → chunks |
+| Retrieval | `scholar_agent.retrieval` | Dense, BM25, RRF, rerank, tools |
+| Graph | `scholar_agent.graph` | Extract, resolve, store, retrieve |
+| Agents | `scholar_agent.agents` | Planner, researcher, verifier, writer, workflow |
+| Evaluation | `scholar_agent.evaluation` | Frozen split + ablations |
+| Demo UI | `scholar_agent.app` | Streamlit + offline replay |
+| CLI | `scholar_agent.cli` | End-user commands |
 
-### Demo observability (Phase 9)
+## Graph provenance and entity resolution
 
-```text
-Sidebar: corpus/index health + ablation toggles
-Main: chat → Answer | Trace | Sources | Naive RAG tabs
-Replay: data/demo/runs/*.json (no live API required)
-```
+1. Extract relations with **evidence spans** grounded in chunk text.
+2. Validate spans against the chunk store (drop ungrounded triples).
+3. Resolve surfaces: seed aliases → string/embedding candidates → optional LLM judge.
+4. Persist NetworkX MultiDiGraph node-link JSON; every edge joins back to `chunk_id` → pages.
 
-## Prototype loop
+## Corrective loop termination
 
-```text
-START → decide ──retrieve──► retrieve ──► decide
-              └──verify───► verify ──decide or finish──► END
-```
+Stops when any of:
 
-- **decide:** deterministic fake model chooses retrieve / verify
-- **retrieve:** emits fake tool observations with scores
-- **verify:** sufficiency check against `required_evidence` and budgets
-- **finish:** records termination reason (no chain-of-thought)
+- evidence sufficient;
+- max corrective iterations;
+- no new evidence IDs;
+- global tool / token / latency budget;
+- unanswerable after targeted exhaustion.
 
-Budgets: max tool calls, max iterations. Exhaustion forces verify then terminate.
+## Reliability (Phase 10)
 
-## Constraints carried forward
+- Fail-fast config validation; offline import without API keys.
+- Structured output parse + bounded repair/retry.
+- Provider retries: timeouts, 429, 5xx; never auth/validation.
+- Graceful degradation when graph/index missing (`degraded` debug / empty hits).
+- Retrieved text delimited as untrusted data.
+- Disk cache: versioned keys, atomic writes, corruption → miss.
+
+## Constraints
 
 1. Pydantic models at module boundaries
-2. Stable paper / chunk / entity / evidence / run IDs
-3. PDF page provenance end-to-end
-4. Canonical chunk store is source of truth for every index
-5. Graph triples are not facts without source evidence
-6. No user-facing chain-of-thought
-7. Tool, iteration, token, and latency budgets
-8. Live paid-provider tests are optional
+2. Stable IDs and page provenance end-to-end
+3. Canonical chunk store is source of truth
+4. Graph triples are not facts without source evidence
+5. No user-facing chain-of-thought
+6. Tool, iteration, token, latency budgets
+7. Live paid-provider tests optional (`pytest -m live`)

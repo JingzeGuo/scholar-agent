@@ -114,8 +114,7 @@ class Writer:
             )
         if verification and verification.missing_aspects:
             notes.append(
-                "Missing aspects after verification: "
-                + "; ".join(verification.missing_aspects[:8])
+                "Missing aspects after verification: " + "; ".join(verification.missing_aspects[:8])
             )
 
         insufficient = (
@@ -183,9 +182,7 @@ class Writer:
             for ids in verification.supported_evidence_ids.values()
             for evidence_id in ids
         }
-        return EvidenceLedger(
-            items=[item for item in ledger.items if item.evidence_id in allowed]
-        )
+        return EvidenceLedger(items=[item for item in ledger.items if item.evidence_id in allowed])
 
     def _build_claims(
         self,
@@ -260,9 +257,7 @@ class Writer:
             )
         return claims
 
-    def _select_diverse(
-        self, items: list[EvidenceItem], *, limit: int
-    ) -> list[EvidenceItem]:
+    def _select_diverse(self, items: list[EvidenceItem], *, limit: int) -> list[EvidenceItem]:
         if limit <= 0 or not items:
             return []
         selected: list[EvidenceItem] = []
@@ -284,9 +279,7 @@ class Writer:
                 break
         return selected
 
-    def _claim_text_from_evidence(
-        self, item: EvidenceItem, *, query: str
-    ) -> str:
+    def _claim_text_from_evidence(self, item: EvidenceItem, *, query: str) -> str:
         """Ground claim text in evidence text / evidence claim fields only."""
         query_tokens = set(_tokens(query))
         cleaned = " ".join(item.evidence_text.split())
@@ -359,9 +352,7 @@ class Writer:
         lines.append("### Claims")
         lines.append("")
         if not claims:
-            lines.append(
-                "No evidence-backed claims could be formed from the verified ledger."
-            )
+            lines.append("No evidence-backed claims could be formed from the verified ledger.")
         else:
             for claim in claims:
                 rendered = render_claim_markdown(claim, by_id)
@@ -382,9 +373,7 @@ class Writer:
                 "The following evidence IDs were flagged as potentially conflicting "
                 "and are retained rather than suppressed:"
             )
-            lines.append(
-                "- " + ", ".join(verification.conflicting_evidence_ids[:12])
-            )
+            lines.append("- " + ", ".join(verification.conflicting_evidence_ids[:12]))
             lines.append("")
 
         # Reference section built from cited evidence IDs in claim order
@@ -401,8 +390,7 @@ class Writer:
             for eid in cited_ids:
                 item = by_id[eid]
                 lines.append(
-                    f"- {format_inline_citation(item)} "
-                    f"`{item.chunk_id}` · `{item.evidence_id}`"
+                    f"- {format_inline_citation(item)} `{item.chunk_id}` · `{item.evidence_id}`"
                 )
             lines.append("")
 

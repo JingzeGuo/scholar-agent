@@ -137,9 +137,7 @@ class GraphRetriever:
         )
         min_relevance = max_relevance * 0.75 if max_relevance > 0 else 0.0
         rankable = [
-            item
-            for item in scored_chunks.items()
-            if item[1][2]["query_relevance"] >= min_relevance
+            item for item in scored_chunks.items() if item[1][2]["query_relevance"] >= min_relevance
         ]
         ranked = sorted(rankable, key=lambda x: (-x[1][0], x[0]))[:k]
         hits: list[RetrievalHit] = []

@@ -76,7 +76,9 @@ class FakeEntityJudgeClient:
 
 def _chunk(paper_id: str, text: str, page: int = 1, section: str | None = "Method") -> Chunk:
     return Chunk(
-        chunk_id=make_chunk_id(paper_id, page_start=page, page_end=page, text=text, section=section),
+        chunk_id=make_chunk_id(
+            paper_id, page_start=page, page_end=page, text=text, section=section
+        ),
         paper_id=paper_id,
         text=text,
         page_start=page,
@@ -115,7 +117,9 @@ def test_evidence_span_must_ground_in_chunk() -> None:
 
 def test_entity_alias_fixtures_resolve(repo_root: Path) -> None:
     path = repo_root / "tests" / "fixtures" / "entity_aliases.jsonl"
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
     resolver = EntityResolver()
     for row in rows:
         ent = resolver.register_surface(row["surface"], EntityType(row["entity_type"]))

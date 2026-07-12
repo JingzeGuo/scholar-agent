@@ -604,21 +604,16 @@ def research_cmd(
         load_graph=True,
     )
     agent_cfg = ResearchAgentConfig(
-        max_tool_calls_per_pass=max_tools
-        or cfg.budgets.max_tool_calls_per_research_pass,
-        max_evidence_per_sub_question=max_evidence
-        or cfg.budgets.max_evidence_per_sub_question,
-        max_iterations_per_pass=max_iterations
-        or cfg.budgets.max_research_iterations_per_pass,
+        max_tool_calls_per_pass=max_tools or cfg.budgets.max_tool_calls_per_research_pass,
+        max_evidence_per_sub_question=max_evidence or cfg.budgets.max_evidence_per_sub_question,
+        max_iterations_per_pass=max_iterations or cfg.budgets.max_research_iterations_per_pass,
         max_latency_ms=cfg.budgets.max_latency_ms,
     )
     agent = ResearchAgent(toolkit, config=agent_cfg)
 
     # Light multi-subquestion split for comparison queries (full Planner is Phase 6)
     qtype, _ = classify_query_type(query)
-    routing_preview = recommend_policy(
-        query, query_type=qtype, has_graph=toolkit.graph is not None
-    )
+    routing_preview = recommend_policy(query, query_type=qtype, has_graph=toolkit.graph is not None)
     sub_questions = [
         SubQuestion(
             id="sq_0",
@@ -714,14 +709,11 @@ def ask_cmd(
     )
     wf_cfg = WorkflowConfig(
         max_corrective_iterations=(
-            max_iterations
-            if max_iterations is not None
-            else cfg.budgets.max_corrective_iterations
+            max_iterations if max_iterations is not None else cfg.budgets.max_corrective_iterations
         ),
         max_latency_ms=cfg.budgets.max_latency_ms,
         research=ResearchAgentConfig(
-            max_tool_calls_per_pass=max_tools
-            or cfg.budgets.max_tool_calls_per_research_pass,
+            max_tool_calls_per_pass=max_tools or cfg.budgets.max_tool_calls_per_research_pass,
             max_iterations_per_pass=cfg.budgets.max_research_iterations_per_pass,
             max_evidence_per_sub_question=cfg.budgets.max_evidence_per_sub_question,
             max_latency_ms=cfg.budgets.max_latency_ms,
@@ -747,8 +739,7 @@ def ask_cmd(
         )
     v = result.verification
     console.print(
-        f"[bold]verification[/bold]: sufficient={v.is_sufficient} "
-        f"coverage={v.coverage_score:.2f}"
+        f"[bold]verification[/bold]: sufficient={v.is_sufficient} coverage={v.coverage_score:.2f}"
     )
     console.print(f"  {v.rationale_summary}", markup=False)
     if v.conflicting_evidence_ids:
@@ -874,9 +865,7 @@ def evaluate_cmd(
                     "n_questions": result.n_questions,
                     "systems": result.systems,
                     "output_paths": result.output_paths,
-                    "aggregate": [
-                        s.model_dump(mode="json") for s in result.report.systems
-                    ],
+                    "aggregate": [s.model_dump(mode="json") for s in result.report.systems],
                 }
             )
         )
@@ -885,8 +874,7 @@ def evaluate_cmd(
     console.print(f"[bold]run_id[/bold]: {result.report.run_id}")
     console.print(f"[bold]fingerprint[/bold]: {result.dataset_fingerprint}")
     console.print(
-        f"[bold]questions[/bold]: {result.n_questions}  "
-        f"systems={', '.join(result.systems)}"
+        f"[bold]questions[/bold]: {result.n_questions}  systems={', '.join(result.systems)}"
     )
     table = Table(title="Aggregate metrics")
     table.add_column("system", style="cyan")
@@ -913,6 +901,36 @@ def evaluate_cmd(
             f"[yellow]failures logged[/yellow]: {len(result.report.failures)} "
             f"→ {result.output_paths.get('failures_json')}"
         )
+
+
+@app.command("ablate")
+def ablate_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    eval_config: Path | None = _EVAL_CONFIG_OPT,
+    system: list[str] | None = _EVAL_SYSTEMS_OPT,
+    max_questions: int | None = _EVAL_MAX_Q_OPT,
+    output_dir: Path | None = _EVAL_OUT_OPT,
+    embedding_backend: str = _EMBED_BACKEND_OPT,
+    top_k: int = _EVAL_TOP_K_OPT,
+    use_ragas: bool = _EVAL_RAGAS_OPT,
+    use_llm: bool = _EVAL_LLM_OPT,
+    no_charts: bool = _EVAL_NO_CHARTS_OPT,
+    json_output: bool = _JSON_OPT,
+) -> None:
+    """Run all ablation systems on the frozen split (alias of ``evaluate``)."""
+    evaluate_cmd(
+        config_path=config_path,
+        eval_config=eval_config,
+        system=system,
+        max_questions=max_questions,
+        output_dir=output_dir,
+        embedding_backend=embedding_backend,
+        top_k=top_k,
+        use_ragas=use_ragas,
+        use_llm=use_llm,
+        no_charts=no_charts,
+        json_output=json_output,
+    )
 
 
 _DEMO_PORT_OPT = typer.Option(8501, "--port", help="Streamlit server port")
@@ -956,8 +974,7 @@ def demo_cmd(
 
     if shutil.which("streamlit") is None and not _streamlit_importable():
         console.print(
-            "[red]Streamlit not installed.[/red] Install with: "
-            "[cyan]uv sync --extra ui[/cyan]"
+            "[red]Streamlit not installed.[/red] Install with: [cyan]uv sync --extra ui[/cyan]"
         )
         raise typer.Exit(code=1)
 

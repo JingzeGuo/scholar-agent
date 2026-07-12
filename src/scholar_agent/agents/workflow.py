@@ -181,8 +181,7 @@ class ResearchWorkflow:
             event_type=EventType.PLAN_CREATED,
             component="planner",
             summary=(
-                f"plan answer_type={plan.answer_type} "
-                f"sub_questions={len(plan.sub_questions)}"
+                f"plan answer_type={plan.answer_type} sub_questions={len(plan.sub_questions)}"
             ),
             payload={
                 "answer_type": plan.answer_type,
@@ -217,8 +216,7 @@ class ResearchWorkflow:
                 run_id=state["run_id"],
                 remaining_global=max(
                     0,
-                    self.config.max_total_tool_calls
-                    - int(state.get("tool_call_count") or 0),
+                    self.config.max_total_tool_calls - int(state.get("tool_call_count") or 0),
                 ),
                 deadline_ms=(
                     float(state.get("started_ms") or perf_counter() * 1000)
@@ -306,11 +304,7 @@ class ResearchWorkflow:
         deadline_ms: float,
     ) -> tuple[EvidenceLedger, int, list[dict[str, Any]]]:
         """Run initial targets without ever oversubscribing the global tool cap."""
-        if (
-            not targets
-            or remaining_global <= 0
-            or perf_counter() * 1000 >= deadline_ms
-        ):
+        if not targets or remaining_global <= 0 or perf_counter() * 1000 >= deadline_ms:
             return existing, 0, []
 
         per_pass = self.config.research.max_tool_calls_per_pass
@@ -340,17 +334,13 @@ class ResearchWorkflow:
             pass_config = self.config.research.model_copy(
                 update={"max_tool_calls_per_pass": min(per_pass, remaining)}
             )
-            pass_result = ResearchAgent(
-                self.toolkit, config=pass_config
-            ).research_sub_question(
+            pass_result = ResearchAgent(self.toolkit, config=pass_config).research_sub_question(
                 target,
                 run_id=run_id,
             )
             total_calls += pass_result.tool_call_count
             ledger = ledger.merge(pass_result.evidence)
-            events.extend(
-                event.model_dump(mode="json") for event in pass_result.events
-            )
+            events.extend(event.model_dump(mode="json") for event in pass_result.events)
         return ledger, total_calls, events
 
     def _node_verify(self, state: WorkflowState) -> dict[str, Any]:
@@ -358,9 +348,7 @@ class ResearchWorkflow:
         ledger = EvidenceLedger(
             items=[EvidenceItem.model_validate(e) for e in state.get("evidence") or []]
         )
-        verification = self.verifier.verify(
-            query=state["query"], plan=plan, ledger=ledger
-        )
+        verification = self.verifier.verify(query=state["query"], plan=plan, ledger=ledger)
         updated_plan = self.verifier.update_sub_question_status(plan, verification)
 
         # Detect no-new-evidence: compare ledger size growth via prev snapshot
@@ -382,8 +370,7 @@ class ResearchWorkflow:
                 "missing_sub_questions": verification.missing_sub_questions,
                 "corrective_queries": verification.corrective_queries,
                 "corrective_actions": [
-                    action.model_dump(mode="json")
-                    for action in verification.corrective_actions
+                    action.model_dump(mode="json") for action in verification.corrective_actions
                 ],
                 "conflicting_evidence_ids": verification.conflicting_evidence_ids,
                 "unanswerable": unanswerable,
@@ -471,8 +458,7 @@ class ResearchWorkflow:
             "verification": verification.model_dump(mode="json"),
             "corrective_queries": list(verification.corrective_queries),
             "corrective_actions": [
-                action.model_dump(mode="json")
-                for action in verification.corrective_actions
+                action.model_dump(mode="json") for action in verification.corrective_actions
             ],
             "unanswerable": unanswerable,
         }
@@ -521,14 +507,11 @@ class ResearchWorkflow:
             event_type=EventType.ANSWER_DRAFTED,
             component="writer",
             summary=(
-                f"draft claims={len(draft.claims)} "
-                f"corpus_insufficient={draft.corpus_insufficient}"
+                f"draft claims={len(draft.claims)} corpus_insufficient={draft.corpus_insufficient}"
             ),
             payload={
                 "claim_ids": [c.claim_id for c in draft.claims],
-                "claim_evidence_ids": {
-                    c.claim_id: list(c.evidence_ids) for c in draft.claims
-                },
+                "claim_evidence_ids": {c.claim_id: list(c.evidence_ids) for c in draft.claims},
                 "corpus_insufficient": draft.corpus_insufficient,
                 "notes": list(draft.notes),
             },
@@ -561,9 +544,7 @@ class ResearchWorkflow:
                 "cited_paper_ids": list(report.cited_paper_ids) if report else [],
                 "issue_count": len(report.issues) if report else 0,
                 "issues": (
-                    [i.model_dump(mode="json") for i in report.issues[:20]]
-                    if report
-                    else []
+                    [i.model_dump(mode="json") for i in report.issues[:20]] if report else []
                 ),
                 "final_claim_ids": [c.claim_id for c in final.claims],
             },
@@ -602,9 +583,7 @@ class ResearchWorkflow:
             "events": _append_event_dicts(state, [event]),
         }
 
-    def _route_after_verify(
-        self, state: WorkflowState
-    ) -> Literal["research", "write"]:
+    def _route_after_verify(self, state: WorkflowState) -> Literal["research", "write"]:
         if state.get("terminated_reason"):
             return "write"
         if state.get("unanswerable"):
@@ -620,9 +599,7 @@ class ResearchWorkflow:
             return "write"
         if not state.get("corrective_actions"):
             return "write"
-        if int(state.get("tool_call_count") or 0) >= int(
-            state.get("max_total_tool_calls") or 20
-        ):
+        if int(state.get("tool_call_count") or 0) >= int(state.get("max_total_tool_calls") or 20):
             return "write"
         return "research"
 
@@ -666,9 +643,7 @@ class ResearchWorkflow:
             query=state["query"],
             plan=plan,
             active_sub_questions=[
-                sq.id
-                for sq in plan.sub_questions
-                if sq.status != SubQuestionStatus.COVERED
+                sq.id for sq in plan.sub_questions if sq.status != SubQuestionStatus.COVERED
             ],
             evidence_ledger=ledger,
             verification=verification,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -61,10 +62,22 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r"(?i)(api[_-]?key|authorization|bearer|token)\s*[:=]\s*['\"]?([^\s'\"]+)"),
+        r"\1=***REDACTED***",
+    ),
+    (re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"), "***REDACTED***"),
+    (re.compile(r"\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b"), "Bearer ***REDACTED***"),
+]
+
+
 def sanitize_for_log(value: str, *, secrets: list[str] | None = None) -> str:
-    """Redact known secrets from a string before logging."""
+    """Redact known secrets and common credential patterns from a string before logging."""
     redacted = value
     for secret in secrets or []:
         if secret:
             redacted = redacted.replace(secret, "***REDACTED***")
+    for pattern, replacement in _SECRET_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
     return redacted

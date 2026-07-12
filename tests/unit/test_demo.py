@@ -52,6 +52,9 @@ def test_saved_demo_runs_exist_and_load() -> None:
 
 
 def test_saved_runs_have_canonical_pdf_page_provenance() -> None:
+    processed = REPO / "data" / "processed" / "chunks.jsonl"
+    if not processed.is_file():
+        pytest.skip("local processed chunk store not present (run ingest)")
     store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
     for saved in list_saved_runs(DEMO_RUNS):
         assert saved.provenance_verified is True
@@ -62,7 +65,11 @@ def test_saved_runs_have_canonical_pdf_page_provenance() -> None:
 def test_source_viewer_renders_real_cited_page() -> None:
     saved = load_saved_run(DEMO_RUNS / "what_is_selfrag.json")
     card = saved.session.source_cards[0]
-    image = render_pdf_page_png(card.pdf_path or "", card.page_start)
+    pdf_path = card.pdf_path or ""
+    resolved = REPO / pdf_path if pdf_path and not Path(pdf_path).is_absolute() else Path(pdf_path)
+    if not resolved.is_file():
+        pytest.skip(f"local PDF not present for page render: {pdf_path}")
+    image = render_pdf_page_png(pdf_path, card.page_start)
     assert image.startswith(b"\x89PNG\r\n\x1a\n")
     assert len(image) > 10_000
 

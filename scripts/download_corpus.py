@@ -86,13 +86,25 @@ RELEVANCE_RE = re.compile(
 
 # Supplemental search queries to top up toward target size if seed IDs fail
 FILL_QUERIES: list[tuple[str, str]] = [
-    ("foundational", 'ti:"retrieval-augmented generation" OR ti:"dense passage retrieval" OR ti:ColBERT'),
+    (
+        "foundational",
+        'ti:"retrieval-augmented generation" OR ti:"dense passage retrieval" OR ti:ColBERT',
+    ),
     ("retrieval_rerank_query", 'all:"query rewriting" AND all:retrieval AND all:"language model"'),
-    ("agent_planning_tools", 'ti:Toolformer OR ti:ReAct OR ti:Reflexion OR ti:AutoGen OR all:"language agents"'),
-    ("agentic_rag_graphrag", 'ti:GraphRAG OR all:"Self-RAG" OR all:"corrective retrieval" OR ti:HippoRAG OR ti:LightRAG'),
-    ("benchmarks_eval_surveys", 'ti:"retrieval-augmented" AND (ti:survey OR ti:benchmark OR ti:evaluation OR ti:Ragas)'),
+    (
+        "agent_planning_tools",
+        'ti:Toolformer OR ti:ReAct OR ti:Reflexion OR ti:AutoGen OR all:"language agents"',
+    ),
+    (
+        "agentic_rag_graphrag",
+        'ti:GraphRAG OR all:"Self-RAG" OR all:"corrective retrieval" OR ti:HippoRAG OR ti:LightRAG',
+    ),
+    (
+        "benchmarks_eval_surveys",
+        'ti:"retrieval-augmented" AND (ti:survey OR ti:benchmark OR ti:evaluation OR ti:Ragas)',
+    ),
     ("agentic_rag_graphrag", 'all:HybridRAG OR all:RankRAG OR all:"G-Retriever" OR all:ARES'),
-    ("agent_planning_tools", 'all:ToolLLM OR all:AgentBench OR all:FireAct'),
+    ("agent_planning_tools", "all:ToolLLM OR all:AgentBench OR all:FireAct"),
 ]
 
 
@@ -394,9 +406,7 @@ def build_manifest_entries(
         content_hash = "pending_download"
         if download:
             print(f"[{idx + 1}] download {rec.arxiv_id}: {rec.title[:70]}")
-            ok, digest = download_pdf(
-                client, rec.arxiv_id, dest, skip_existing=skip_existing
-            )
+            ok, digest = download_pdf(client, rec.arxiv_id, dest, skip_existing=skip_existing)
             # Still record metadata so download gaps stay visible
             content_hash = "download_failed" if not ok or not digest else digest
         elif dest.is_file():

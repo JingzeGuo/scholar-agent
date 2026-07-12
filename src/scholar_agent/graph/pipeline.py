@@ -8,7 +8,11 @@ from pathlib import Path
 
 from scholar_agent.config import AppConfig, load_config
 from scholar_agent.graph.evidence import validate_relations
-from scholar_agent.graph.extract import extract_from_chunk, extract_paper_structure
+from scholar_agent.graph.extract import (
+    EXTRACTION_CACHE_SCHEMA,
+    extract_from_chunk,
+    extract_paper_structure,
+)
 from scholar_agent.graph.resolver import EntityResolver, LLMEntityDisambiguator
 from scholar_agent.graph.stats import GraphStats, compute_graph_stats
 from scholar_agent.graph.store import KnowledgeGraphStore
@@ -18,6 +22,7 @@ from scholar_agent.logging import get_logger
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.graph import Entity, EntityType, Relation
 from scholar_agent.retrieval.chunk_store import ChunkStore
+from scholar_agent.storage.cache import DiskCache
 from scholar_agent.storage.jsonl import JsonlRepository
 
 logger = get_logger(__name__)
@@ -55,12 +60,7 @@ def build_knowledge_graph(
     graph_path = processed / "knowledge_graph.json"
     stats_path = processed / "graph_stats.json"
 
-    if (
-        not force
-        and entities_path.is_file()
-        and relations_path.is_file()
-        and graph_path.is_file()
-    ):
+    if not force and entities_path.is_file() and relations_path.is_file() and graph_path.is_file():
         logger.info("loading existing knowledge graph from %s", graph_path)
         store = KnowledgeGraphStore.load_node_link_json(graph_path)
         entities = JsonlRepository(entities_path, Entity).read_all()
@@ -114,11 +114,22 @@ def build_knowledge_graph(
         resolver.register_surface(paper.title, EntityType.PAPER, preferred_canonical=paper.title)
         raw_relations.extend(extract_paper_structure(paper, paper_chunks))
 
-    # Chunk-level extraction
+    # Chunk-level extraction (optional disk cache under processed/.cache/extraction)
+    extraction_cache = DiskCache(
+        root=processed / ".cache",
+        namespace="extraction",
+        schema_version=EXTRACTION_CACHE_SCHEMA,
+    )
     for i, chunk in enumerate(chunks):
         if i and i % 500 == 0:
-            logger.info("extracted relations from %s/%s chunks", i, len(chunks))
-        raw_relations.extend(extract_from_chunk(chunk))
+            logger.info(
+                "extracted relations from %s/%s chunks cache=%s",
+                i,
+                len(chunks),
+                extraction_cache.stats.as_dict(),
+            )
+        raw_relations.extend(extract_from_chunk(chunk, cache=extraction_cache))
+    logger.info("extraction_cache_stats %s", extraction_cache.stats.as_dict())
 
     logger.info("raw relations before validation: %s", len(raw_relations))
     grounded = validate_relations(raw_relations, chunk_store.by_chunk_id)
@@ -161,9 +172,7 @@ def build_knowledge_graph(
     stats = compute_graph_stats(store)
 
     # Persist
-    JsonlRepository(entities_path, Entity).write_all(
-        sorted(entities, key=lambda e: e.entity_id)
-    )
+    JsonlRepository(entities_path, Entity).write_all(sorted(entities, key=lambda e: e.entity_id))
     JsonlRepository(relations_path, Relation).write_all(
         sorted(final_relations, key=lambda r: r.relation_id)
     )

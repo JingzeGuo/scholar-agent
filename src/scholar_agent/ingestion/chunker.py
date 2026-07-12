@@ -117,9 +117,7 @@ def _split_long_section(
         text = decode_tokens(window, encoding_name=encoding_name).strip()
         if text:
             # Page range: proportional estimate within section pages
-            page_start, page_end = _estimate_pages(
-                section, start=start, end=end, total_tokens=n
-            )
+            page_start, page_end = _estimate_pages(section, start=start, end=end, total_tokens=n)
             chunks.append(
                 _make_chunk(
                     paper_id=paper_id,

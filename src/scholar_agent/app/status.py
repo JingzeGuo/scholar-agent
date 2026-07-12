@@ -66,9 +66,7 @@ def collect_system_status(
 
     repo = Path(__file__).resolve().parents[3]
     runs_dir = Path(demo_runs_dir) if demo_runs_dir else repo / "data" / "demo" / "runs"
-    demo_runs = (
-        len(list(runs_dir.glob("*.json"))) if runs_dir.is_dir() else 0
-    )
+    demo_runs = len(list(runs_dir.glob("*.json"))) if runs_dir.is_dir() else 0
 
     messages: list[str] = []
     n_papers = _count_jsonl(processed / "papers.jsonl")

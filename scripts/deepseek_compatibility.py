@@ -153,8 +153,7 @@ def check_structured_json(client: LLMClient, model: str) -> CheckResult:
                     ChatMessage(
                         role="user",
                         content=(
-                            "We have no evidence yet for a literature question. "
-                            "Decide next action."
+                            "We have no evidence yet for a literature question. Decide next action."
                         ),
                     ),
                 ],

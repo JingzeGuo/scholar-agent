@@ -126,9 +126,7 @@ class DenseIndex:
             raise FileNotFoundError(f"dense index meta missing: {meta_path}")
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if verify and meta.get("corpus_fingerprint") != store.fingerprint:
-            raise ValueError(
-                "dense index fingerprint mismatch with chunk store; rebuild required"
-            )
+            raise ValueError("dense index fingerprint mismatch with chunk store; rebuild required")
         coll_name = str(meta.get("collection_name") or collection_name)
         import chromadb
         from chromadb.config import Settings

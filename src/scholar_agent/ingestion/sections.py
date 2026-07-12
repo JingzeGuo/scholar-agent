@@ -15,9 +15,7 @@ _NUMBERED = re.compile(
     r"|[IVXLC]{1,6}\."  # IV.
     r")\s+[A-Z][A-Za-z][\w\s\-:,]{1,80}$"
 )
-_NUMBERED_LOOSE = re.compile(
-    r"^\d{1,2}(?:\.\d{1,2}){0,3}\.?\s+[A-Z][\w\s\-:,]{2,80}$"
-)
+_NUMBERED_LOOSE = re.compile(r"^\d{1,2}(?:\.\d{1,2}){0,3}\.?\s+[A-Z][\w\s\-:,]{2,80}$")
 _NAMED = re.compile(
     r"^(?:"
     r"Abstract|Introduction|Related Work|Background|Preliminaries|"

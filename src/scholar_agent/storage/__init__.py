@@ -1,5 +1,6 @@
-"""Canonical storage helpers (JSONL repositories and corpus manifest)."""
+"""Canonical storage helpers (JSONL repositories, corpus manifest, disk cache)."""
 
+from scholar_agent.storage.cache import CacheStats, DiskCache
 from scholar_agent.storage.jsonl import JsonlRepository, JsonlRepositoryError
 from scholar_agent.storage.manifest import (
     CorpusManifest,
@@ -10,7 +11,9 @@ from scholar_agent.storage.manifest import (
 )
 
 __all__ = [
+    "CacheStats",
     "CorpusManifest",
+    "DiskCache",
     "JsonlRepository",
     "JsonlRepositoryError",
     "ManifestError",

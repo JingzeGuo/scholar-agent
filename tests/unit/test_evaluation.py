@@ -72,6 +72,9 @@ def test_fingerprint_matches_frozen_split(frozen_dataset) -> None:
 
 
 def test_frozen_gold_maps_to_canonical_store(frozen_dataset) -> None:
+    processed = REPO / "data" / "processed" / "chunks.jsonl"
+    if not processed.is_file():
+        pytest.skip("local processed chunk store not present (run ingest)")
     store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
     assert validate_dataset_against_store(frozen_dataset, store) == []
 

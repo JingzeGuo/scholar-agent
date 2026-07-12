@@ -145,9 +145,9 @@ def test_writer_surfaces_contradictions() -> None:
         ledger=ledger,
         verification=verification,
     )
-    assert any("disagree" in c.text.lower() or "conflict" in c.text.lower() for c in draft.claims) or any(
-        "conflict" in n.lower() for n in draft.notes
-    )
+    assert any(
+        "disagree" in c.text.lower() or "conflict" in c.text.lower() for c in draft.claims
+    ) or any("conflict" in n.lower() for n in draft.notes)
     assert "ev_yes" in draft.markdown or "paper_a" in draft.markdown
 
 
@@ -201,9 +201,7 @@ def test_writer_claim_ids_stable_and_ordered() -> None:
             ),
         ],
     )
-    draft = Writer().write(
-        query="Compare Self-RAG versus CRAG", plan=plan, ledger=ledger
-    )
+    draft = Writer().write(query="Compare Self-RAG versus CRAG", plan=plan, ledger=ledger)
     assert len(draft.claims) >= 2
     assert draft.claims[0].claim_id == "claim_1"
     assert draft.claims[1].claim_id == "claim_2"

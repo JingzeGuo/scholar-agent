@@ -48,9 +48,7 @@ def load_corpus_manifest(path: Path | str) -> CorpusManifest:
     manifest_path = Path(path)
     if not manifest_path.is_file():
         raise ManifestError(f"corpus manifest not found: {manifest_path}")
-    repo: JsonlRepository[CorpusManifestEntry] = JsonlRepository(
-        manifest_path, CorpusManifestEntry
-    )
+    repo: JsonlRepository[CorpusManifestEntry] = JsonlRepository(manifest_path, CorpusManifestEntry)
     try:
         entries = repo.read_all()
     except JsonlRepositoryError as exc:
@@ -69,9 +67,7 @@ def save_corpus_manifest(path: Path | str, entries: Sequence[CorpusManifestEntry
     """Persist manifest entries with uniqueness validation."""
     # Validate uniqueness before write
     CorpusManifest(entries, path=Path(path))
-    repo: JsonlRepository[CorpusManifestEntry] = JsonlRepository(
-        path, CorpusManifestEntry
-    )
+    repo: JsonlRepository[CorpusManifestEntry] = JsonlRepository(path, CorpusManifestEntry)
     repo.write_all(list(entries))
 
 
@@ -95,13 +91,9 @@ def validate_corpus_manifest(
         if pdf_root is not None:
             pdf_path = pdf_root / entry.pdf_filename
             if not pdf_path.is_file():
-                issues.append(
-                    f"{entry.paper_id}: missing PDF {pdf_path}"
-                )
+                issues.append(f"{entry.paper_id}: missing PDF {pdf_path}")
         if not entry.content_hash.strip():
             issues.append(f"{entry.paper_id}: empty content_hash")
         if entry.year is None and not entry.arxiv_id and not entry.doi:
-            issues.append(
-                f"{entry.paper_id}: missing year and external identifier (doi/arxiv)"
-            )
+            issues.append(f"{entry.paper_id}: missing year and external identifier (doi/arxiv)")
     return issues

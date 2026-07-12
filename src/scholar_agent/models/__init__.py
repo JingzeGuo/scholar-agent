@@ -17,12 +17,14 @@ from scholar_agent.models.answer import (
 )
 from scholar_agent.models.base import (
     BudgetStatus,
+    ErrorCategory,
     EventType,
     ExecutionEvent,
     PrototypeDecision,
     PrototypeObservation,
     PrototypeResult,
     QueryType,
+    StructuredError,
     TokenUsage,
     utc_now_iso,
 )
@@ -76,6 +78,7 @@ __all__ = [
     "DraftAnswer",
     "Entity",
     "EntityType",
+    "ErrorCategory",
     "EventType",
     "EvidenceItem",
     "EvidenceLedger",
@@ -104,6 +107,7 @@ __all__ = [
     "RetrievalResult",
     "RoutingDecision",
     "SourceCard",
+    "StructuredError",
     "SubQuestion",
     "SubQuestionStatus",
     "TokenUsage",

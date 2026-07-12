@@ -10,6 +10,10 @@ from scholar_agent.graph.evidence import find_evidence_span
 from scholar_agent.ids import make_relation_id, normalize_text
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.graph import EntityType, Relation, RelationType
+from scholar_agent.storage.cache import DiskCache
+
+# Bump when extraction heuristics change so disk cache invalidates.
+EXTRACTION_CACHE_SCHEMA = "extract-v1"
 
 # High-precision surface patterns for known literature terms (longest first)
 _KNOWN_SURFACES: list[str] = sorted(
@@ -95,7 +99,9 @@ def _select_entity_surface(
 ) -> str | None:
     """Prefer a known literal mention; reject clause-like entity surfaces."""
     cleaned = re.sub(r"\s+", " ", raw).strip(" ,;:()[]")
-    contained = [surface for surface, _canonical, _type in mentions if surface.lower() in cleaned.lower()]
+    contained = [
+        surface for surface, _canonical, _type in mentions if surface.lower() in cleaned.lower()
+    ]
     if contained:
         return max(contained, key=len)
     words = cleaned.split()
@@ -128,7 +134,11 @@ def _find_known_mentions(text: str) -> list[tuple[str, str, EntityType]]:
             # word-ish boundary check
             before_ok = idx == 0 or not lower[idx - 1].isalnum()
             after_ok = end >= len(lower) or not lower[end].isalnum()
-            if before_ok and after_ok and not any(s <= idx < e or s < end <= e for s, e in occupied):
+            if (
+                before_ok
+                and after_ok
+                and not any(s <= idx < e or s < end <= e for s, e in occupied)
+            ):
                 canonical, etype = SEED_ALIASES[surface]
                 # recover original casing slice
                 original = text[idx:end]
@@ -138,12 +148,58 @@ def _find_known_mentions(text: str) -> list[tuple[str, str, EntityType]]:
     return found
 
 
-def extract_from_chunk(chunk: Chunk) -> list[Relation]:
-    """Heuristic extraction grounded in the chunk text."""
+def extract_from_chunk(
+    chunk: Chunk,
+    *,
+    cache: DiskCache | None = None,
+) -> list[Relation]:
+    """Heuristic extraction grounded in the chunk text.
+
+    When ``cache`` is provided, results are keyed by chunk content hash and the
+    extraction schema version so re-runs skip pure recomputation.
+    """
     text = chunk.text
     if len(text.strip()) < 40:
         return []
 
+    if cache is not None:
+        payload = {
+            "chunk_id": chunk.chunk_id,
+            "content_hash": chunk.content_hash,
+            "paper_id": chunk.paper_id,
+            "page_start": chunk.page_start,
+            "page_end": chunk.page_end,
+            "schema": EXTRACTION_CACHE_SCHEMA,
+        }
+        key = cache.make_key(payload)
+        cached = cache.get(key)
+        if isinstance(cached, list):
+            try:
+                return [Relation.model_validate(item) for item in cached]
+            except Exception:
+                cache.delete(key)
+
+    relations = _extract_from_chunk_uncached(chunk)
+
+    if cache is not None:
+        cache.set(
+            cache.make_key(
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "content_hash": chunk.content_hash,
+                    "paper_id": chunk.paper_id,
+                    "page_start": chunk.page_start,
+                    "page_end": chunk.page_end,
+                    "schema": EXTRACTION_CACHE_SCHEMA,
+                }
+            ),
+            [rel.model_dump(mode="json") for rel in relations],
+        )
+    return relations
+
+
+def _extract_from_chunk_uncached(chunk: Chunk) -> list[Relation]:
+    text = chunk.text
     relations: list[Relation] = []
     mentions = _find_known_mentions(text)
 
@@ -152,9 +208,7 @@ def extract_from_chunk(chunk: Chunk) -> list[Relation]:
     for sent in sentences:
         if len(sent) < 20:
             continue
-        sent_mentions = [
-            (s, c, t) for s, c, t in mentions if s.lower() in sent.lower()
-        ]
+        sent_mentions = [(s, c, t) for s, c, t in mentions if s.lower() in sent.lower()]
         # Cue-based patterns
         for pattern, rel_type in _CUE_PATTERNS:
             match = pattern.search(sent)
@@ -320,9 +374,7 @@ def _guess_type(
     return EntityType.METHOD
 
 
-def _infer_pair_relation(
-    s_type: EntityType, o_type: EntityType, sentence: str
-) -> RelationType:
+def _infer_pair_relation(s_type: EntityType, o_type: EntityType, sentence: str) -> RelationType:
     low = sentence.lower()
     if "outperform" in low or "better than" in low:
         return RelationType.OUTPERFORMS

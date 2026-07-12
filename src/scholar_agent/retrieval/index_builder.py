@@ -57,11 +57,7 @@ def build_indexes(
         embedder = create_embedder(model_name, backend=embedding_backend)
 
     # BM25
-    if (
-        not force
-        and (sparse_dir / "meta.json").is_file()
-        and (sparse_dir / "bm25.pkl").is_file()
-    ):
+    if not force and (sparse_dir / "meta.json").is_file() and (sparse_dir / "bm25.pkl").is_file():
         try:
             sparse = BM25Index.load(sparse_dir, store, verify=True)
             logger.info("loaded existing BM25 index")

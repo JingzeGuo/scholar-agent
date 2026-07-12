@@ -150,9 +150,7 @@ def test_opposite_words_on_unrelated_topics_are_not_conflicts() -> None:
 
 def test_empty_ledger_unanswerable_or_missing() -> None:
     plan = Planner().plan("What is Self-RAG?")
-    result = Verifier().verify(
-        query=plan.original_query, plan=plan, ledger=EvidenceLedger()
-    )
+    result = Verifier().verify(query=plan.original_query, plan=plan, ledger=EvidenceLedger())
     assert result.is_sufficient is False
     assert result.missing_sub_questions
     assert result.unanswerable is False

@@ -17,8 +17,14 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from scholar_agent.ids import make_evidence_id, new_run_id
-from scholar_agent.logging import get_logger
-from scholar_agent.models.base import EventType, ExecutionEvent, QueryType
+from scholar_agent.logging import get_logger, sanitize_for_log
+from scholar_agent.models.base import (
+    ErrorCategory,
+    EventType,
+    ExecutionEvent,
+    QueryType,
+    StructuredError,
+)
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import SubQuestion, SubQuestionStatus
 from scholar_agent.models.retrieval import RetrievalHit, RetrievalResult
@@ -306,9 +312,7 @@ class ResearchAgent:
 
         # Cap evidence strictly
         if len(ledger.items) > self.config.max_evidence_per_sub_question:
-            ledger = EvidenceLedger(
-                items=ledger.items[: self.config.max_evidence_per_sub_question]
-            )
+            ledger = EvidenceLedger(items=ledger.items[: self.config.max_evidence_per_sub_question])
 
         latency_ms = int((perf_counter() - started) * 1000)
         events.append(
@@ -356,8 +360,7 @@ class ResearchAgent:
                 event_type=EventType.RUN_STARTED,
                 component="researcher",
                 summary=(
-                    f"multi research start: n={len(sub_questions)} "
-                    f"parallel={actual_parallel}"
+                    f"multi research start: n={len(sub_questions)} parallel={actual_parallel}"
                 ),
                 payload={
                     "original_query": original_query,
@@ -497,21 +500,41 @@ class ResearchAgent:
             mode_lit = "hybrid_rerank"
         try:
             return self.toolkit.search(query, mode=mode_lit)
-        except Exception as exc:  # noqa: BLE001 — keep research loop alive on tool errors
-            logger.warning("tool %s failed: %s", mode, exc)
+        except Exception as exc:
+            # Keep the research loop alive, but never silently invent hits.
+            # Surface category + fallback so degradation is observable.
+            error = classify_tool_error(exc, component="researcher", operation=f"{mode}_search")
+            logger.warning(
+                "tool %s failed category=%s retryable=%s msg=%s",
+                mode,
+                error.category.value,
+                error.retryable,
+                sanitize_for_log(error.message),
+            )
             method: Literal["dense", "sparse", "hybrid", "hybrid_rerank", "graph"]
-            method = mode_lit if mode_lit in {
-                "dense",
-                "sparse",
-                "hybrid",
-                "hybrid_rerank",
-                "graph",
-            } else "hybrid_rerank"
+            method = (
+                mode_lit
+                if mode_lit
+                in {
+                    "dense",
+                    "sparse",
+                    "hybrid",
+                    "hybrid_rerank",
+                    "graph",
+                }
+                else "hybrid_rerank"
+            )
             return RetrievalResult(
                 query=query,
                 method=method,
                 hits=[],
-                debug={"error": str(exc)},
+                debug={
+                    "error": error.message,
+                    "error_category": error.category.value,
+                    "retryable": error.retryable,
+                    "fallback_used": "empty_hits",
+                    "degraded": True,
+                },
             )
 
     def _complementary_mode(
@@ -548,6 +571,40 @@ class ResearchAgent:
             and len(normalized) == len(set(normalized))
             and all(question.status == SubQuestionStatus.PENDING for question in sub_questions)
         )
+
+
+def classify_tool_error(
+    exc: Exception,
+    *,
+    component: str,
+    operation: str,
+    run_id: str | None = None,
+) -> StructuredError:
+    """Map a toolkit exception into a sanitized StructuredError."""
+    message = sanitize_for_log(str(exc) or type(exc).__name__)
+    text = message.lower()
+    if isinstance(exc, (TimeoutError,)):
+        category = ErrorCategory.TIMEOUT
+        retryable = True
+    elif "not loaded" in text or "unavailable" in text or "not found" in text:
+        category = ErrorCategory.INDEX_UNAVAILABLE
+        retryable = False
+    elif isinstance(exc, (ValueError, TypeError)):
+        category = ErrorCategory.VALIDATION
+        retryable = False
+    else:
+        category = ErrorCategory.TOOL
+        retryable = False
+    return StructuredError(
+        run_id=run_id,
+        component=component,
+        operation=operation,
+        category=category,
+        retryable=retryable,
+        message=message,
+        fallback_used="empty_hits",
+        details={"exception_type": type(exc).__name__},
+    )
 
 
 def hits_to_evidence(
@@ -620,9 +677,7 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
         state: _SubResearchState,
         *events: ExecutionEvent,
     ) -> list[dict[str, Any]]:
-        return list(state.get("events") or []) + [
-            event.model_dump(mode="json") for event in events
-        ]
+        return list(state.get("events") or []) + [event.model_dump(mode="json") for event in events]
 
     def decide(state: _SubResearchState) -> dict[str, Any]:
         tool_calls = int(state.get("tool_call_count") or 0)
@@ -784,13 +839,9 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
     def finish(state: _SubResearchState) -> dict[str, Any]:
         reason = state.get("terminated_reason")
         if reason is None and state.get("modes_queue"):
-            if int(state.get("tool_call_count") or 0) >= int(
-                state.get("max_tool_calls") or 4
-            ):
+            if int(state.get("tool_call_count") or 0) >= int(state.get("max_tool_calls") or 4):
                 reason = "tool_budget_exhausted"
-            elif int(state.get("iteration") or 0) >= int(
-                state.get("max_iterations") or 4
-            ):
+            elif int(state.get("iteration") or 0) >= int(state.get("max_iterations") or 4):
                 reason = "iteration_budget_exhausted"
             elif len(state.get("evidence") or []) >= int(state.get("max_evidence") or 8):
                 reason = "evidence_budget_reached"

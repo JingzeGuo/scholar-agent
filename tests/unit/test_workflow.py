@@ -30,7 +30,9 @@ class ScriptedToolkit(RetrievalToolkit):
         self.calls: list[str] = []
         self._empty_once = True
 
-    def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+    def search(
+        self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+    ) -> RetrievalResult:  # type: ignore[override]
         self.calls.append(query)
         q = query.lower()
 
@@ -71,7 +73,9 @@ class ScriptedToolkit(RetrievalToolkit):
             score=0.85,
             retrieval_method=mode,
         )
-        method = mode if mode in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"} else "hybrid"
+        method = (
+            mode if mode in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"} else "hybrid"
+        )
         return RetrievalResult(query=query, method=method, hits=[hit])  # type: ignore[arg-type]
 
 
@@ -112,7 +116,9 @@ def test_missing_evidence_triggers_corrective_retrieval() -> None:
             super().__init__()
             self.phase = 0
 
-        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
             self.calls.append(query)
             # Initial research on main question: irrelevant only
             if self.phase == 0:
@@ -156,7 +162,9 @@ def test_missing_evidence_triggers_corrective_retrieval() -> None:
 
 def test_empty_first_pass_still_triggers_targeted_retrieval() -> None:
     class EmptyThenEvidenceToolkit(ScriptedToolkit):
-        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
             self.calls.append(query)
             if len(self.calls) == 1:
                 return RetrievalResult(query=query, method="hybrid_rerank", hits=[])
@@ -181,7 +189,9 @@ def test_empty_first_pass_still_triggers_targeted_retrieval() -> None:
 
 def test_no_new_evidence_stops_loop() -> None:
     class AlwaysSameToolkit(ScriptedToolkit):
-        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
             self.calls.append(query)
             # Always the same chunk/text → no unique new after first pass
             text = "Self-RAG retrieves on demand using reflection tokens."
@@ -260,9 +270,7 @@ def test_conflicts_surfaced_in_verification() -> None:
             retrieval_method="dense",
         ),
     ]
-    v = Verifier().verify(
-        query=plan.original_query, plan=plan, ledger=EvidenceLedger(items=items)
-    )
+    v = Verifier().verify(query=plan.original_query, plan=plan, ledger=EvidenceLedger(items=items))
     assert v.conflicting_evidence_ids
     # Ledger unchanged (retained)
     assert len(items) == 2
@@ -270,7 +278,9 @@ def test_conflicts_surfaced_in_verification() -> None:
 
 def test_iteration_budget_terminates() -> None:
     class EmptyToolkit(ScriptedToolkit):
-        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
             self.calls.append(query)
             return RetrievalResult(query=query, method="hybrid_rerank", hits=[])
 
@@ -290,7 +300,9 @@ def test_iteration_budget_terminates() -> None:
 
 def test_unanswerable_after_targeted_retrieval_exhaustion() -> None:
     class ChangingIrrelevantToolkit(ScriptedToolkit):
-        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
             index = len(self.calls)
             self.calls.append(query)
             text = f"Astronomy observation {index} about nebulae and stellar formation."
@@ -347,7 +359,9 @@ def test_global_tool_budget_is_never_exceeded() -> None:
 
 def test_latency_budget_terminates_workflow() -> None:
     class SlowToolkit(ScriptedToolkit):
-        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
             sleep(0.005)
             self.calls.append(query)
             text = "Astronomy notes about nebulae and stellar formation."
@@ -415,7 +429,9 @@ def test_workflow_writes_and_validates_citations() -> None:
 
 def test_workflow_unanswerable_still_emits_answer_with_limitation() -> None:
     class EmptyToolkit(ScriptedToolkit):
-        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
             self.calls.append(query)
             return RetrievalResult(query=query, method="hybrid_rerank", hits=[])
 

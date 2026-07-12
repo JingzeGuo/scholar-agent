@@ -27,9 +27,7 @@ def assess_pages(
 
     is_empty_paper = total_chars < 80 or all(p.is_empty for p in pages)
     is_scanned = (
-        len(pages) > 0
-        and scanned / max(1, len(pages)) >= 0.5
-        and total_chars < 500 * len(pages)
+        len(pages) > 0 and scanned / max(1, len(pages)) >= 0.5 and total_chars < 500 * len(pages)
     ) or (is_empty_paper and scanned > 0)
 
     if is_empty_paper:

@@ -41,6 +41,51 @@ class EventType(StrEnum):
     TERMINATED = "terminated"
 
 
+class ErrorCategory(StrEnum):
+    """Coarse classification for structured error events."""
+
+    VALIDATION = "validation"
+    AUTHENTICATION = "authentication"
+    RATE_LIMIT = "rate_limit"
+    TIMEOUT = "timeout"
+    PROVIDER = "provider"
+    INDEX_UNAVAILABLE = "index_unavailable"
+    CACHE = "cache"
+    BUDGET = "budget"
+    TOOL = "tool"
+    UNKNOWN = "unknown"
+
+
+class StructuredError(BaseModel):
+    """Sanitized, structured error for logs and execution events.
+
+    Never include secrets, full environment dumps, auth headers, or private CoT.
+    """
+
+    run_id: str | None = None
+    component: str
+    operation: str
+    category: ErrorCategory = ErrorCategory.UNKNOWN
+    retryable: bool = False
+    message: str
+    fallback_used: str | None = None
+    timestamp: str = Field(default_factory=utc_now_iso)
+    duration_ms: int | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("message")
+    @classmethod
+    def _message_not_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("message must be non-empty")
+        # Hard cap to avoid dumping huge stack traces into events
+        return cleaned[:500]
+
+    def to_event_payload(self) -> dict[str, Any]:
+        return self.model_dump(mode="json", exclude_none=True)
+
+
 class ExecutionEvent(BaseModel):
     """Auditable agent event. Never stores private chain-of-thought."""
 

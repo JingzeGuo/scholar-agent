@@ -128,9 +128,7 @@ class CitationValidator:
         sources = [card.format_reference() for card in source_cards]
 
         # Validity: every remaining citation is real and supports its claim.
-        is_valid = all(
-            eid in by_id for c in final_claims for eid in c.evidence_ids
-        ) and all(
+        is_valid = all(eid in by_id for c in final_claims for eid in c.evidence_ids) and all(
             self._supports(c, by_id[eid])
             for c in final_claims
             for eid in c.evidence_ids
@@ -295,10 +293,7 @@ class CitationValidator:
         except (OSError, RuntimeError, ValueError) as exc:
             return f"Source file is not a readable PDF: {type(exc).__name__}"
         if item.page_end > actual_pages:
-            return (
-                f"Evidence page {item.page_end} exceeds PDF page count "
-                f"{actual_pages}"
-            )
+            return f"Evidence page {item.page_end} exceeds PDF page count {actual_pages}"
         if paper.page_count is not None and item.page_end > paper.page_count:
             return "Evidence page exceeds canonical paper page_count"
         return None
@@ -366,9 +361,7 @@ class CitationValidator:
             claim_negative = any(token.startswith(negative) for token in claim_toks)
             evidence_positive = any(token.startswith(positive) for token in ev_toks)
             evidence_negative = any(token.startswith(negative) for token in ev_toks)
-            if (claim_positive and evidence_negative) or (
-                claim_negative and evidence_positive
-            ):
+            if (claim_positive and evidence_negative) or (claim_negative and evidence_positive):
                 return False
         # Also allow if claim is largely a substring of evidence (after normalize)
         if normalize_text(claim.text)[:80] in normalize_text(evidence_blob):
@@ -398,9 +391,7 @@ class CitationValidator:
         )
         pdf_path = None
         if paper is not None and self.provenance_store is not None:
-            pdf_path = str(
-                self._resolve_pdf_path(paper.pdf_path, self.provenance_store)
-            )
+            pdf_path = str(self._resolve_pdf_path(paper.pdf_path, self.provenance_store))
         return SourceCard(
             evidence_id=item.evidence_id,
             paper_id=item.paper_id,
@@ -469,8 +460,7 @@ class CitationValidator:
             for card in source_cards:
                 title = f" — {card.title}" if card.title else ""
                 lines.append(
-                    f"- {card.format_inline()}{title} · `{card.chunk_id}` · "
-                    f"`{card.evidence_id}`"
+                    f"- {card.format_inline()}{title} · `{card.chunk_id}` · `{card.evidence_id}`"
                 )
                 if card.pdf_path:
                     lines.append(f"  - PDF: `{card.pdf_path}`")

@@ -188,11 +188,24 @@ class RetrievalToolkit:
         relation_filters: list[str] | None = None,
         k: int | None = None,
         exclude_chunk_ids: set[str] | None = None,
+        allow_degraded: bool = False,
     ) -> RetrievalResult:
         if self.graph is None:
-            raise RuntimeError(
-                "graph index is not loaded; run `scholar-agent graph build` first"
-            )
+            if allow_degraded:
+                return RetrievalResult(
+                    query=query,
+                    method="graph",
+                    hits=[],
+                    debug={
+                        "degraded": True,
+                        "error_category": "index_unavailable",
+                        "fallback_used": "empty_hits",
+                        "error": (
+                            "graph index is not loaded; run `scholar-agent graph build` first"
+                        ),
+                    },
+                )
+            raise RuntimeError("graph index is not loaded; run `scholar-agent graph build` first")
         return self.graph.search(
             query,
             max_hops=max_hops,

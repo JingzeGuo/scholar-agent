@@ -214,9 +214,7 @@ def test_unsupported_claim_removed() -> None:
     )
     final = CitationValidator(min_support_overlap=0.2).validate(draft, ledger)
     assert final.citation_report is not None
-    assert any(
-        "does not support" in i.message.lower() for i in final.citation_report.issues
-    )
+    assert any("does not support" in i.message.lower() for i in final.citation_report.issues)
     # Unsupported claim must not remain as a primary supported claim
     assert not final.claims
     assert "Limitation" in final.markdown or "No citation-validated" in final.markdown
@@ -271,13 +269,8 @@ def test_references_deduplicated() -> None:
 
 
 def test_supported_claim_passes() -> None:
-    text = (
-        "Self-RAG retrieves on demand and uses reflection tokens "
-        "to critique generation quality."
-    )
-    ledger = EvidenceLedger(
-        items=[_item(evidence_id="ev_1", claim=text, evidence_text=text)]
-    )
+    text = "Self-RAG retrieves on demand and uses reflection tokens to critique generation quality."
+    ledger = EvidenceLedger(items=[_item(evidence_id="ev_1", claim=text, evidence_text=text)])
     draft = DraftAnswer(
         claims=[
             ClaimWithCitations(
@@ -324,9 +317,7 @@ def test_overlap_does_not_hide_wrong_number_or_polarity() -> None:
 
 def test_matching_negative_polarity_is_supported() -> None:
     text = "The retrieval strategy is ineffective on the adversarial benchmark."
-    ledger = EvidenceLedger(
-        items=[_item(evidence_id="ev_1", claim=text, evidence_text=text)]
-    )
+    ledger = EvidenceLedger(items=[_item(evidence_id="ev_1", claim=text, evidence_text=text)])
     draft = DraftAnswer(
         claims=[
             ClaimWithCitations(

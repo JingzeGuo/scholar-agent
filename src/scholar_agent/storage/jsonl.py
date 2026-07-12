@@ -62,9 +62,7 @@ class JsonlRepository(Generic[T]):
 
     def write_all(self, items: Sequence[T], *, atomic: bool = True) -> None:
         self.ensure_parent()
-        payload = "".join(
-            item.model_dump_json() + "\n" for item in items
-        )
+        payload = "".join(item.model_dump_json() + "\n" for item in items)
         if not atomic:
             self.path.write_text(payload, encoding="utf-8")
             return
@@ -96,8 +94,6 @@ class JsonlRepository(Generic[T]):
                     f"field {key!r} is not a string on {self.model_type.__name__}"
                 )
             if value in result:
-                raise JsonlRepositoryError(
-                    f"duplicate {key}={value!r} in {self.path}"
-                )
+                raise JsonlRepositoryError(f"duplicate {key}={value!r} in {self.path}")
             result[value] = item
         return result

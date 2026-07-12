@@ -53,9 +53,7 @@ def save_demo_run(
     return path
 
 
-def find_saved_run(
-    demo_id: str, directory: Path | str | None = None
-) -> SavedDemoRun | None:
+def find_saved_run(demo_id: str, directory: Path | str | None = None) -> SavedDemoRun | None:
     for run in list_saved_runs(directory):
         if run.demo_id == demo_id:
             return run

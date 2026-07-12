@@ -125,8 +125,7 @@ def recommend_policy(
         signals.extend([f"aspect_{s}" for s in aspect_signals])
         policy = (
             RetrievalPolicy.HYBRID_RERANK
-            if aspect_type == QueryType.SEMANTIC
-            and "default_general_evidence" in aspect_signals
+            if aspect_type == QueryType.SEMANTIC and "default_general_evidence" in aspect_signals
             else _policy_for_type(aspect_type, has_graph=has_graph)
         )
         return RoutingDecision(
@@ -134,8 +133,7 @@ def recommend_policy(
             query_type=aspect_type,
             recommended_policy=policy,
             rationale=(
-                f"Corrective retrieval for missing aspect "
-                f"({aspect_type.value}) → {policy.value}"
+                f"Corrective retrieval for missing aspect ({aspect_type.value}) → {policy.value}"
             ),
             signals=signals,
         )
@@ -163,11 +161,7 @@ def _policy_for_type(query_type: QueryType, *, has_graph: bool) -> RetrievalPoli
     if query_type == QueryType.KEYWORD:
         return RetrievalPolicy.HYBRID  # sparse+dense for exact names
     if query_type == QueryType.COMPARISON:
-        return (
-            RetrievalPolicy.HYBRID_PLUS_GRAPH
-            if has_graph
-            else RetrievalPolicy.HYBRID_RERANK
-        )
+        return RetrievalPolicy.HYBRID_PLUS_GRAPH if has_graph else RetrievalPolicy.HYBRID_RERANK
     if query_type == QueryType.RELATIONAL:
         return RetrievalPolicy.GRAPH if has_graph else RetrievalPolicy.HYBRID_RERANK
     if query_type == QueryType.SYNTHESIS:

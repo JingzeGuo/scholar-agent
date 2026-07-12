@@ -100,9 +100,7 @@ class Verifier:
             relevant = [e for e in ledger.items if self._is_relevant(sq, e)]
             if len(relevant) >= self.min_evidence_per_sub_question:
                 covered.append(sq.id)
-                supported_evidence_ids[sq.id] = [
-                    item.evidence_id for item in relevant
-                ]
+                supported_evidence_ids[sq.id] = [item.evidence_id for item in relevant]
                 # Check required evidence keywords lightly
                 for req in sq.required_evidence:
                     if not self._requirement_covered(req, relevant):
@@ -330,9 +328,7 @@ class Verifier:
                 out.append(eid)
         return out
 
-    def _check_diversity(
-        self, plan: QueryPlan, ledger: EvidenceLedger
-    ) -> tuple[bool, str]:
+    def _check_diversity(self, plan: QueryPlan, ledger: EvidenceLedger) -> tuple[bool, str]:
         papers = {e.paper_id for e in ledger.items}
         need = max(plan.expected_source_diversity, self.min_source_diversity)
         # Only enforce multi-source diversity for comparison/synthesis

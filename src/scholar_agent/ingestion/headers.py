@@ -46,7 +46,9 @@ def detect_repeated_edges(
     return {line for line, count in counter.items() if count >= threshold}
 
 
-def strip_headers_footers(pages: list[PaperPage], repeated: set[str] | None = None) -> list[PaperPage]:
+def strip_headers_footers(
+    pages: list[PaperPage], repeated: set[str] | None = None
+) -> list[PaperPage]:
     """Return pages with repeated header/footer lines removed."""
     if repeated is None:
         repeated = detect_repeated_edges(pages)
