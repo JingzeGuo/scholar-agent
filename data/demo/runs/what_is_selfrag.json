@@ -1,0 +1,200 @@
+{
+  "demo_id": "what_is_selfrag",
+  "title": "What is Self-RAG? (factual)",
+  "query": "What is Self-RAG?",
+  "settings": {
+    "compare_naive_rag": true,
+    "enable_graph": false,
+    "enable_corrective": false,
+    "static_routing": false,
+    "verified_evidence_only": true,
+    "embedding_backend": "hash",
+    "max_corrective_iterations": 2,
+    "top_k": 8,
+    "use_llm": false,
+    "max_total_tool_calls": 12
+  },
+  "created_at": "2026-07-12T08:58:28+00:00",
+  "offline": true,
+  "notes": "Simple single-paper factual path with page-traceable source card.",
+  "session": {
+    "run_id": "run_demo_what_is_selfrag",
+    "query": "What is Self-RAG?",
+    "settings": {
+      "compare_naive_rag": true,
+      "enable_graph": false,
+      "enable_corrective": false,
+      "static_routing": false,
+      "verified_evidence_only": true,
+      "embedding_backend": "hash",
+      "max_corrective_iterations": 2,
+      "top_k": 8,
+      "use_llm": false,
+      "max_total_tool_calls": 12
+    },
+    "offline_replay": true,
+    "answer_markdown": "## Answer\n\n**Question:** What is Self-RAG?\n\n### Claims\n\n- Self-RAG retrieves on demand and critiques with reflection tokens [paper_arxiv_2310_11511 p.1]\n",
+    "claims": [
+      {
+        "claim_id": "claim_1",
+        "text": "Self-RAG retrieves on demand and critiques with reflection tokens.",
+        "evidence_ids": [
+          "ev_def"
+        ]
+      }
+    ],
+    "source_cards": [
+      {
+        "evidence_id": "ev_def",
+        "paper_id": "paper_arxiv_2310_11511",
+        "chunk_id": "chunk_selfrag_def",
+        "page_start": 1,
+        "page_end": 1,
+        "snippet": "Self-RAG learns to retrieve, generate, and critique through self-reflection.",
+        "retrieval_method": "hybrid_rerank",
+        "title": "Self-RAG",
+        "pdf_path": "data/papers/2310.11511.pdf"
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "ev_def",
+        "sub_question_id": "sq_0",
+        "claim": "Self-RAG retrieves on demand and critiques with reflection tokens.",
+        "evidence_text": "Self-RAG learns to retrieve, generate, and critique through self-reflection.",
+        "paper_id": "paper_arxiv_2310_11511",
+        "chunk_id": "chunk_selfrag_def",
+        "page_start": 1,
+        "page_end": 1,
+        "retrieval_method": "hybrid_rerank",
+        "retrieval_score": null,
+        "rerank_score": null,
+        "support_score": null,
+        "contradiction": false
+      }
+    ],
+    "plan": {
+      "original_query": "What is Self-RAG?",
+      "answer_type": "factual",
+      "sub_questions": [
+        {
+          "id": "sq_0",
+          "question": "What is Self-RAG?",
+          "query_type": "semantic",
+          "required_evidence": [],
+          "status": "covered"
+        }
+      ],
+      "expected_source_diversity": 1
+    },
+    "verification": {
+      "is_sufficient": true,
+      "coverage_score": 1.0,
+      "covered_sub_questions": [
+        "sq_0"
+      ],
+      "supported_evidence_ids": {},
+      "missing_sub_questions": [],
+      "unsupported_claims": [],
+      "conflicting_evidence_ids": [],
+      "missing_aspects": [],
+      "corrective_queries": [],
+      "corrective_actions": [],
+      "unanswerable": false,
+      "rationale_summary": "Definition evidence found."
+    },
+    "final_answer": {
+      "markdown": "## Answer\n\n**Question:** What is Self-RAG?\n\n### Claims\n\n- Self-RAG retrieves on demand and critiques with reflection tokens [paper_arxiv_2310_11511 p.1]\n",
+      "claims": [
+        {
+          "claim_id": "claim_1",
+          "text": "Self-RAG retrieves on demand and critiques with reflection tokens.",
+          "evidence_ids": [
+            "ev_def"
+          ]
+        }
+      ],
+      "sources": [
+        "Self-RAG [paper_arxiv_2310_11511] p.1 (chunk=chunk_selfrag_def, evidence=ev_def) · PDF=data/papers/2310.11511.pdf"
+      ],
+      "source_cards": [
+        {
+          "evidence_id": "ev_def",
+          "paper_id": "paper_arxiv_2310_11511",
+          "chunk_id": "chunk_selfrag_def",
+          "page_start": 1,
+          "page_end": 1,
+          "snippet": "Self-RAG learns to retrieve, generate, and critique through self-reflection.",
+          "retrieval_method": "hybrid_rerank",
+          "title": "Self-RAG",
+          "pdf_path": "data/papers/2310.11511.pdf"
+        }
+      ],
+      "citation_report": {
+        "is_valid": true,
+        "issues": [],
+        "cited_evidence_ids": [
+          "ev_def"
+        ],
+        "cited_paper_ids": [
+          "paper_arxiv_2310_11511"
+        ]
+      },
+      "corpus_insufficient": false
+    },
+    "events": [
+      {
+        "event_id": "evt_86ad17d170bb",
+        "run_id": "run_demo_what_is_selfrag",
+        "event_type": "run_finished",
+        "timestamp": "2026-07-12T08:58:28+00:00",
+        "component": "workflow",
+        "summary": "workflow finished: evidence_sufficient",
+        "payload": {}
+      }
+    ],
+    "trace": {
+      "query_type": "semantic",
+      "answer_type": "factual",
+      "sub_questions": [
+        {
+          "id": "sq_0",
+          "question": "What is Self-RAG?",
+          "status": "covered",
+          "query_type": "semantic"
+        }
+      ],
+      "tool_events": [],
+      "retrieval_methods": [
+        "hybrid_rerank"
+      ],
+      "evidence_count": 1,
+      "verified_evidence_count": 1,
+      "coverage_score": 1.0,
+      "is_sufficient": true,
+      "corrective_iterations": 0,
+      "corrective_queries": [],
+      "conflicting_evidence_ids": [],
+      "citation_valid": true,
+      "citation_issue_count": 0,
+      "terminated_reason": "evidence_sufficient",
+      "unanswerable": false,
+      "latency_ms": 180,
+      "tool_call_count": 2,
+      "token_estimate": 400
+    },
+    "naive": {
+      "answer": "Self-RAG retrieves on demand… [paper_arxiv_2310_11511 p.1]",
+      "method": "naive_rag:hybrid_rerank",
+      "citations": [],
+      "hit_count": 3,
+      "latency_ms": 40,
+      "used_llm": false
+    },
+    "status": {
+      "ok": true,
+      "offline_fixture": true
+    },
+    "error": null
+  }
+}

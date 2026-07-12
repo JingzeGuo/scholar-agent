@@ -1,0 +1,337 @@
+{
+  "demo_id": "selfrag_vs_crag",
+  "title": "Self-RAG vs CRAG (corrective loop)",
+  "query": "Compare Self-RAG versus CRAG",
+  "settings": {
+    "compare_naive_rag": true,
+    "enable_graph": true,
+    "enable_corrective": true,
+    "static_routing": false,
+    "verified_evidence_only": true,
+    "embedding_backend": "hash",
+    "max_corrective_iterations": 2,
+    "top_k": 8,
+    "use_llm": false,
+    "max_total_tool_calls": 12
+  },
+  "created_at": "2026-07-12T08:58:28+00:00",
+  "offline": true,
+  "notes": "Shows corrective iteration when one comparison side is initially missing.",
+  "session": {
+    "run_id": "run_demo_selfrag_crag",
+    "query": "Compare Self-RAG versus CRAG",
+    "settings": {
+      "compare_naive_rag": true,
+      "enable_graph": true,
+      "enable_corrective": true,
+      "static_routing": false,
+      "verified_evidence_only": true,
+      "embedding_backend": "hash",
+      "max_corrective_iterations": 2,
+      "top_k": 8,
+      "use_llm": false,
+      "max_total_tool_calls": 12
+    },
+    "offline_replay": true,
+    "answer_markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1-2]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1-2]\n",
+    "claims": [
+      {
+        "claim_id": "claim_1",
+        "text": "Self-RAG uses reflection tokens to retrieve on demand.",
+        "evidence_ids": [
+          "ev_selfrag"
+        ]
+      },
+      {
+        "claim_id": "claim_2",
+        "text": "CRAG evaluates retrieved documents and triggers corrective retrieval.",
+        "evidence_ids": [
+          "ev_crag"
+        ]
+      }
+    ],
+    "source_cards": [
+      {
+        "evidence_id": "ev_selfrag",
+        "paper_id": "paper_arxiv_2310_11511",
+        "chunk_id": "chunk_selfrag_demo",
+        "page_start": 1,
+        "page_end": 2,
+        "snippet": "Self-RAG retrieves on demand and uses reflection tokens to critique generation quality.",
+        "retrieval_method": "hybrid_rerank",
+        "title": "Self-RAG",
+        "pdf_path": "data/papers/2310.11511.pdf"
+      },
+      {
+        "evidence_id": "ev_crag",
+        "paper_id": "paper_arxiv_2401_15884",
+        "chunk_id": "chunk_crag_demo",
+        "page_start": 1,
+        "page_end": 2,
+        "snippet": "Corrective Retrieval Augmented Generation (CRAG) evaluates retrieved documents and triggers corrective retrieval when quality is low.",
+        "retrieval_method": "hybrid_rerank",
+        "title": "CRAG",
+        "pdf_path": "data/papers/2401.15884.pdf"
+      }
+    ],
+    "evidence": [
+      {
+        "evidence_id": "ev_selfrag",
+        "sub_question_id": "sq_0",
+        "claim": "Self-RAG uses reflection tokens to retrieve on demand.",
+        "evidence_text": "Self-RAG retrieves on demand and uses reflection tokens to critique generation quality.",
+        "paper_id": "paper_arxiv_2310_11511",
+        "chunk_id": "chunk_selfrag_demo",
+        "page_start": 1,
+        "page_end": 2,
+        "retrieval_method": "hybrid_rerank",
+        "retrieval_score": 0.91,
+        "rerank_score": null,
+        "support_score": null,
+        "contradiction": false
+      },
+      {
+        "evidence_id": "ev_crag",
+        "sub_question_id": "sq_1",
+        "claim": "CRAG evaluates retrieved documents and triggers corrective retrieval.",
+        "evidence_text": "Corrective Retrieval Augmented Generation (CRAG) evaluates retrieved documents and triggers corrective retrieval when quality is low.",
+        "paper_id": "paper_arxiv_2401_15884",
+        "chunk_id": "chunk_crag_demo",
+        "page_start": 1,
+        "page_end": 2,
+        "retrieval_method": "hybrid_rerank",
+        "retrieval_score": 0.88,
+        "rerank_score": null,
+        "support_score": null,
+        "contradiction": false
+      }
+    ],
+    "plan": {
+      "original_query": "Compare Self-RAG versus CRAG",
+      "answer_type": "comparison",
+      "sub_questions": [
+        {
+          "id": "sq_0",
+          "question": "What is Self-RAG?",
+          "query_type": "comparison",
+          "required_evidence": [
+            "definition"
+          ],
+          "status": "covered"
+        },
+        {
+          "id": "sq_1",
+          "question": "What is CRAG?",
+          "query_type": "comparison",
+          "required_evidence": [
+            "definition"
+          ],
+          "status": "covered"
+        }
+      ],
+      "expected_source_diversity": 2
+    },
+    "verification": {
+      "is_sufficient": true,
+      "coverage_score": 1.0,
+      "covered_sub_questions": [
+        "sq_0",
+        "sq_1"
+      ],
+      "supported_evidence_ids": {},
+      "missing_sub_questions": [],
+      "unsupported_claims": [],
+      "conflicting_evidence_ids": [],
+      "missing_aspects": [],
+      "corrective_queries": [
+        "CRAG corrective retrieval evaluator"
+      ],
+      "corrective_actions": [],
+      "unanswerable": false,
+      "rationale_summary": "Both comparison sides covered after one corrective pass."
+    },
+    "final_answer": {
+      "markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1-2]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1-2]\n",
+      "claims": [
+        {
+          "claim_id": "claim_1",
+          "text": "Self-RAG uses reflection tokens to retrieve on demand.",
+          "evidence_ids": [
+            "ev_selfrag"
+          ]
+        },
+        {
+          "claim_id": "claim_2",
+          "text": "CRAG evaluates retrieved documents and triggers corrective retrieval.",
+          "evidence_ids": [
+            "ev_crag"
+          ]
+        }
+      ],
+      "sources": [
+        "Self-RAG [paper_arxiv_2310_11511] p.1-2 (chunk=chunk_selfrag_demo, evidence=ev_selfrag) · PDF=data/papers/2310.11511.pdf",
+        "CRAG [paper_arxiv_2401_15884] p.1-2 (chunk=chunk_crag_demo, evidence=ev_crag) · PDF=data/papers/2401.15884.pdf"
+      ],
+      "source_cards": [
+        {
+          "evidence_id": "ev_selfrag",
+          "paper_id": "paper_arxiv_2310_11511",
+          "chunk_id": "chunk_selfrag_demo",
+          "page_start": 1,
+          "page_end": 2,
+          "snippet": "Self-RAG retrieves on demand and uses reflection tokens to critique generation quality.",
+          "retrieval_method": "hybrid_rerank",
+          "title": "Self-RAG",
+          "pdf_path": "data/papers/2310.11511.pdf"
+        },
+        {
+          "evidence_id": "ev_crag",
+          "paper_id": "paper_arxiv_2401_15884",
+          "chunk_id": "chunk_crag_demo",
+          "page_start": 1,
+          "page_end": 2,
+          "snippet": "Corrective Retrieval Augmented Generation (CRAG) evaluates retrieved documents and triggers corrective retrieval when quality is low.",
+          "retrieval_method": "hybrid_rerank",
+          "title": "CRAG",
+          "pdf_path": "data/papers/2401.15884.pdf"
+        }
+      ],
+      "citation_report": {
+        "is_valid": true,
+        "issues": [],
+        "cited_evidence_ids": [
+          "ev_selfrag",
+          "ev_crag"
+        ],
+        "cited_paper_ids": [
+          "paper_arxiv_2310_11511",
+          "paper_arxiv_2401_15884"
+        ]
+      },
+      "corpus_insufficient": false
+    },
+    "events": [
+      {
+        "event_id": "evt_8e8f68c0d356",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "plan_created",
+        "timestamp": "2026-07-12T08:58:28+00:00",
+        "component": "planner",
+        "summary": "plan answer_type=comparison sub_questions=2",
+        "payload": {}
+      },
+      {
+        "event_id": "evt_8e915721c03a",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "tool_result",
+        "timestamp": "2026-07-12T08:58:28+00:00",
+        "component": "researcher",
+        "summary": "hybrid_rerank hits for Self-RAG",
+        "payload": {
+          "method": "hybrid_rerank",
+          "tool_name": "hybrid_search"
+        }
+      },
+      {
+        "event_id": "evt_5890a5db884f",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "verification",
+        "timestamp": "2026-07-12T08:58:28+00:00",
+        "component": "verifier",
+        "summary": "missing CRAG side",
+        "payload": {
+          "is_sufficient": false
+        }
+      },
+      {
+        "event_id": "evt_41c6e0c6bb14",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "corrective",
+        "timestamp": "2026-07-12T08:58:28+00:00",
+        "component": "workflow",
+        "summary": "corrective iteration 1: 1 queries",
+        "payload": {}
+      },
+      {
+        "event_id": "evt_2ef717779b00",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "citation_validated",
+        "timestamp": "2026-07-12T08:58:28+00:00",
+        "component": "citation_validator",
+        "summary": "citation valid=True claims=2",
+        "payload": {
+          "is_valid": true
+        }
+      },
+      {
+        "event_id": "evt_ad37c53f6d18",
+        "run_id": "run_demo_selfrag_crag",
+        "event_type": "run_finished",
+        "timestamp": "2026-07-12T08:58:28+00:00",
+        "component": "workflow",
+        "summary": "workflow finished: evidence_sufficient",
+        "payload": {}
+      }
+    ],
+    "trace": {
+      "query_type": "comparison",
+      "answer_type": "comparison",
+      "sub_questions": [
+        {
+          "id": "sq_0",
+          "question": "What is Self-RAG?",
+          "status": "covered",
+          "query_type": "comparison"
+        },
+        {
+          "id": "sq_1",
+          "question": "What is CRAG?",
+          "status": "covered",
+          "query_type": "comparison"
+        }
+      ],
+      "tool_events": [
+        {
+          "event_type": "tool_result",
+          "component": "researcher",
+          "summary": "hybrid_rerank hits",
+          "payload": {
+            "method": "hybrid_rerank"
+          }
+        }
+      ],
+      "retrieval_methods": [
+        "hybrid_rerank"
+      ],
+      "evidence_count": 2,
+      "verified_evidence_count": 2,
+      "coverage_score": 1.0,
+      "is_sufficient": true,
+      "corrective_iterations": 1,
+      "corrective_queries": [
+        "CRAG corrective retrieval evaluator"
+      ],
+      "conflicting_evidence_ids": [],
+      "citation_valid": true,
+      "citation_issue_count": 0,
+      "terminated_reason": "evidence_sufficient",
+      "unanswerable": false,
+      "latency_ms": 420,
+      "tool_call_count": 4,
+      "token_estimate": 900
+    },
+    "naive": {
+      "answer": "Evidence notes (Naive RAG):\n- [paper_arxiv_2310_11511 p.1] Self-RAG retrieves on demand…\n",
+      "method": "naive_rag:hybrid_rerank",
+      "citations": [],
+      "hit_count": 4,
+      "latency_ms": 55,
+      "used_llm": false
+    },
+    "status": {
+      "ok": true,
+      "offline_fixture": true
+    },
+    "error": null
+  }
+}

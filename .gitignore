@@ -69,7 +69,7 @@ data/evaluation/**
 
 # Logs and run outputs
 logs/
-runs/
+/runs/
 outputs/
 *.log
 
