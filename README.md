@@ -6,7 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–7 implemented (through Writer + citation validator).
+**Status:** Phases 0–8 implemented (through evaluation framework).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -70,6 +70,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Citation validator checks canonical chunks, physical PDFs/pages, and claim support
 - Source cards + reference list include paper titles and local PDF paths
 
+### Phase 8
+
+- Frozen 50-question evaluation split (fingerprint-locked)
+- Baselines/ablations: dense, hybrid, rerank, graph, corrective, full agent, static tools
+- Deterministic retrieval + citation + answer metrics; optional RAGAS (`--ragas`)
+- Reports: JSON/CSV, per-category tables, SVG charts, failure log + notebook
+
 ## Quick start
 
 ```bash
@@ -110,6 +117,8 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent retrieve "Self-RAG HotpotQA" --mode graph` | Graph retrieval |
 | `uv run scholar-agent research "Compare Self-RAG and CRAG"` | Research Agent loop |
 | `uv run scholar-agent ask "Compare Self-RAG versus CRAG"` | Full plan→verify→write→cite loop |
+| `uv run scholar-agent evaluate --max-questions 5 --embedding-backend hash` | Frozen-split ablation smoke |
+| `make evaluate-smoke` / `make evaluate` | Evaluation shortcuts |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 
@@ -127,7 +136,9 @@ uv run scholar-agent corpus summary -m data/corpus_manifest.jsonl
 - Manifest: `data/corpus_manifest.jsonl` (metadata + content hashes)
 - PDFs: `data/papers/{arxiv_id}.pdf`
 
-Later phases add the evaluation framework and Streamlit demo.
+Later phases add the Streamlit demo and portfolio hardening.
+
+Evaluation details: [`docs/evaluation.md`](docs/evaluation.md).
 
 ## Project layout
 

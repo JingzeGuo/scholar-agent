@@ -1,4 +1,5 @@
-# Evaluation configuration (skeleton for later phases)
+# Evaluation configuration (Phase 8)
+# All systems run on the identical frozen split under data/evaluation/.
 
 dataset:
   questions_path: data/evaluation/questions.jsonl
@@ -6,11 +7,13 @@ dataset:
   frozen_split_path: data/evaluation/frozen_split.json
 
 systems:
-  - naive_rag
+  - naive_dense
   - hybrid_rag
   - hybrid_rerank
   - hybrid_graph
+  - hybrid_corrective
   - full_agent
+  - static_all_tools
 
 metrics:
   retrieval:
@@ -20,13 +23,22 @@ metrics:
   citation:
     - citation_precision
     - citation_recall
+    - citation_validity_rate
+    - page_traceability_rate
     - unsupported_claim_rate
   answer:
-    - ragas_faithfulness
+    - claim_overlap
+    - token_f1
+    - refusal_correct
+    - faithfulness_proxy
+    - ragas_faithfulness   # optional (--ragas)
     - ragas_answer_relevancy
-    - human_review_subset
 
 budgets:
   max_questions: 50
   max_latency_ms_per_question: 120000
   use_live_llm: false
+
+output:
+  dir: outputs/evaluation
+  write_charts: true

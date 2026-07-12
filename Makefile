@@ -68,6 +68,19 @@ research-demo:
 ask-demo:
 	uv run scholar-agent ask "Compare Self-RAG versus CRAG" --max-iterations 2
 
+evaluate-smoke:
+	uv run scholar-agent evaluate \
+		--system naive_dense --system hybrid_rerank \
+		--max-questions 5 \
+		--embedding-backend hash \
+		--output-dir outputs/evaluation/smoke
+
+evaluate:
+	uv run scholar-agent evaluate \
+		--eval-config configs/evaluation.yaml \
+		--embedding-backend hash \
+		--output-dir outputs/evaluation
+
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

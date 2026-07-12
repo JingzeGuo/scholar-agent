@@ -83,6 +83,7 @@ filterwarnings = [
 target-version = "py311"
 line-length = 100
 src = ["src", "tests", "scripts"]
+extend-exclude = ["notebooks", "outputs", "data"]
 
 [tool.ruff.lint]
 select = [
@@ -131,6 +132,10 @@ module = [
     "numpy.*",
     "networkx",
     "networkx.*",
+    "ragas",
+    "ragas.*",
+    "datasets",
+    "datasets.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

@@ -330,8 +330,40 @@ PDF page; unsupported claims are removed or qualified.
 
 ---
 
+## Phase 8
+
+### ADR-030: Frozen 50-question split with fingerprint
+
+**Decision:** Evaluation questions live under `data/evaluation/` with a
+SHA-256 fingerprint in `frozen_split.json`. Loaders refuse silent drift between
+JSONL files and the freeze record. Type mix is fixed (10/10/15/10/5). Gold labels
+use stable `paper_id` plus resolved `chunk_id`/pages from the processed corpus at
+freeze time (`scripts/build_eval_dataset.py`).
+
+**Rationale:** Plan §11.1 and Phase-8 acceptance — identical split for every system.
+
+### ADR-031: Offline-first metrics; optional RAGAS
+
+**Decision:** Default evaluation computes deterministic retrieval (Recall@K, MRR,
+nDCG), citation (precision/recall/validity/page traceability), and answer
+(token/claim overlap, refusal accuracy, faithfulness proxy) metrics without paid
+APIs. RAGAS is an optional extra (`scholar-agent[eval]` + `--ragas`) that degrades
+gracefully when unavailable.
+
+**Rationale:** Core tests and CI must stay free of live provider calls.
+
+### ADR-032: Shared SystemRunner for all ablations
+
+**Decision:** `naive_dense`, `hybrid_rag`, `hybrid_rerank`, `hybrid_graph`,
+`hybrid_corrective`, `full_agent`, and `static_all_tools` all implement the same
+`SystemOutput` contract and are scored by one ablation harness. Latency, tool
+counts, token estimates, and optional USD cost are recorded per question×system.
+
+**Rationale:** Plan §11.2 systems compared + operational metrics in §11.3.
+
+---
+
 ## Pending (later phases)
 
-- Evaluation framework (Phase 8)
 - Streamlit demo (Phase 9)
 - Hardening and portfolio docs (Phase 10)

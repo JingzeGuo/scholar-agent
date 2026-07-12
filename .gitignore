@@ -50,6 +50,10 @@ data/indexes/**
 data/evaluation/**
 !data/evaluation/.gitkeep
 !data/evaluation/fixtures/**
+# Frozen eval split is source-of-truth for Phase 8 (commit these)
+!data/evaluation/questions.jsonl
+!data/evaluation/reference_evidence.jsonl
+!data/evaluation/frozen_split.json
 !tests/fixtures/**
 
 # Model caches (do not ignore src/scholar_agent/models package)

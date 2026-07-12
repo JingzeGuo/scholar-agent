@@ -8,6 +8,7 @@ Phase 4: knowledge graph build / inspect / graph retrieval.
 Phase 5: adaptive routing + Research Agent tool loop.
 Phase 6: Planner, Verifier, and corrective LangGraph workflow.
 Phase 7: Evidence-constrained Writer + citation validator.
+Phase 8: Evaluation framework (frozen split, ablations, metrics).
 """
 
 from __future__ import annotations
@@ -793,6 +794,124 @@ def ask_cmd(
                 f"{item.retrieval_method}: {item.claim[:120]}",
                 markup=False,
             )
+
+
+_EVAL_CONFIG_OPT = typer.Option(
+    None,
+    "--eval-config",
+    help="Path to configs/evaluation.yaml",
+    exists=False,
+)
+_EVAL_SYSTEMS_OPT = typer.Option(
+    None,
+    "--system",
+    help="System to run (repeatable). Default: all systems in eval config.",
+)
+_EVAL_MAX_Q_OPT = typer.Option(
+    None,
+    "--max-questions",
+    help="Limit number of frozen questions (debug smoke runs)",
+)
+_EVAL_OUT_OPT = typer.Option(
+    None,
+    "--output-dir",
+    help="Directory for results JSON/CSV/charts (default: outputs/evaluation)",
+)
+_EVAL_RAGAS_OPT = typer.Option(
+    False,
+    "--ragas",
+    help="Enable optional RAGAS metrics (requires scholar-agent[eval] + LLM)",
+)
+_EVAL_LLM_OPT = typer.Option(
+    False,
+    "--llm",
+    help="Use live LLM for Naive RAG generation (default: extractive)",
+)
+_EVAL_TOP_K_OPT = typer.Option(8, "--k", help="Top-k for retrieval metrics")
+_EVAL_NO_CHARTS_OPT = typer.Option(False, "--no-charts", help="Skip SVG chart generation")
+
+
+@app.command("evaluate")
+def evaluate_cmd(
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    eval_config: Path | None = _EVAL_CONFIG_OPT,
+    system: list[str] | None = _EVAL_SYSTEMS_OPT,
+    max_questions: int | None = _EVAL_MAX_Q_OPT,
+    output_dir: Path | None = _EVAL_OUT_OPT,
+    embedding_backend: str = _EMBED_BACKEND_OPT,
+    top_k: int = _EVAL_TOP_K_OPT,
+    use_ragas: bool = _EVAL_RAGAS_OPT,
+    use_llm: bool = _EVAL_LLM_OPT,
+    no_charts: bool = _EVAL_NO_CHARTS_OPT,
+    json_output: bool = _JSON_OPT,
+) -> None:
+    """Run frozen-split ablations (Phase 8). Offline deterministic by default."""
+    from scholar_agent.evaluation.runner import run_evaluation
+
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    if embedding_backend not in {"auto", "hash", "st"}:
+        embedding_backend = "hash"
+    result = run_evaluation(
+        config=cfg,
+        eval_config_path=eval_config,
+        systems=list(system) if system else None,
+        max_questions=max_questions,
+        embedding_backend=embedding_backend,
+        top_k=top_k,
+        use_ragas=use_ragas,
+        use_llm=use_llm,
+        output_dir=output_dir,
+        write_charts=not no_charts,
+    )
+    if json_output:
+        console.print_json(
+            json.dumps(
+                {
+                    "run_id": result.report.run_id,
+                    "fingerprint": result.dataset_fingerprint,
+                    "n_questions": result.n_questions,
+                    "systems": result.systems,
+                    "output_paths": result.output_paths,
+                    "aggregate": [
+                        s.model_dump(mode="json") for s in result.report.systems
+                    ],
+                }
+            )
+        )
+        return
+
+    console.print(f"[bold]run_id[/bold]: {result.report.run_id}")
+    console.print(f"[bold]fingerprint[/bold]: {result.dataset_fingerprint}")
+    console.print(
+        f"[bold]questions[/bold]: {result.n_questions}  "
+        f"systems={', '.join(result.systems)}"
+    )
+    table = Table(title="Aggregate metrics")
+    table.add_column("system", style="cyan")
+    table.add_column("recall@paper")
+    table.add_column("mrr")
+    table.add_column("cite_p")
+    table.add_column("token_f1")
+    table.add_column("latency_ms")
+    table.add_column("tools")
+    for s in result.report.systems:
+        table.add_row(
+            s.system,
+            f"{s.recall_at_k_paper:.3f}",
+            f"{s.mrr:.3f}",
+            f"{s.citation_precision:.3f}",
+            f"{s.token_f1:.3f}",
+            f"{s.avg_latency_ms:.0f}",
+            f"{s.avg_tool_calls:.2f}",
+        )
+    console.print(table)
+    console.print(f"[bold]outputs[/bold]: {result.output_paths.get('results_json')}")
+    if result.report.failures:
+        console.print(
+            f"[yellow]failures logged[/yellow]: {len(result.report.failures)} "
+            f"→ {result.output_paths.get('failures_json')}"
+        )
 
 
 def main() -> None:
