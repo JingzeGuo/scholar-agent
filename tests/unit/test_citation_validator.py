@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pymupdf
+
 from scholar_agent.agents.citation_validator import CitationValidator
 from scholar_agent.models.answer import ClaimWithCitations, DraftAnswer
+from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
+from scholar_agent.retrieval.chunk_store import ChunkStore
 
 
 def _item(
@@ -31,6 +37,46 @@ def _item(
     )
 
 
+def _strict_validator(
+    tmp_path: Path,
+    item: EvidenceItem,
+    *,
+    actual_pages: int = 1,
+    declared_pages: int | None = None,
+    chunk_text: str | None = None,
+) -> tuple[CitationValidator, Path]:
+    pdf_path = tmp_path / f"{item.paper_id}.pdf"
+    document = pymupdf.open()
+    for _ in range(actual_pages):
+        document.new_page()
+    document.save(pdf_path)
+    document.close()
+    chunk = Chunk(
+        chunk_id=item.chunk_id,
+        paper_id=item.paper_id,
+        text=chunk_text or item.evidence_text,
+        page_start=item.page_start,
+        page_end=item.page_end,
+        token_count=10,
+        content_hash="abc12345",
+    )
+    paper = Paper(
+        paper_id=item.paper_id,
+        title="Verified source paper",
+        pdf_path=str(pdf_path),
+        content_hash="def67890",
+        page_count=declared_pages or actual_pages,
+    )
+    store = ChunkStore([chunk], [paper])
+    return (
+        CitationValidator(
+            provenance_store=store,
+            require_pdf_provenance=True,
+        ),
+        pdf_path,
+    )
+
+
 def test_nonexistent_evidence_id_is_rejected() -> None:
     ledger = EvidenceLedger(items=[_item(evidence_id="ev_real")])
     draft = DraftAnswer(
@@ -51,7 +97,7 @@ def test_nonexistent_evidence_id_is_rejected() -> None:
     assert "ev_ghost" not in final.citation_report.cited_evidence_ids
 
 
-def test_every_source_maps_to_paper_and_page() -> None:
+def test_every_source_maps_to_real_pdf_and_page(tmp_path: Path) -> None:
     ledger = EvidenceLedger(
         items=[
             _item(
@@ -72,7 +118,12 @@ def test_every_source_maps_to_paper_and_page() -> None:
             )
         ]
     )
-    final = CitationValidator().validate(draft, ledger)
+    validator, pdf_path = _strict_validator(
+        tmp_path,
+        ledger.items[0],
+        actual_pages=6,
+    )
+    final = validator.validate(draft, ledger)
     assert final.citation_report is not None
     assert final.citation_report.is_valid
     assert final.source_cards
@@ -81,8 +132,62 @@ def test_every_source_maps_to_paper_and_page() -> None:
     assert card.chunk_id == "chunk_1"
     assert card.page_start == 5
     assert card.page_end == 6
+    assert card.title == "Verified source paper"
+    assert card.pdf_path == str(pdf_path)
     assert "paper_a" in final.sources[0]
     assert "p.5-6" in final.sources[0] or "p.5" in final.sources[0]
+
+
+def test_page_outside_physical_pdf_is_rejected(tmp_path: Path) -> None:
+    item = _item(evidence_id="ev_1", page_start=2, page_end=2)
+    ledger = EvidenceLedger(items=[item])
+    validator, _ = _strict_validator(
+        tmp_path,
+        item,
+        actual_pages=1,
+        declared_pages=2,
+    )
+    draft = DraftAnswer(
+        claims=[
+            ClaimWithCitations(
+                claim_id="claim_1",
+                text="Self-RAG retrieves on demand.",
+                evidence_ids=["ev_1"],
+            )
+        ]
+    )
+    final = validator.validate(draft, ledger)
+    assert not final.claims
+    assert any(
+        "pdf page count" in issue.message.lower()
+        for issue in final.citation_report.issues  # type: ignore[union-attr]
+    )
+
+
+def test_evidence_text_must_map_to_canonical_chunk(tmp_path: Path) -> None:
+    item = _item(evidence_id="ev_1")
+    ledger = EvidenceLedger(items=[item])
+    validator, _ = _strict_validator(
+        tmp_path,
+        item,
+        actual_pages=3,
+        chunk_text="A different canonical passage.",
+    )
+    draft = DraftAnswer(
+        claims=[
+            ClaimWithCitations(
+                claim_id="claim_1",
+                text="Self-RAG retrieves on demand.",
+                evidence_ids=["ev_1"],
+            )
+        ]
+    )
+    final = validator.validate(draft, ledger)
+    assert not final.claims
+    assert any(
+        "canonical chunk" in issue.message.lower()
+        for issue in final.citation_report.issues  # type: ignore[union-attr]
+    )
 
 
 def test_unsupported_claim_removed() -> None:
@@ -188,3 +293,48 @@ def test_supported_claim_passes() -> None:
     assert final.citation_report.is_valid
     assert len(final.claims) == 1
     assert "paper_self_rag" in final.markdown
+
+
+def test_overlap_does_not_hide_wrong_number_or_polarity() -> None:
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                evidence_id="ev_1",
+                claim="Method A underperforms B by 3 percent.",
+                evidence_text="Method A underperforms B by 3 percent on the benchmark.",
+            )
+        ]
+    )
+    draft = DraftAnswer(
+        claims=[
+            ClaimWithCitations(
+                claim_id="claim_wrong",
+                text="Method A outperforms B by 30 percent on the benchmark.",
+                evidence_ids=["ev_1"],
+            )
+        ]
+    )
+    final = CitationValidator().validate(draft, ledger)
+    assert not final.claims
+    assert any(
+        "does not support" in issue.message.lower()
+        for issue in final.citation_report.issues  # type: ignore[union-attr]
+    )
+
+
+def test_matching_negative_polarity_is_supported() -> None:
+    text = "The retrieval strategy is ineffective on the adversarial benchmark."
+    ledger = EvidenceLedger(
+        items=[_item(evidence_id="ev_1", claim=text, evidence_text=text)]
+    )
+    draft = DraftAnswer(
+        claims=[
+            ClaimWithCitations(
+                claim_id="claim_negative",
+                text=text,
+                evidence_ids=["ev_1"],
+            )
+        ]
+    )
+    final = CitationValidator().validate(draft, ledger)
+    assert len(final.claims) == 1

@@ -46,7 +46,7 @@ User query
 | Router | `scholar_agent.retrieval.router` | Query type → retrieval policy |
 | Research Agent | `scholar_agent.agents.researcher` | Adaptive tool loop + bounded safe fan-out + evidence ledger |
 | Planner / Verifier / Workflow | `agents/planner.py`, `verifier.py`, `workflow.py` | Target-bound corrective loop + exhaustive termination |
-| Writer / Citation validator | `agents/writer.py`, `citation_validator.py` | Claim→evidence draft, page citations, repair + source cards |
+| Writer / Citation validator | `agents/writer.py`, `citation_validator.py` | Verified-evidence claims + canonical PDF/page validation |
 | CLI | `scholar_agent.cli` | `ask`, `research`, `retrieve`, `graph`, … |
 
 ## Prototype loop

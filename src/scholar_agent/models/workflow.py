@@ -30,6 +30,7 @@ class VerificationResult(BaseModel):
     is_sufficient: bool
     coverage_score: float = Field(ge=0.0, le=1.0)
     covered_sub_questions: list[str] = Field(default_factory=list)
+    supported_evidence_ids: dict[str, list[str]] = Field(default_factory=dict)
     missing_sub_questions: list[str] = Field(default_factory=list)
     unsupported_claims: list[str] = Field(default_factory=list)
     conflicting_evidence_ids: list[str] = Field(default_factory=list)

@@ -129,8 +129,13 @@ class Writer:
                 "claims below are limited to available evidence."
             )
 
-        claims = self._build_claims(query=query, plan=plan, ledger=ledger)
-        if not claims and not ledger.items:
+        writing_ledger = self._verified_ledger(ledger, verification)
+        claims = self._build_claims(
+            query=query,
+            plan=plan,
+            ledger=writing_ledger,
+        )
+        if not claims:
             insufficient = True
             notes.append("No verified evidence was available for writing.")
             draft = DraftAnswer(
@@ -147,7 +152,7 @@ class Writer:
             query=query,
             answer_format=fmt,
             claims=claims,
-            ledger=ledger,
+            ledger=writing_ledger,
             notes=notes,
             corpus_insufficient=insufficient,
             verification=verification,
@@ -164,6 +169,23 @@ class Writer:
             insufficient,
         )
         return draft
+
+    def _verified_ledger(
+        self,
+        ledger: EvidenceLedger,
+        verification: VerificationResult | None,
+    ) -> EvidenceLedger:
+        """Restrict workflow writing to evidence the Verifier actually accepted."""
+        if verification is None:
+            return ledger
+        allowed = {
+            evidence_id
+            for ids in verification.supported_evidence_ids.values()
+            for evidence_id in ids
+        }
+        return EvidenceLedger(
+            items=[item for item in ledger.items if item.evidence_id in allowed]
+        )
 
     def _build_claims(
         self,
@@ -207,15 +229,17 @@ class Writer:
             selected = self._select_diverse(primary, limit=self.max_evidence_per_claim)
             if not selected:
                 continue
-            claim_idx += 1
-            text = self._claim_text_from_evidence(selected, query=query)
-            claims.append(
-                ClaimWithCitations(
-                    claim_id=f"claim_{claim_idx}",
-                    text=text,
-                    evidence_ids=[e.evidence_id for e in selected],
+            for item in selected:
+                claim_idx += 1
+                claims.append(
+                    ClaimWithCitations(
+                        claim_id=f"claim_{claim_idx}",
+                        text=self._claim_text_from_evidence(item, query=query),
+                        evidence_ids=[item.evidence_id],
+                    )
                 )
-            )
+                if len(claims) >= self.max_claims:
+                    break
             if len(claims) >= self.max_claims:
                 break
 
@@ -261,29 +285,47 @@ class Writer:
         return selected
 
     def _claim_text_from_evidence(
-        self, items: list[EvidenceItem], *, query: str
+        self, item: EvidenceItem, *, query: str
     ) -> str:
         """Ground claim text in evidence text / evidence claim fields only."""
-        # Prefer the best item's claim field if it is non-generic; else synthesize from snippet
-        best = items[0]
-        claim = best.claim.strip()
-        # If claim is just a copy of the query or empty-ish, use evidence snippet
-        q_norm = normalize_text(query)
-        if not claim or normalize_text(claim) == q_norm or len(claim) < 12:
-            claim = _snippet(best.evidence_text, 220)
-        else:
-            # Ensure claim does not invent content beyond evidence: require some token overlap
-            claim_toks = set(_tokens(claim))
-            ev_toks = set(_tokens(best.evidence_text))
-            if claim_toks and ev_toks:
-                overlap = len(claim_toks & ev_toks) / max(1, len(claim_toks))
-                if overlap < 0.15:
-                    claim = _snippet(best.evidence_text, 220)
-        # Multi-source: lightly note additional papers without inventing synthesis
-        extra_papers = sorted({i.paper_id for i in items[1:] if i.paper_id != best.paper_id})
-        if extra_papers:
-            claim = f"{claim.rstrip('.')} (also supported by {', '.join(extra_papers[:3])})."
-        return claim
+        query_tokens = set(_tokens(query))
+        cleaned = " ".join(item.evidence_text.split())
+        abstract_match = re.search(r"\babstract\b", cleaned[:1200], re.I)
+        if abstract_match is not None:
+            cleaned = cleaned[abstract_match.end() :].lstrip(" :-—")
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", cleaned)
+            if 35 <= len(sentence.strip()) <= 600
+        ]
+        complete = [
+            sentence
+            for sentence in sentences
+            if not re.match(r"^(and|but|or|while|whereas)\b", sentence, re.I)
+        ]
+        content_sentences = [
+            sentence
+            for sentence in complete
+            if "@" not in sentence
+            and "†" not in sentence
+            and "‡" not in sentence
+            and not re.search(r"\b(university|institute for ai|research ai)\b", sentence, re.I)
+        ]
+        candidates = content_sentences or complete or sentences
+        if candidates:
+            claim = max(
+                candidates,
+                key=lambda sentence: (
+                    len(set(_tokens(sentence)) & query_tokens),
+                    -abs(len(sentence) - 180),
+                ),
+            )
+            return _snippet(claim, 320)
+
+        claim = item.claim.strip()
+        if not claim or normalize_text(claim) == normalize_text(query):
+            claim = cleaned
+        return _snippet(claim, 320)
 
     def _render_markdown(
         self,

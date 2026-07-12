@@ -304,21 +304,26 @@ terminations emit `BUDGET_HIT`.
 question, answer format/plan, verified evidence ledger, contradiction notes, and
 corpus-insufficiency flags. It never calls retrieval tools. It first emits
 structured `ClaimWithCitations` (claim text + evidence IDs), then renders Markdown
-with inline page citations derived from those IDs. Gaps are stated as limitations
-rather than filled from model memory. An optional LLM path may be added later
-without changing the claim→evidence contract.
+with inline page citations derived from those IDs. The Verifier records accepted
+evidence IDs per sub-question, and the Writer filters the shared ledger to that
+allowlist before forming claims. Each extractive claim is tied to one evidence
+item; gaps are stated as limitations rather than filled from model memory. An
+optional LLM path may be added later without changing the claim→evidence contract.
 
 **Rationale:** Plan §10.4; Writer is not marketed as a retrieval agent.
 
 ### ADR-029: Citation validator repairs before final output
 
 **Decision:** After drafting, `CitationValidator` checks that every citation ID
-exists in the ledger, maps to paper/chunk/page, and token-overlaps the claim
-text. Invalid IDs and unsupported claims are stripped (or explicitly qualified);
-references are deduplicated into `SourceCard`s and a formatted source list.
-Both a machine-readable `CitationReport` and user-facing Sources section are
-emitted, and the workflow always records `citation_validated` in the execution
-trace (including on unanswerable paths).
+exists in the ledger, maps exactly to the canonical chunk and paper, falls within
+the chunk page range, and points to a readable physical PDF containing that page.
+Claim support uses a conservative content-overlap check plus numeric and polarity
+consistency. Invalid IDs and unsupported claims are stripped (or explicitly
+qualified); references are deduplicated into `SourceCard`s containing titles,
+PDF paths, chunks, evidence IDs, and pages. Both a machine-readable
+`CitationReport` and user-facing Sources section are emitted, and the workflow
+always records `citation_validated` in the execution trace (including on
+unanswerable paths).
 
 **Rationale:** Plan §10.5 acceptance — no dangling IDs; every source maps to a
 PDF page; unsupported claims are removed or qualified.

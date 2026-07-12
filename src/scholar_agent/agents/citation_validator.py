@@ -9,7 +9,10 @@ machine-readable CitationReport plus user-facing source cards / reference list.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pymupdf
 
 from scholar_agent.agents.writer import render_claim_markdown
 from scholar_agent.ids import normalize_text
@@ -23,6 +26,7 @@ from scholar_agent.models.answer import (
     SourceCard,
 )
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
+from scholar_agent.retrieval.chunk_store import ChunkStore
 
 logger = get_logger(__name__)
 
@@ -66,8 +70,15 @@ def _snippet(text: str, max_chars: int = 200) -> str:
 class CitationValidator:
     """Validate and repair draft answers against the evidence ledger."""
 
-    min_support_overlap: float = 0.12
+    min_support_overlap: float = 0.5
     require_per_claim_citations: bool = True
+    provenance_store: ChunkStore | None = None
+    require_pdf_provenance: bool = False
+    _pdf_page_counts: dict[str, int] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     def validate(
         self,
@@ -220,6 +231,17 @@ class CitationValidator:
                     )
                 )
                 continue
+            provenance_error = self._provenance_error(item)
+            if provenance_error is not None:
+                issues.append(
+                    CitationIssue(
+                        severity="error",
+                        claim_id=claim.claim_id,
+                        evidence_id=eid,
+                        message=provenance_error,
+                    )
+                )
+                continue
             if not self._supports(claim, item):
                 issues.append(
                     CitationIssue(
@@ -244,6 +266,72 @@ class CitationValidator:
             evidence_ids=valid_ids,
         )
 
+    def _provenance_error(self, item: EvidenceItem) -> str | None:
+        """Validate evidence against canonical chunk, paper, and physical PDF."""
+        store = self.provenance_store
+        if store is None:
+            if self.require_pdf_provenance:
+                return "Canonical provenance store unavailable"
+            return None
+
+        chunk = store.get_chunk(item.chunk_id)
+        if chunk is None:
+            return f"Canonical chunk not found: {item.chunk_id}"
+        if chunk.paper_id != item.paper_id:
+            return "Evidence paper_id does not match canonical chunk"
+        if item.page_start < chunk.page_start or item.page_end > chunk.page_end:
+            return "Evidence page range falls outside canonical chunk pages"
+        if normalize_text(item.evidence_text) not in normalize_text(chunk.text):
+            return "Evidence text does not map to the canonical chunk"
+
+        paper = store.get_paper(item.paper_id)
+        if paper is None:
+            return f"Canonical paper not found: {item.paper_id}"
+        pdf_path = self._resolve_pdf_path(paper.pdf_path, store)
+        if not pdf_path.is_file():
+            return f"Source PDF not found: {pdf_path}"
+        try:
+            actual_pages = self._pdf_page_count(pdf_path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return f"Source file is not a readable PDF: {type(exc).__name__}"
+        if item.page_end > actual_pages:
+            return (
+                f"Evidence page {item.page_end} exceeds PDF page count "
+                f"{actual_pages}"
+            )
+        if paper.page_count is not None and item.page_end > paper.page_count:
+            return "Evidence page exceeds canonical paper page_count"
+        return None
+
+    def _resolve_pdf_path(self, value: str, store: ChunkStore) -> Path:
+        path = Path(value).expanduser()
+        if path.is_absolute():
+            return path
+        cwd_candidate = (Path.cwd() / path).resolve()
+        if cwd_candidate.is_file() or store.papers_path is None:
+            return cwd_candidate
+        # A portable processed store may use paths relative to its repository root.
+        roots = list(store.papers_path.resolve().parents)
+        for root in roots:
+            candidate = (root / path).resolve()
+            if candidate.is_file():
+                return candidate
+        return cwd_candidate
+
+    def _pdf_page_count(self, path: Path) -> int:
+        key = str(path.resolve())
+        cached = self._pdf_page_counts.get(key)
+        if cached is not None:
+            return cached
+        with pymupdf.open(path) as document:
+            if not document.is_pdf:
+                raise ValueError("not a PDF")
+            count = int(document.page_count)
+        if count < 1:
+            raise ValueError("PDF has no pages")
+        self._pdf_page_counts[key] = count
+        return count
+
     def _supports(self, claim: ClaimWithCitations, item: EvidenceItem) -> bool:
         """Heuristic entailment: claim tokens should appear in evidence text/claim."""
         # Meta / qualification claims about conflicts are allowed if they cite the items
@@ -264,6 +352,24 @@ class CitationValidator:
         ev_toks = _tokens(evidence_blob)
         if not ev_toks:
             return False
+        claim_numbers = {token for token in claim_toks if token.isdigit()}
+        if not claim_numbers.issubset(ev_toks):
+            return False
+        polarity_roots = (
+            ("outperform", "underperform"),
+            ("increase", "decrease"),
+            ("better", "worse"),
+            ("effective", "ineffective"),
+        )
+        for positive, negative in polarity_roots:
+            claim_positive = any(token.startswith(positive) for token in claim_toks)
+            claim_negative = any(token.startswith(negative) for token in claim_toks)
+            evidence_positive = any(token.startswith(positive) for token in ev_toks)
+            evidence_negative = any(token.startswith(negative) for token in ev_toks)
+            if (claim_positive and evidence_negative) or (
+                claim_negative and evidence_positive
+            ):
+                return False
         # Also allow if claim is largely a substring of evidence (after normalize)
         if normalize_text(claim.text)[:80] in normalize_text(evidence_blob):
             return True
@@ -285,6 +391,16 @@ class CitationValidator:
         return ordered
 
     def _to_source_card(self, item: EvidenceItem) -> SourceCard:
+        paper = (
+            self.provenance_store.get_paper(item.paper_id)
+            if self.provenance_store is not None
+            else None
+        )
+        pdf_path = None
+        if paper is not None and self.provenance_store is not None:
+            pdf_path = str(
+                self._resolve_pdf_path(paper.pdf_path, self.provenance_store)
+            )
         return SourceCard(
             evidence_id=item.evidence_id,
             paper_id=item.paper_id,
@@ -293,6 +409,8 @@ class CitationValidator:
             page_end=item.page_end,
             snippet=_snippet(item.evidence_text),
             retrieval_method=item.retrieval_method,
+            title=paper.title if paper else None,
+            pdf_path=pdf_path,
         )
 
     def _render_final_markdown(
@@ -349,10 +467,13 @@ class CitationValidator:
             lines.append("### Sources")
             lines.append("")
             for card in source_cards:
+                title = f" — {card.title}" if card.title else ""
                 lines.append(
-                    f"- {card.format_inline()} · `{card.chunk_id}` · "
+                    f"- {card.format_inline()}{title} · `{card.chunk_id}` · "
                     f"`{card.evidence_id}`"
                 )
+                if card.pdf_path:
+                    lines.append(f"  - PDF: `{card.pdf_path}`")
                 if card.snippet:
                     lines.append(f"  - {card.snippet}")
             lines.append("")

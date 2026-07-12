@@ -108,6 +108,10 @@ class ResearchWorkflow:
 
     def __post_init__(self) -> None:
         self.researcher = ResearchAgent(self.toolkit, config=self.config.research)
+        store = getattr(self.toolkit, "store", None)
+        if self.citation_validator.provenance_store is None and store is not None:
+            self.citation_validator.provenance_store = store
+            self.citation_validator.require_pdf_provenance = True
 
     def run(self, query: str, *, run_id: str | None = None) -> WorkflowResult:
         """Execute the full workflow (LangGraph)."""

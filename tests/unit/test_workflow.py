@@ -320,6 +320,10 @@ def test_unanswerable_after_targeted_retrieval_exhaustion() -> None:
     assert result.unanswerable is True
     assert result.verification.unanswerable is True
     assert result.verification.corrective_queries == []
+    assert result.final_answer is not None
+    assert result.final_answer.claims == []
+    assert result.final_answer.corpus_insufficient
+    assert "Astronomy observation" not in result.final_answer.markdown
 
 
 def test_global_tool_budget_is_never_exceeded() -> None:

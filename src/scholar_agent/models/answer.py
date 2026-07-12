@@ -29,6 +29,8 @@ class SourceCard(BaseModel):
     page_end: int = Field(ge=1)
     snippet: str = ""
     retrieval_method: str | None = None
+    title: str | None = None
+    pdf_path: str | None = None
 
     @field_validator("evidence_id", "paper_id", "chunk_id")
     @classmethod
@@ -47,10 +49,14 @@ class SourceCard(BaseModel):
         return f"[{self.paper_id} {self.page_label()}]"
 
     def format_reference(self) -> str:
-        return (
-            f"{self.paper_id} {self.page_label()} "
+        label = self.title or self.paper_id
+        reference = (
+            f"{label} [{self.paper_id}] {self.page_label()} "
             f"(chunk={self.chunk_id}, evidence={self.evidence_id})"
         )
+        if self.pdf_path:
+            return f"{reference} · PDF={self.pdf_path}"
+        return reference
 
 
 class DraftAnswer(BaseModel):

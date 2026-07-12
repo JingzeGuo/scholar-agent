@@ -86,6 +86,7 @@ class Verifier:
             by_sq[item.sub_question_id].append(item)
 
         covered: list[str] = []
+        supported_evidence_ids: dict[str, list[str]] = {}
         missing: list[str] = []
         missing_aspects: list[str] = []
         unsupported: list[str] = []
@@ -99,6 +100,9 @@ class Verifier:
             relevant = [e for e in ledger.items if self._is_relevant(sq, e)]
             if len(relevant) >= self.min_evidence_per_sub_question:
                 covered.append(sq.id)
+                supported_evidence_ids[sq.id] = [
+                    item.evidence_id for item in relevant
+                ]
                 # Check required evidence keywords lightly
                 for req in sq.required_evidence:
                     if not self._requirement_covered(req, relevant):
@@ -203,6 +207,7 @@ class Verifier:
             is_sufficient=is_sufficient,
             coverage_score=round(min(1.0, max(0.0, coverage_score)), 3),
             covered_sub_questions=covered,
+            supported_evidence_ids=supported_evidence_ids,
             missing_sub_questions=missing,
             unsupported_claims=unsupported[:20],
             conflicting_evidence_ids=conflicts,

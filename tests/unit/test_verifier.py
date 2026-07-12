@@ -79,6 +79,7 @@ def test_sufficient_when_relevant_evidence_present() -> None:
     result = Verifier().verify(query=plan.original_query, plan=plan, ledger=ledger)
     assert result.is_sufficient is True
     assert sq_id in result.covered_sub_questions
+    assert result.supported_evidence_ids[sq_id] == [ledger.items[0].evidence_id]
     assert result.coverage_score >= 0.85
 
 

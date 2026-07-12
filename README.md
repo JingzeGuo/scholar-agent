@@ -65,10 +65,10 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ### Phase 7
 
-- Evidence-constrained Writer: structured claims with evidence IDs → Markdown
+- Evidence-constrained Writer uses only Verifier-accepted evidence IDs
 - Inline page citations derived from the ledger only (no retrieval in Writer)
-- Citation validator: nonexistent IDs, page provenance, support checks, repair
-- Source cards + reference list; `ask` CLI prints the final validated answer
+- Citation validator checks canonical chunks, physical PDFs/pages, and claim support
+- Source cards + reference list include paper titles and local PDF paths
 
 ## Quick start
 

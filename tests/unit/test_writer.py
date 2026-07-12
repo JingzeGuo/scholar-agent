@@ -84,6 +84,35 @@ def test_writer_empty_ledger_states_limitation() -> None:
     assert "Limitation" in draft.markdown or "cannot answer" in draft.markdown.lower()
 
 
+def test_writer_excludes_evidence_verifier_did_not_accept() -> None:
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                evidence_id="ev_irrelevant",
+                claim="Nebulae form from interstellar gas.",
+                evidence_text="Nebulae form from interstellar gas and dust.",
+                paper_id="paper_astronomy",
+            )
+        ]
+    )
+    verification = VerificationResult(
+        is_sufficient=False,
+        coverage_score=0.0,
+        missing_sub_questions=["sq_0"],
+        supported_evidence_ids={},
+        unanswerable=True,
+        rationale_summary="The corpus cannot answer the question.",
+    )
+    draft = Writer().write(
+        query="What is Self-RAG?",
+        ledger=ledger,
+        verification=verification,
+    )
+    assert draft.claims == []
+    assert draft.corpus_insufficient
+    assert "Nebulae" not in draft.markdown
+
+
 def test_writer_surfaces_contradictions() -> None:
     ledger = EvidenceLedger(
         items=[
@@ -178,3 +207,27 @@ def test_writer_claim_ids_stable_and_ordered() -> None:
     assert len(draft.claims) >= 2
     assert draft.claims[0].claim_id == "claim_1"
     assert draft.claims[1].claim_id == "claim_2"
+
+
+def test_writer_prefers_relevant_sentence_over_pdf_front_matter() -> None:
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                evidence_id="ev_front",
+                claim="SELF-RAG PAPER AUTHORS AND AFFILIATIONS",
+                evidence_text=(
+                    "SELF-RAG PAPER AUTHORS AND AFFILIATIONS University Example. "
+                    "Abstract Self-RAG uses reflection tokens to decide when to "
+                    "retrieve and to critique generated passages. "
+                    "The appendix contains implementation details."
+                ),
+            )
+        ]
+    )
+    draft = Writer().write(
+        query="How does Self-RAG use reflection tokens for retrieval and critique?",
+        ledger=ledger,
+    )
+    assert draft.claims
+    assert "reflection tokens" in draft.claims[0].text.lower()
+    assert "affiliations" not in draft.claims[0].text.lower()
