@@ -1,14 +1,18 @@
-"""Full multi-agent research workflow (Phase 6).
+"""Full multi-agent research workflow (Phases 6–7).
 
 LangGraph flow:
-  START → plan → research → verify → (corrective research | finish) → END
+  START → plan → research → verify → (corrective research | write)
+        → validate_citations → finish → END
 
-Termination when:
+Termination of the research loop when:
   - evidence is sufficient
   - corrective iteration budget exhausted
   - no new unique evidence in the last iteration
   - verifier marks corpus unanswerable
   - global tool-call budget exhausted
+
+Writing always runs after the research loop stops (including unanswerable paths)
+so limitations are stated from the ledger rather than model memory.
 """
 
 from __future__ import annotations
@@ -21,11 +25,14 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from scholar_agent.agents.citation_validator import CitationValidator
 from scholar_agent.agents.planner import Planner
 from scholar_agent.agents.researcher import ResearchAgent, ResearchAgentConfig
 from scholar_agent.agents.verifier import Verifier
+from scholar_agent.agents.writer import Writer
 from scholar_agent.ids import new_run_id
 from scholar_agent.logging import get_logger
+from scholar_agent.models.answer import DraftAnswer, FinalAnswer
 from scholar_agent.models.base import EventType, ExecutionEvent, QueryType
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
@@ -48,7 +55,7 @@ class WorkflowConfig(BaseModel):
 
 
 class WorkflowResult(BaseModel):
-    """User-facing outcome of the full plan→research→verify loop."""
+    """User-facing outcome of the full plan→research→verify→write loop."""
 
     run_id: str
     query: str
@@ -61,6 +68,8 @@ class WorkflowResult(BaseModel):
     terminated_reason: str
     events: list[ExecutionEvent] = Field(default_factory=list)
     unanswerable: bool = False
+    draft_answer: DraftAnswer | None = None
+    final_answer: FinalAnswer | None = None
     state: ResearchRunState | None = None
 
 
@@ -82,16 +91,20 @@ class WorkflowState(TypedDict, total=False):
     max_total_tool_calls: int
     max_latency_ms: int
     started_ms: float
+    draft_answer: dict[str, Any] | None
+    final_answer: dict[str, Any] | None
 
 
 @dataclass
 class ResearchWorkflow:
-    """Compose Planner + ResearchAgent + Verifier into a corrective loop."""
+    """Compose Planner + ResearchAgent + Verifier + Writer + CitationValidator."""
 
     toolkit: RetrievalToolkit
     config: WorkflowConfig = field(default_factory=WorkflowConfig)
     planner: Planner = field(default_factory=Planner)
     verifier: Verifier = field(default_factory=Verifier)
+    writer: Writer = field(default_factory=Writer)
+    citation_validator: CitationValidator = field(default_factory=CitationValidator)
 
     def __post_init__(self) -> None:
         self.researcher = ResearchAgent(self.toolkit, config=self.config.research)
@@ -125,6 +138,8 @@ class ResearchWorkflow:
             "max_total_tool_calls": self.config.max_total_tool_calls,
             "max_latency_ms": self.config.max_latency_ms,
             "started_ms": perf_counter() * 1000,
+            "draft_answer": None,
+            "final_answer": None,
         }
         final: WorkflowState = app.invoke(initial)
         return self._to_result(final)
@@ -134,6 +149,8 @@ class ResearchWorkflow:
         graph.add_node("plan", self._node_plan)
         graph.add_node("research", self._node_research)
         graph.add_node("verify", self._node_verify)
+        graph.add_node("write", self._node_write)
+        graph.add_node("validate_citations", self._node_validate_citations)
         graph.add_node("finish", self._node_finish)
 
         graph.add_edge(START, "plan")
@@ -142,8 +159,10 @@ class ResearchWorkflow:
         graph.add_conditional_edges(
             "verify",
             self._route_after_verify,
-            {"research": "research", "finish": "finish"},
+            {"research": "research", "write": "write"},
         )
+        graph.add_edge("write", "validate_citations")
+        graph.add_edge("validate_citations", "finish")
         graph.add_edge("finish", END)
         return graph.compile()
 
@@ -478,10 +497,87 @@ class ResearchWorkflow:
         updates["events"] = _append_event_dicts(state, new_events)
         return updates
 
+    def _node_write(self, state: WorkflowState) -> dict[str, Any]:
+        plan = QueryPlan.model_validate(state["plan"])
+        ledger = EvidenceLedger(
+            items=[EvidenceItem.model_validate(e) for e in state.get("evidence") or []]
+        )
+        verification = None
+        if state.get("verification"):
+            verification = VerificationResult.model_validate(state["verification"])
+        draft = self.writer.write(
+            query=state["query"],
+            plan=plan,
+            ledger=ledger,
+            verification=verification,
+            corpus_insufficient=bool(state.get("unanswerable")),
+        )
+        event = ExecutionEvent(
+            run_id=state["run_id"],
+            event_type=EventType.ANSWER_DRAFTED,
+            component="writer",
+            summary=(
+                f"draft claims={len(draft.claims)} "
+                f"corpus_insufficient={draft.corpus_insufficient}"
+            ),
+            payload={
+                "claim_ids": [c.claim_id for c in draft.claims],
+                "claim_evidence_ids": {
+                    c.claim_id: list(c.evidence_ids) for c in draft.claims
+                },
+                "corpus_insufficient": draft.corpus_insufficient,
+                "notes": list(draft.notes),
+            },
+        )
+        return {
+            "draft_answer": draft.model_dump(mode="json"),
+            "events": _append_event_dicts(state, [event]),
+        }
+
+    def _node_validate_citations(self, state: WorkflowState) -> dict[str, Any]:
+        ledger = EvidenceLedger(
+            items=[EvidenceItem.model_validate(e) for e in state.get("evidence") or []]
+        )
+        draft_raw = state.get("draft_answer") or {}
+        draft = DraftAnswer.model_validate(draft_raw) if draft_raw else DraftAnswer()
+        final = self.citation_validator.validate(draft, ledger)
+        report = final.citation_report
+        event = ExecutionEvent(
+            run_id=state["run_id"],
+            event_type=EventType.CITATION_VALIDATED,
+            component="citation_validator",
+            summary=(
+                f"citation valid={report.is_valid if report else False} "
+                f"claims={len(final.claims)} "
+                f"sources={len(final.source_cards)}"
+            ),
+            payload={
+                "is_valid": report.is_valid if report else False,
+                "cited_evidence_ids": list(report.cited_evidence_ids) if report else [],
+                "cited_paper_ids": list(report.cited_paper_ids) if report else [],
+                "issue_count": len(report.issues) if report else 0,
+                "issues": (
+                    [i.model_dump(mode="json") for i in report.issues[:20]]
+                    if report
+                    else []
+                ),
+                "final_claim_ids": [c.claim_id for c in final.claims],
+            },
+        )
+        return {
+            "final_answer": final.model_dump(mode="json"),
+            "events": _append_event_dicts(state, [event]),
+        }
+
     def _node_finish(self, state: WorkflowState) -> dict[str, Any]:
         reason = state.get("terminated_reason") or "completed"
         started = float(state.get("started_ms") or perf_counter() * 1000)
         latency = int(perf_counter() * 1000 - started)
+        final_raw = state.get("final_answer") or {}
+        citation_valid = None
+        if final_raw:
+            report = final_raw.get("citation_report") or {}
+            citation_valid = report.get("is_valid")
         event = ExecutionEvent(
             run_id=state["run_id"],
             event_type=EventType.RUN_FINISHED,
@@ -493,6 +589,8 @@ class ResearchWorkflow:
                 "tool_call_count": state.get("tool_call_count"),
                 "latency_ms": latency,
                 "unanswerable": state.get("unanswerable"),
+                "citation_valid": citation_valid,
+                "has_final_answer": bool(final_raw),
             },
         )
         return {
@@ -502,26 +600,26 @@ class ResearchWorkflow:
 
     def _route_after_verify(
         self, state: WorkflowState
-    ) -> Literal["research", "finish"]:
+    ) -> Literal["research", "write"]:
         if state.get("terminated_reason"):
-            return "finish"
+            return "write"
         if state.get("unanswerable"):
-            return "finish"
+            return "write"
         verification = state.get("verification") or {}
         if verification.get("is_sufficient"):
-            return "finish"
+            return "write"
         # Continue corrective research if we still have queries and budget
         iteration = int(state.get("iteration") or 0)
         max_iter_value = state.get("max_corrective_iterations")
         max_iter = int(max_iter_value if max_iter_value is not None else 3)
         if iteration > max_iter:
-            return "finish"
+            return "write"
         if not state.get("corrective_actions"):
-            return "finish"
+            return "write"
         if int(state.get("tool_call_count") or 0) >= int(
             state.get("max_total_tool_calls") or 20
         ):
-            return "finish"
+            return "write"
         return "research"
 
     def _elapsed_ms(self, state: WorkflowState) -> int:
@@ -553,6 +651,12 @@ class ResearchWorkflow:
         started = float(state.get("started_ms") or perf_counter() * 1000)
         latency = int(perf_counter() * 1000 - started)
         run_id = state["run_id"]
+        draft: DraftAnswer | None = None
+        if state.get("draft_answer"):
+            draft = DraftAnswer.model_validate(state["draft_answer"])
+        final: FinalAnswer | None = None
+        if state.get("final_answer"):
+            final = FinalAnswer.model_validate(state["final_answer"])
         snapshot = ResearchRunState(
             run_id=run_id,
             query=state["query"],
@@ -569,6 +673,9 @@ class ResearchWorkflow:
             tool_call_count=int(state.get("tool_call_count") or 0),
             latency_ms=latency,
             execution_events=events,
+            draft_answer=draft,
+            final_answer=final,
+            citation_report=final.citation_report if final else None,
             errors=[],
         )
         return WorkflowResult(
@@ -583,6 +690,8 @@ class ResearchWorkflow:
             terminated_reason=str(state.get("terminated_reason") or "completed"),
             events=events,
             unanswerable=bool(state.get("unanswerable")),
+            draft_answer=draft,
+            final_answer=final,
             state=snapshot,
         )
 

@@ -92,7 +92,16 @@ def test_workflow_terminates_when_sufficient() -> None:
     assert result.verification is not None
     assert any(e.event_type.value == "plan_created" for e in result.events)
     assert any(e.event_type.value == "verification" for e in result.events)
+    assert any(e.event_type.value == "answer_drafted" for e in result.events)
+    assert any(e.event_type.value == "citation_validated" for e in result.events)
     assert any(e.event_type.value == "run_finished" for e in result.events)
+    assert result.final_answer is not None
+    assert result.final_answer.citation_report is not None
+    # All final citations must exist in the ledger
+    ledger_ids = {e.evidence_id for e in result.evidence_ledger.items}
+    for claim in result.final_answer.claims:
+        for eid in claim.evidence_ids:
+            assert eid in ledger_ids
 
 
 def test_missing_evidence_triggers_corrective_retrieval() -> None:
@@ -362,3 +371,62 @@ def test_latency_budget_terminates_workflow() -> None:
     ).run("What is a nonexistent retrieval method?")
     assert result.terminated_reason == "latency_budget_exhausted"
     assert any(event.event_type.value == "budget_hit" for event in result.events)
+
+
+def test_workflow_writes_and_validates_citations() -> None:
+    """Phase 7: after research terminates, Writer + citation validator run."""
+    toolkit = ScriptedToolkit()
+    result = ResearchWorkflow(
+        toolkit,  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_corrective_iterations=1,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=2,
+                allow_policy_override=False,
+            ),
+            parallel_research=False,
+        ),
+    ).run("What is Self-RAG?")
+    assert result.draft_answer is not None
+    assert result.final_answer is not None
+    assert result.final_answer.claims
+    report = result.final_answer.citation_report
+    assert report is not None
+    assert report.is_valid
+    # Source cards map to real paper + page
+    for card in result.final_answer.source_cards:
+        assert card.paper_id
+        assert card.chunk_id
+        assert card.page_start >= 1
+        assert card.page_end >= card.page_start
+        assert card.evidence_id in {e.evidence_id for e in result.evidence_ledger.items}
+    # Inline citations appear in markdown
+    assert "paper_" in result.final_answer.markdown
+    finished = next(e for e in result.events if e.event_type.value == "run_finished")
+    assert finished.payload.get("citation_valid") is True
+    assert result.state is not None
+    assert result.state.final_answer is not None
+    assert result.state.citation_report is not None
+
+
+def test_workflow_unanswerable_still_emits_answer_with_limitation() -> None:
+    class EmptyToolkit(ScriptedToolkit):
+        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+            self.calls.append(query)
+            return RetrievalResult(query=query, method="hybrid_rerank", hits=[])
+
+    result = ResearchWorkflow(
+        EmptyToolkit(),  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_corrective_iterations=0,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=1,
+                allow_policy_override=False,
+            ),
+            parallel_research=False,
+        ),
+    ).run("What is Self-RAG?")
+    assert result.final_answer is not None
+    assert result.final_answer.corpus_insufficient or "Limitation" in result.final_answer.markdown
+    assert any(e.event_type.value == "answer_drafted" for e in result.events)
+    assert any(e.event_type.value == "citation_validated" for e in result.events)

@@ -13,6 +13,7 @@ from scholar_agent.models.answer import (
     ClaimWithCitations,
     DraftAnswer,
     FinalAnswer,
+    SourceCard,
 )
 from scholar_agent.models.base import (
     BudgetStatus,
@@ -102,6 +103,7 @@ __all__ = [
     "RetrievalPolicy",
     "RetrievalResult",
     "RoutingDecision",
+    "SourceCard",
     "SubQuestion",
     "SubQuestionStatus",
     "TokenUsage",

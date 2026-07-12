@@ -296,6 +296,37 @@ terminations emit `BUDGET_HIT`.
 
 ---
 
+## Phase 7
+
+### ADR-028: Evidence-constrained Writer (no retrieval, no memory fill)
+
+**Decision:** The Writer is a deterministic graph node that receives only the
+question, answer format/plan, verified evidence ledger, contradiction notes, and
+corpus-insufficiency flags. It never calls retrieval tools. It first emits
+structured `ClaimWithCitations` (claim text + evidence IDs), then renders Markdown
+with inline page citations derived from those IDs. Gaps are stated as limitations
+rather than filled from model memory. An optional LLM path may be added later
+without changing the claim→evidence contract.
+
+**Rationale:** Plan §10.4; Writer is not marketed as a retrieval agent.
+
+### ADR-029: Citation validator repairs before final output
+
+**Decision:** After drafting, `CitationValidator` checks that every citation ID
+exists in the ledger, maps to paper/chunk/page, and token-overlaps the claim
+text. Invalid IDs and unsupported claims are stripped (or explicitly qualified);
+references are deduplicated into `SourceCard`s and a formatted source list.
+Both a machine-readable `CitationReport` and user-facing Sources section are
+emitted, and the workflow always records `citation_validated` in the execution
+trace (including on unanswerable paths).
+
+**Rationale:** Plan §10.5 acceptance — no dangling IDs; every source maps to a
+PDF page; unsupported claims are removed or qualified.
+
+---
+
 ## Pending (later phases)
 
-- Writer and citation validator (Phase 7)
+- Evaluation framework (Phase 8)
+- Streamlit demo (Phase 9)
+- Hardening and portfolio docs (Phase 10)

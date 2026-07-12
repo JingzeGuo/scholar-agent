@@ -19,6 +19,40 @@ class ClaimWithCitations(BaseModel):
         return cleaned
 
 
+class SourceCard(BaseModel):
+    """Machine-readable provenance card for a cited evidence item."""
+
+    evidence_id: str
+    paper_id: str
+    chunk_id: str
+    page_start: int = Field(ge=1)
+    page_end: int = Field(ge=1)
+    snippet: str = ""
+    retrieval_method: str | None = None
+
+    @field_validator("evidence_id", "paper_id", "chunk_id")
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must be a non-empty string")
+        return cleaned
+
+    def page_label(self) -> str:
+        if self.page_start == self.page_end:
+            return f"p.{self.page_start}"
+        return f"p.{self.page_start}-{self.page_end}"
+
+    def format_inline(self) -> str:
+        return f"[{self.paper_id} {self.page_label()}]"
+
+    def format_reference(self) -> str:
+        return (
+            f"{self.paper_id} {self.page_label()} "
+            f"(chunk={self.chunk_id}, evidence={self.evidence_id})"
+        )
+
+
 class DraftAnswer(BaseModel):
     claims: list[ClaimWithCitations] = Field(default_factory=list)
     markdown: str = ""
@@ -52,5 +86,6 @@ class FinalAnswer(BaseModel):
     markdown: str
     claims: list[ClaimWithCitations] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    source_cards: list[SourceCard] = Field(default_factory=list)
     citation_report: CitationReport | None = None
     corpus_insufficient: bool = False

@@ -7,6 +7,7 @@ Phase 3: index build, retrieve, Naive RAG baseline.
 Phase 4: knowledge graph build / inspect / graph retrieval.
 Phase 5: adaptive routing + Research Agent tool loop.
 Phase 6: Planner, Verifier, and corrective LangGraph workflow.
+Phase 7: Evidence-constrained Writer + citation validator.
 """
 
 from __future__ import annotations
@@ -694,7 +695,7 @@ def ask_cmd(
     json_output: bool = _JSON_OPT,
     no_parallel: bool = _NO_PARALLEL_OPT,
 ) -> None:
-    """Full plan → research → verify → corrective loop (Phase 6)."""
+    """Full plan → research → verify → write → citation validate (Phases 6–7)."""
     from scholar_agent.agents.researcher import ResearchAgentConfig
     from scholar_agent.agents.workflow import ResearchWorkflow, WorkflowConfig
     from scholar_agent.retrieval.index_builder import load_toolkit
@@ -762,7 +763,29 @@ def ask_cmd(
         f"tools={result.tool_call_count} evidence={len(result.evidence_ledger.items)} "
         f"latency_ms={result.latency_ms} unanswerable={result.unanswerable}"
     )
-    if result.evidence_ledger.items:
+    if result.final_answer is not None:
+        fa = result.final_answer
+        report = fa.citation_report
+        console.print(
+            f"[bold]answer[/bold]: claims={len(fa.claims)} "
+            f"sources={len(fa.source_cards)} "
+            f"citation_valid={report.is_valid if report else None} "
+            f"corpus_insufficient={fa.corpus_insufficient}"
+        )
+        console.print(fa.markdown, markup=False)
+        if fa.sources:
+            console.print("[bold]source list[/bold]:")
+            for src in fa.sources[:12]:
+                console.print(f"  - {src}", markup=False)
+        if report and report.issues:
+            console.print("[bold]citation issues[/bold]:")
+            for issue in report.issues[:8]:
+                console.print(
+                    f"  - [{issue.severity}] {issue.claim_id or issue.evidence_id or '—'}: "
+                    f"{issue.message}",
+                    markup=False,
+                )
+    elif result.evidence_ledger.items:
         console.print("[bold]evidence sample[/bold]:")
         for item in result.evidence_ledger.items[:5]:
             console.print(

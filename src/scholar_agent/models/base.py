@@ -31,6 +31,8 @@ class EventType(StrEnum):
     EVIDENCE_ADDED = "evidence_added"
     VERIFICATION = "verification"
     CORRECTIVE = "corrective"
+    ANSWER_DRAFTED = "answer_drafted"
+    CITATION_VALIDATED = "citation_validated"
     BUDGET_HIT = "budget_hit"
     ERROR = "error"
     # Prototype-loop events

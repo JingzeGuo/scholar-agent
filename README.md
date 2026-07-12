@@ -6,7 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–6 implemented (through Planner/Verifier corrective workflow).
+**Status:** Phases 0–7 implemented (through Writer + citation validator).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -63,6 +63,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Full LangGraph loop: plan → research → verify → corrective research
 - Exhaustive termination (sufficient / global budgets / no-new-evidence / unanswerable)
 
+### Phase 7
+
+- Evidence-constrained Writer: structured claims with evidence IDs → Markdown
+- Inline page citations derived from the ledger only (no retrieval in Writer)
+- Citation validator: nonexistent IDs, page provenance, support checks, repair
+- Source cards + reference list; `ask` CLI prints the final validated answer
+
 ## Quick start
 
 ```bash
@@ -102,7 +109,7 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent graph inspect` | Stats + sample edges |
 | `uv run scholar-agent retrieve "Self-RAG HotpotQA" --mode graph` | Graph retrieval |
 | `uv run scholar-agent research "Compare Self-RAG and CRAG"` | Research Agent loop |
-| `uv run scholar-agent ask "Compare Self-RAG versus CRAG"` | Full plan→verify loop |
+| `uv run scholar-agent ask "Compare Self-RAG versus CRAG"` | Full plan→verify→write→cite loop |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 
@@ -120,7 +127,7 @@ uv run scholar-agent corpus summary -m data/corpus_manifest.jsonl
 - Manifest: `data/corpus_manifest.jsonl` (metadata + content hashes)
 - PDFs: `data/papers/{arxiv_id}.pdf`
 
-Later phases add the evidence-constrained Writer, evaluation framework, and Streamlit demo.
+Later phases add the evaluation framework and Streamlit demo.
 
 ## Project layout
 
