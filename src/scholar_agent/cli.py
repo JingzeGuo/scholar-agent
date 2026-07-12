@@ -6,6 +6,7 @@ Phase 2: PDF ingestion into canonical paper/chunk stores.
 Phase 3: index build, retrieve, Naive RAG baseline.
 Phase 4: knowledge graph build / inspect / graph retrieval.
 Phase 5: adaptive routing + Research Agent tool loop.
+Phase 6: Planner, Verifier, and corrective LangGraph workflow.
 """
 
 from __future__ import annotations
@@ -666,6 +667,98 @@ def research_cmd(
             f"tools=[{tools}] evidence={len(p.evidence)} end={p.terminated_reason}",
             markup=False,
         )
+    if result.evidence_ledger.items:
+        console.print("[bold]evidence sample[/bold]:")
+        for item in result.evidence_ledger.items[:5]:
+            console.print(
+                f"  - [{item.paper_id} p.{item.page_start}-{item.page_end}] "
+                f"{item.retrieval_method}: {item.claim[:120]}",
+                markup=False,
+            )
+
+
+_ASK_MAX_ITER_OPT = typer.Option(
+    None,
+    "--max-iterations",
+    help="Max corrective iterations (default from config)",
+)
+
+
+@app.command("ask")
+def ask_cmd(
+    query: str = typer.Argument(..., help="Complex research question"),
+    config_path: Path | None = _CONFIG_PATH_OPT,
+    embedding_backend: str = _EMBED_BACKEND_OPT,
+    max_iterations: int | None = _ASK_MAX_ITER_OPT,
+    max_tools: int | None = _RESEARCH_MAX_TOOLS_OPT,
+    json_output: bool = _JSON_OPT,
+    no_parallel: bool = _NO_PARALLEL_OPT,
+) -> None:
+    """Full plan → research → verify → corrective loop (Phase 6)."""
+    from scholar_agent.agents.researcher import ResearchAgentConfig
+    from scholar_agent.agents.workflow import ResearchWorkflow, WorkflowConfig
+    from scholar_agent.retrieval.index_builder import load_toolkit
+
+    cfg = load_config(config_path)
+    setup_logging(cfg)
+    if embedding_backend not in {"auto", "hash", "st"}:
+        embedding_backend = "auto"
+    toolkit = load_toolkit(
+        config=cfg,
+        embedding_backend=embedding_backend,  # type: ignore[arg-type]
+        reranker_backend="lexical" if embedding_backend == "hash" else "auto",
+        load_graph=True,
+    )
+    wf_cfg = WorkflowConfig(
+        max_corrective_iterations=(
+            max_iterations
+            if max_iterations is not None
+            else cfg.budgets.max_corrective_iterations
+        ),
+        research=ResearchAgentConfig(
+            max_tool_calls_per_pass=max_tools
+            or cfg.budgets.max_tool_calls_per_research_pass,
+            max_evidence_per_sub_question=cfg.budgets.max_evidence_per_sub_question,
+        ),
+        parallel_research=not no_parallel,
+    )
+    result = ResearchWorkflow(toolkit, config=wf_cfg).run(query)
+
+    if json_output:
+        console.print_json(json.dumps(result.model_dump(mode="json")))
+        return
+
+    console.print(f"[bold]run_id[/bold]: {result.run_id}")
+    console.print(f"[bold]terminated[/bold]: {result.terminated_reason}")
+    console.print(
+        f"[bold]plan[/bold]: {result.plan.answer_type} "
+        f"({len(result.plan.sub_questions)} sub-questions)"
+    )
+    for sq in result.plan.sub_questions:
+        console.print(
+            f"  - [{sq.status.value}] {sq.id}: {sq.question}",
+            markup=False,
+        )
+    v = result.verification
+    console.print(
+        f"[bold]verification[/bold]: sufficient={v.is_sufficient} "
+        f"coverage={v.coverage_score:.2f}"
+    )
+    console.print(f"  {v.rationale_summary}", markup=False)
+    if v.conflicting_evidence_ids:
+        console.print(
+            f"  conflicts: {', '.join(v.conflicting_evidence_ids[:8])}",
+            markup=False,
+        )
+    if v.corrective_queries and not v.is_sufficient:
+        console.print("[bold]last corrective queries[/bold]:")
+        for cq in v.corrective_queries[:5]:
+            console.print(f"  - {cq}", markup=False)
+    console.print(
+        f"[bold]stats[/bold]: iteration={result.iteration} "
+        f"tools={result.tool_call_count} evidence={len(result.evidence_ledger.items)} "
+        f"latency_ms={result.latency_ms} unanswerable={result.unanswerable}"
+    )
     if result.evidence_ledger.items:
         console.print("[bold]evidence sample[/bold]:")
         for item in result.evidence_ledger.items[:5]:

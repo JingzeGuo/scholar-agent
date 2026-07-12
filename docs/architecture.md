@@ -45,7 +45,8 @@ User query
 | Knowledge graph | `scholar_agent.graph` | Extract, resolve, MultiDiGraph, graph retrieve |
 | Router | `scholar_agent.retrieval.router` | Query type → retrieval policy |
 | Research Agent | `scholar_agent.agents.researcher` | Adaptive tool loop + bounded safe fan-out + evidence ledger |
-| CLI | `scholar_agent.cli` | `ingest`, `index`, `graph`, `retrieve`, `research`, … |
+| Planner / Verifier / Workflow | `agents/planner.py`, `verifier.py`, `workflow.py` | Corrective multi-agent loop |
+| CLI | `scholar_agent.cli` | `ask`, `research`, `retrieve`, `graph`, … |
 
 ## Prototype loop
 

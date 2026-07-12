@@ -6,7 +6,7 @@ Evidence-driven multi-agent GraphRAG for literature research.
 > retrieval tools, a Verifier checks evidence coverage, and a Writer answers
 > only from verified evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–5 implemented (through adaptive Research Agent).
+**Status:** Phases 0–6 implemented (through Planner/Verifier corrective workflow).
 Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 ## Implemented phases
@@ -56,6 +56,13 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 - Evidence ledger merge + structured source/page/score execution events
 - Safe parallel multi-sub-question research with deterministic merge order
 
+### Phase 6
+
+- Structured Planner (`QueryPlan` only; no free-form plans)
+- Independent Verifier with corrective queries + conflict surfacing
+- Full LangGraph loop: plan → research → verify → corrective research
+- Exhaustive termination (sufficient / budgets / no-new-evidence / unanswerable)
+
 ## Quick start
 
 ```bash
@@ -95,6 +102,7 @@ uv run python scripts/deepseek_compatibility.py
 | `uv run scholar-agent graph inspect` | Stats + sample edges |
 | `uv run scholar-agent retrieve "Self-RAG HotpotQA" --mode graph` | Graph retrieval |
 | `uv run scholar-agent research "Compare Self-RAG and CRAG"` | Research Agent loop |
+| `uv run scholar-agent ask "Compare Self-RAG versus CRAG"` | Full plan→verify loop |
 | `make test` / `make lint` / `make typecheck` | Quality gates |
 | `make compatibility` | Live provider checks |
 

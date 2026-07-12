@@ -269,7 +269,28 @@ in original sub-question order.
 
 ---
 
+## Phase 6
+
+### ADR-025: Offline structured Planner (no free-form plans)
+
+**Decision:** Planner always returns a Pydantic `QueryPlan`. Decomposition is
+type-driven: simple factual → 1 sub-question; comparison/synthesis → several.
+LLM planning is optional later and not required for acceptance.
+
+### ADR-026: Independent Verifier with concrete corrective queries
+
+**Decision:** Verifier only sees query, plan, and evidence ledger. It returns
+coverage, conflicts, missing aspects, and **actionable** corrective queries—not
+only `is_sufficient=false`. Contradictions are retained and listed by evidence ID.
+
+### ADR-027: Corrective loop termination is exhaustive
+
+**Decision:** The LangGraph workflow stops on sufficient evidence, iteration
+budget, tool budget, no-new-evidence, unanswerable corpus, or empty corrective
+query list. Every path emits `run_finished` with a reason.
+
+---
+
 ## Pending (later phases)
 
-- Planner + Verifier + corrective loop (Phase 6)
 - Writer and citation validator (Phase 7)
