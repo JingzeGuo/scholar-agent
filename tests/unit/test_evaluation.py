@@ -13,18 +13,20 @@ from scholar_agent.evaluation.answer_metrics import (
     is_refusal,
     token_f1,
 )
-from scholar_agent.evaluation.baselines import SystemRunner
+from scholar_agent.evaluation.baselines import SystemRunner, _merge_hits
 from scholar_agent.evaluation.citation_metrics import compute_citation_metrics_from_papers
 from scholar_agent.evaluation.dataset import (
     EvalQuestion,
     GoldEvidence,
     compute_dataset_fingerprint,
     load_eval_dataset,
+    validate_dataset_against_store,
 )
 from scholar_agent.evaluation.report import write_report
 from scholar_agent.evaluation.retrieval_metrics import compute_retrieval_metrics
 from scholar_agent.ids import make_chunk_id
 from scholar_agent.models.retrieval import RetrievalHit
+from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.retrieval.tools import RetrievalToolkit
 
 REPO = Path(__file__).resolve().parents[2]
@@ -67,6 +69,11 @@ def test_fingerprint_matches_frozen_split(frozen_dataset) -> None:
     )
     assert frozen_dataset.split is not None
     assert fp == frozen_dataset.split.fingerprint_sha256
+
+
+def test_frozen_gold_maps_to_canonical_store(frozen_dataset) -> None:
+    store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
+    assert validate_dataset_against_store(frozen_dataset, store) == []
 
 
 def test_tampered_dataset_fails_validation(tmp_path: Path, frozen_dataset) -> None:
@@ -129,6 +136,47 @@ def test_retrieval_metrics_recall_and_mrr() -> None:
     assert m.recall_at_k_paper == 1.0
 
 
+def test_graph_evidence_recall_uses_only_graph_hits() -> None:
+    question = EvalQuestion(
+        question_id="graph_1",
+        question="How are A and B related?",
+        question_type="relational",
+        required_paper_ids=["paper_a"],
+        required_chunk_ids=["chunk_gold"],
+        graph_reasoning_expected=True,
+    )
+    hits = [
+        RetrievalHit(
+            chunk_id="chunk_gold",
+            paper_id="paper_a",
+            text="relation",
+            page_start=1,
+            page_end=1,
+            retrieval_method="graph",
+        )
+    ]
+    metrics = compute_retrieval_metrics(question, hits, k=5)
+    assert metrics.graph_evidence_recall == 1.0
+
+
+def test_multi_tool_merge_does_not_starve_graph_hits() -> None:
+    def hit(chunk_id: str, method: str) -> RetrievalHit:
+        return RetrievalHit(
+            chunk_id=chunk_id,
+            paper_id=f"paper_{chunk_id}",
+            text=chunk_id,
+            page_start=1,
+            page_end=1,
+            retrieval_method=method,
+        )
+
+    hybrid = [hit(f"hybrid_{index}", "hybrid_rerank") for index in range(8)]
+    graph = [hit(f"graph_{index}", "graph") for index in range(8)]
+    merged = _merge_hits(hybrid, graph, limit=8)
+    assert len(merged) == 8
+    assert sum(item.retrieval_method == "graph" for item in merged) == 4
+
+
 def test_citation_and_answer_metrics_unanswerable() -> None:
     q = EvalQuestion(
         question_id="u1",
@@ -153,6 +201,41 @@ def test_token_f1_basic() -> None:
     assert token_f1("", "") == 1.0
 
 
+def test_ragas_uses_only_explicit_evaluator() -> None:
+    question = EvalQuestion(
+        question_id="r1",
+        question="What is RAG?",
+        question_type="factual",
+        reference_answer="RAG augments generation with retrieved evidence.",
+        reference_claims=["RAG uses retrieved evidence."],
+    )
+    calls: list[dict[str, object]] = []
+
+    def evaluator(**kwargs: object) -> dict[str, float]:
+        calls.append(kwargs)
+        return {"faithfulness": 0.75, "answer_relevancy": 0.8}
+
+    without_provider = compute_answer_metrics(
+        question,
+        "RAG uses retrieved evidence.",
+        contexts=["RAG augments generation with retrieval."],
+        use_ragas=True,
+    )
+    assert without_provider.used_ragas is False
+
+    with_provider = compute_answer_metrics(
+        question,
+        "RAG uses retrieved evidence.",
+        contexts=["RAG augments generation with retrieval."],
+        use_ragas=True,
+        ragas_evaluator=evaluator,
+    )
+    assert len(calls) == 1
+    assert with_provider.used_ragas is True
+    assert with_provider.ragas_faithfulness == 0.75
+    assert with_provider.ragas_answer_relevancy == 0.8
+
+
 class _FakeToolkit(RetrievalToolkit):
     def __init__(self, hits_by_mode: dict[str, list[RetrievalHit]] | None = None) -> None:
         self.store = None  # type: ignore[assignment]
@@ -173,7 +256,9 @@ class _FakeToolkit(RetrievalToolkit):
 
         self.calls.append(mode)
         hits = list(self.hits_by_mode.get(mode) or self.hits_by_mode.get("*") or [])
-        method = mode if mode in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"} else "hybrid"
+        method = (
+            mode if mode in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"} else "hybrid"
+        )
         return RetrievalResult(query=query, method=method, hits=hits[: k or 8])  # type: ignore[arg-type]
 
 
@@ -189,7 +274,16 @@ def test_ablation_runs_all_selected_systems_same_questions(tmp_path: Path) -> No
         score=0.9,
         retrieval_method="hybrid_rerank",
     )
-    toolkit = _FakeToolkit(hits_by_mode={"*": [hit], "dense": [hit], "sparse": [hit], "hybrid": [hit], "hybrid_rerank": [hit], "graph": [hit]})
+    toolkit = _FakeToolkit(
+        hits_by_mode={
+            "*": [hit],
+            "dense": [hit],
+            "sparse": [hit],
+            "hybrid": [hit],
+            "hybrid_rerank": [hit],
+            "graph": [hit],
+        }
+    )
 
     questions = [
         EvalQuestion(
@@ -235,11 +329,17 @@ def test_ablation_runs_all_selected_systems_same_questions(tmp_path: Path) -> No
     for system in systems:
         ids = [r.question.question_id for r in rows if r.output.system == system]
         assert ids == ["q_f_test", "q_u_test"]
+    assert report.config["question_ids"] == ["q_f_test", "q_u_test"]
+    for summary in report.systems:
+        assert "avg_latency_ms" in summary.by_type["factual"]
+        assert "estimated_cost_usd" in summary.by_type["factual"]
 
     paths = write_report(report, tmp_path)
     assert paths["results_json"].is_file()
+    assert paths["run_config_json"].is_file()
     assert paths["aggregate_csv"].is_file()
     assert paths["chart_recall"].is_file()
+    assert paths["chart_category_factual"].is_file()
     payload = json.loads(paths["results_json"].read_text(encoding="utf-8"))
     assert payload["run_id"]
     assert len(payload["systems"]) == len(systems)
@@ -270,3 +370,5 @@ def test_evaluate_one_records_latency_and_cost() -> None:
     assert result.output.latency_ms >= 0
     assert result.output.token_estimate > 0
     assert result.retrieval.recall_at_k_paper == 1.0
+    # Fake toolkit has no canonical store, so validity is unknown/zero—not fabricated as 1.
+    assert result.citation.citation_validity_rate == 0.0

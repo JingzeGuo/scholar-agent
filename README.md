@@ -74,7 +74,9 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 - Frozen 50-question evaluation split (fingerprint-locked)
 - Baselines/ablations: dense, hybrid, rerank, graph, corrective, full agent, static tools
-- Deterministic retrieval + citation + answer metrics; optional RAGAS (`--ragas`)
+- Canonical-gold validation + deterministic retrieval/citation/answer/agent metrics
+- Reproducible run/code fingerprints, category charts, and optional RAGAS
+  (`--ragas`) wired to the configured provider and retrieval embeddings
 - Reports: JSON/CSV, per-category tables, SVG charts, failure log + notebook
 
 ## Quick start

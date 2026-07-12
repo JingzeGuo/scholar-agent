@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from scholar_agent.evaluation.dataset import EvalQuestion
 from scholar_agent.ids import normalize_text
+
+RagasEvaluator = Callable[..., dict[str, float] | None]
 
 _STOP = {
     "a",
@@ -55,9 +58,7 @@ class AnswerMetricAggregate(BaseModel):
 
 def _tokens(text: str) -> set[str]:
     return {
-        t
-        for t in re.findall(r"[a-z0-9]+", normalize_text(text))
-        if t not in _STOP and len(t) > 1
+        t for t in re.findall(r"[a-z0-9]+", normalize_text(text)) if t not in _STOP and len(t) > 1
     }
 
 
@@ -122,6 +123,7 @@ def compute_answer_metrics(
     *,
     contexts: list[str] | None = None,
     use_ragas: bool = False,
+    ragas_evaluator: RagasEvaluator | None = None,
 ) -> AnswerMetrics:
     contexts = contexts or []
     if question.unanswerable:
@@ -147,8 +149,8 @@ def compute_answer_metrics(
         faithfulness_proxy=faith,
         used_ragas=False,
     )
-    if use_ragas:
-        ragas_scores = try_ragas_scores(
+    if use_ragas and ragas_evaluator is not None:
+        ragas_scores = ragas_evaluator(
             question=question.question,
             answer=answer_text,
             contexts=contexts,
@@ -167,8 +169,15 @@ def try_ragas_scores(
     answer: str,
     contexts: list[str],
     reference: str,
+    llm: Any,
+    embeddings: Any,
 ) -> dict[str, float] | None:
-    """Optional RAGAS integration. Returns None if ragas is unavailable."""
+    """Score one answer with explicitly configured RAGAS models.
+
+    ``llm`` and ``embeddings`` are mandatory by design. RAGAS otherwise falls
+    back to its OpenAI defaults, which could use the wrong provider and make an
+    unplanned paid call.
+    """
     try:
         from datasets import Dataset
         from ragas import evaluate
@@ -185,7 +194,14 @@ def try_ragas_scores(
                 "ground_truth": [reference or answer],
             }
         )
-        result = evaluate(ds, metrics=[faithfulness, answer_relevancy])
+        result = evaluate(
+            ds,
+            metrics=[faithfulness, answer_relevancy],
+            llm=llm,
+            embeddings=embeddings,
+            raise_exceptions=False,
+            show_progress=False,
+        )
         # ragas returns different types across versions
         row: dict[str, Any]
         if hasattr(result, "to_pandas"):

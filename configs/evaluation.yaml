@@ -42,3 +42,9 @@ budgets:
 output:
   dir: outputs/evaluation
   write_charts: true
+
+# Set to the effective provider price when running paid generation/RAGAS.
+cost:
+  usd_per_1k_tokens: 0.0
+
+random_seed: 0

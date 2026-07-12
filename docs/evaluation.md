@@ -43,6 +43,8 @@ silent drift between the JSONL files and `frozen_split.json`.
 ## Metrics (offline-first)
 
 **Retrieval:** Recall@K (chunk + paper), MRR, nDCG@K (graded when available).
+Graph-expected questions additionally report graph-evidence recall and every
+system reports unique useful gold evidence per tool call.
 
 **Citations:** precision/recall vs gold papers, validity rate, page traceability,
 unsupported claim rate.
@@ -51,7 +53,12 @@ unsupported claim rate.
 unanswerable items, faithfulness proxy (answer tokens covered by contexts).
 
 **Optional RAGAS:** `uv sync --extra eval` and `scholar-agent evaluate --ragas`
-(requires live LLM). Default CI stays deterministic without paid calls.
+(requires a configured DeepSeek/OpenAI-compatible API key and makes paid live
+LLM calls). The evaluator explicitly uses the project's configured provider and
+the retrieval embedder; it never falls back to RAGAS's implicit OpenAI defaults.
+Reports record whether RAGAS was requested, installed, configured, and actually
+used; unavailable scores remain `null`, never silently become zero. Default CI
+stays deterministic without paid calls.
 
 ## Run
 
@@ -74,13 +81,28 @@ make evaluate-smoke
 Outputs under `outputs/evaluation/` (gitignored recommended):
 
 - `results.json`, `aggregate_metrics.csv`, `per_question_metrics.csv`
+- `run_config.json` with dataset/config/code fingerprints
 - `report.md`, `failures.json`
-- SVG charts: recall, latency, cost, citation precision
+- SVG charts: aggregate recall, per-category recall, latency, cost, citation precision
+
+An explicit `--embedding-backend hash` uses an isolated deterministic index at
+`data/indexes/evaluation/hash/`; it never silently reuses the production BGE
+collection. The report stores both requested and actual embedding/reranker names.
+
+## Measured offline audit
+
+The complete 50×7 audit run `run_f23303cfda91408c` used hashing embeddings and
+lexical reranking. Paper Recall@8 ranged from 0.13 (`naive_dense`) to 0.67
+(`hybrid_graph`); the full agent reached 0.53 recall and 0.274 citation precision
+but failed all five unanswerable refusals. These are configuration-specific
+measurements, not production-model claims. See `docs/failure_analysis.md` for six
+manually reviewed cases.
 
 ## Discipline
 
 - Do not tune systems against individual frozen questions in prompts.
 - Report **per-category** metrics, not only micro-averages.
 - Latency and estimated token cost are recorded for every question×system.
+- Per-category tables include latency, tool calls, token estimates, and cost.
 - Manual failure analysis: `notebooks/error_analysis.ipynb` and
   `docs/failure_analysis.md`.

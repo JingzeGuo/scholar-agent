@@ -9,9 +9,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-QuestionType = Literal[
-    "factual", "keyword", "comparison", "relational", "unanswerable"
-]
+from scholar_agent.retrieval.chunk_store import ChunkStore
+
+QuestionType = Literal["factual", "keyword", "comparison", "relational", "unanswerable"]
 
 EXPECTED_TYPE_COUNTS: dict[str, int] = {
     "factual": 10,
@@ -156,9 +156,7 @@ def load_eval_dataset(
     if reference_evidence_path is not None:
         r_path = Path(reference_evidence_path)
         if r_path.is_file():
-            refs = [
-                ReferenceEvidenceRow.model_validate(row) for row in _read_jsonl(r_path)
-            ]
+            refs = [ReferenceEvidenceRow.model_validate(row) for row in _read_jsonl(r_path)]
     split: FrozenSplit | None = None
     if frozen_split_path is not None:
         s_path = Path(frozen_split_path)
@@ -170,9 +168,7 @@ def load_eval_dataset(
     return dataset
 
 
-def compute_dataset_fingerprint(
-    questions_path: Path, reference_path: Path | None
-) -> str:
+def compute_dataset_fingerprint(questions_path: Path, reference_path: Path | None) -> str:
     material = questions_path.read_bytes()
     if reference_path is not None and reference_path.is_file():
         material = material + b"\n" + reference_path.read_bytes()
@@ -197,9 +193,7 @@ def validate_frozen_dataset(
         counts[q.question_type] = counts.get(q.question_type, 0) + 1
     for key, expected in EXPECTED_TYPE_COUNTS.items():
         if counts.get(key, 0) != expected:
-            issues.append(
-                f"type {key}: expected {expected}, got {counts.get(key, 0)}"
-            )
+            issues.append(f"type {key}: expected {expected}, got {counts.get(key, 0)}")
     for q in dataset.questions:
         if q.unanswerable:
             continue
@@ -222,4 +216,77 @@ def validate_frozen_dataset(
                 issues.append("frozen_split.frozen is false")
     if issues:
         raise ValueError("evaluation dataset invalid:\n- " + "\n- ".join(issues))
+    return issues
+
+
+def validate_dataset_against_store(
+    dataset: EvalDataset,
+    store: ChunkStore,
+) -> list[str]:
+    """Ensure every frozen gold source still maps to canonical paper/chunk/pages."""
+    issues: list[str] = []
+    questions = dataset.by_id()
+    refs_by_question: dict[str, list[ReferenceEvidenceRow]] = {}
+    for reference in dataset.reference_evidence:
+        if reference.question_id not in questions:
+            issues.append(f"orphan reference_evidence question_id={reference.question_id}")
+            continue
+        refs_by_question.setdefault(reference.question_id, []).append(reference)
+        if store.get_paper(reference.paper_id) is None:
+            issues.append(
+                f"{reference.question_id}: reference uses unknown paper {reference.paper_id}"
+            )
+        if reference.chunk_id:
+            chunk = store.get_chunk(reference.chunk_id)
+            if chunk is None:
+                issues.append(
+                    f"{reference.question_id}: reference uses unknown chunk {reference.chunk_id}"
+                )
+            elif chunk.paper_id != reference.paper_id:
+                issues.append(f"{reference.question_id}: reference chunk/paper mismatch")
+
+    for question in dataset.questions:
+        # Some refusal questions include scope evidence showing that a named
+        # paper is about a different domain; validate those sources below.
+        if (
+            question.unanswerable
+            and not question.gold_paper_ids()
+            and not question.gold_chunk_ids()
+        ):
+            continue
+        if not question.reference_claims or not question.annotation_notes.strip():
+            issues.append(f"{question.question_id}: missing reference claims or review notes")
+        if question.question_id not in refs_by_question:
+            issues.append(f"{question.question_id}: missing reference_evidence rows")
+        for paper_id in question.required_paper_ids:
+            if store.get_paper(paper_id) is None:
+                issues.append(f"{question.question_id}: unknown paper {paper_id}")
+        for chunk_id in question.required_chunk_ids:
+            if store.get_chunk(chunk_id) is None:
+                issues.append(f"{question.question_id}: unknown chunk {chunk_id}")
+        for gold in question.gold_evidence:
+            paper = store.get_paper(gold.paper_id)
+            if paper is None:
+                issues.append(f"{question.question_id}: unknown gold paper {gold.paper_id}")
+            chunk = store.get_chunk(gold.chunk_id) if gold.chunk_id else None
+            if gold.chunk_id and chunk is None:
+                issues.append(f"{question.question_id}: unknown gold chunk {gold.chunk_id}")
+                continue
+            if chunk is not None:
+                if chunk.paper_id != gold.paper_id:
+                    issues.append(f"{question.question_id}: chunk/paper mismatch {gold.chunk_id}")
+                if gold.page_start is not None and gold.page_start < chunk.page_start:
+                    issues.append(f"{question.question_id}: gold page starts before chunk")
+                if gold.page_end is not None and gold.page_end > chunk.page_end:
+                    issues.append(f"{question.question_id}: gold page ends after chunk")
+                if (
+                    paper is not None
+                    and paper.page_count is not None
+                    and gold.page_end is not None
+                    and gold.page_end > paper.page_count
+                ):
+                    issues.append(f"{question.question_id}: gold page exceeds paper")
+
+    if issues:
+        raise ValueError("evaluation gold provenance invalid:\n- " + "\n- ".join(issues))
     return issues

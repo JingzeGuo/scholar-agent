@@ -42,7 +42,7 @@ ui = [
     "streamlit>=1.36",
 ]
 eval = [
-    "ragas>=0.1",
+    "ragas>=0.3.1,<0.4",
     "datasets>=2.20",
 ]
 

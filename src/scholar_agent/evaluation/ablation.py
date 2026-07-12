@@ -8,6 +8,7 @@ from typing import Any
 
 from scholar_agent.evaluation.answer_metrics import (
     AnswerMetrics,
+    RagasEvaluator,
     compute_answer_metrics,
 )
 from scholar_agent.evaluation.baselines import ALL_SYSTEMS, SystemOutput, SystemRunner
@@ -43,6 +44,7 @@ class AblationConfig:
     max_questions: int | None = None
     question_ids: list[str] | None = None
     use_ragas: bool = False
+    ragas_evaluator: RagasEvaluator | None = None
     use_llm: bool = False
     max_corrective_iterations: int = 2
     research_max_tools: int = 3
@@ -50,9 +52,7 @@ class AblationConfig:
     failure_threshold_recall: float = 0.0
 
 
-def select_questions(
-    dataset: EvalDataset, config: AblationConfig
-) -> list[EvalQuestion]:
+def select_questions(dataset: EvalDataset, config: AblationConfig) -> list[EvalQuestion]:
     questions = dataset.ordered()
     if config.question_ids:
         wanted = set(config.question_ids)
@@ -69,6 +69,7 @@ def evaluate_one(
     *,
     top_k: int,
     use_ragas: bool,
+    ragas_evaluator: RagasEvaluator | None = None,
 ) -> QuestionSystemResult:
     output = runner.run(system, question)
     retrieval = compute_retrieval_metrics(question, output.hits, k=top_k)
@@ -76,16 +77,14 @@ def evaluate_one(
     # Prefer papers from hits if citations empty
     if not cited:
         cited = {h.paper_id for h in output.hits}
-    page_ok = sum(1 for h in output.hits if h.page_start >= 1)
-    page_total = len(output.hits)
     citation = compute_citation_metrics_from_papers(
         question,
         cited,
-        validity_rate=0.0 if output.error else 1.0,
-        page_ok=page_ok,
-        page_total=page_total,
-        n_claims=1 if output.answer_text.strip() else 0,
-        n_unsupported_claims=0,
+        validity_rate=(0.0 if output.error else output.citation_validity_rate),
+        page_ok=output.citation_page_ok,
+        page_total=output.citation_page_total,
+        n_claims=output.n_claims,
+        n_unsupported_claims=output.n_unsupported_claims,
     )
     contexts = [h.text for h in output.hits]
     answer = compute_answer_metrics(
@@ -93,6 +92,7 @@ def evaluate_one(
         output.answer_text,
         contexts=contexts,
         use_ragas=use_ragas,
+        ragas_evaluator=ragas_evaluator,
     )
     # Override refusal_correct using system prediction when unanswerable
     if question.unanswerable:
@@ -130,6 +130,7 @@ def run_ablation(
                 question,
                 top_k=cfg.top_k,
                 use_ragas=cfg.use_ragas,
+                ragas_evaluator=cfg.ragas_evaluator,
             )
             results.append(result)
 
@@ -145,6 +146,10 @@ def run_ablation(
             "use_ragas": cfg.use_ragas,
             "use_llm": cfg.use_llm,
             "n_questions": len(questions),
+            "question_ids": [question.question_id for question in questions],
+            "max_corrective_iterations": cfg.max_corrective_iterations,
+            "research_max_tools": cfg.research_max_tools,
+            "usd_per_1k_tokens": cfg.usd_per_1k_tokens,
         },
         failure_threshold_recall=cfg.failure_threshold_recall,
     )
@@ -180,6 +185,7 @@ def build_report(
                 "recall_at_k_paper": r.retrieval.recall_at_k_paper,
                 "mrr": r.retrieval.mrr,
                 "ndcg_at_k": r.retrieval.ndcg_at_k,
+                "graph_evidence_recall": r.retrieval.graph_evidence_recall,
                 "citation_precision": r.citation.citation_precision,
                 "citation_recall": r.citation.citation_recall,
                 "citation_validity_rate": r.citation.citation_validity_rate,
@@ -188,6 +194,13 @@ def build_report(
                 "token_f1": r.answer.token_f1,
                 "refusal_correct": r.answer.refusal_correct,
                 "faithfulness_proxy": r.answer.faithfulness_proxy,
+                "ragas_faithfulness": r.answer.ragas_faithfulness,
+                "ragas_answer_relevancy": r.answer.ragas_answer_relevancy,
+                "ragas_used": r.answer.used_ragas,
+                "unique_useful_evidence_per_tool_call": (
+                    _unique_useful_count(r) / max(1, r.output.tool_call_count)
+                ),
+                "iteration_count": r.output.iteration_count,
                 "latency_ms": r.output.latency_ms,
                 "tool_call_count": r.output.tool_call_count,
                 "token_estimate": r.output.token_estimate,
@@ -211,11 +224,7 @@ def build_report(
                         "question_type": r.question.question_type,
                         "question": r.question.question,
                         "reason": r.output.error
-                        or (
-                            "refusal miss"
-                            if r.question.unanswerable
-                            else "zero retrieval recall"
-                        ),
+                        or ("refusal miss" if r.question.unanswerable else "zero retrieval recall"),
                         "recall_at_k_paper": r.retrieval.recall_at_k_paper,
                         "token_f1": r.answer.token_f1,
                         "answer_preview": (r.output.answer_text or "")[:240],
@@ -240,9 +249,7 @@ def build_report(
     )
 
 
-def _summarize_system(
-    system: str, rows: list[QuestionSystemResult]
-) -> SystemSummary:
+def _summarize_system(system: str, rows: list[QuestionSystemResult]) -> SystemSummary:
     n = len(rows)
     n_errors = sum(1 for r in rows if r.output.error)
 
@@ -264,8 +271,30 @@ def _summarize_system(
             "claim_overlap": sum(g.answer.claim_overlap for g in group) / m,
             "refusal_correct": sum(g.answer.refusal_correct for g in group) / m,
             "avg_latency_ms": sum(g.output.latency_ms for g in group) / m,
+            "avg_tool_calls": sum(g.output.tool_call_count for g in group) / m,
+            "avg_iterations": sum(g.output.iteration_count for g in group) / m,
+            "avg_tokens": sum(g.output.token_estimate for g in group) / m,
+            "estimated_cost_usd": sum(g.output.estimated_cost_usd for g in group),
+            "unique_useful_evidence_per_tool_call": sum(
+                _unique_useful_count(g) / max(1, g.output.tool_call_count) for g in group
+            )
+            / m,
         }
 
+    ragas_f = [
+        row.answer.ragas_faithfulness for row in rows if row.answer.ragas_faithfulness is not None
+    ]
+    ragas_r = [
+        row.answer.ragas_answer_relevancy
+        for row in rows
+        if row.answer.ragas_answer_relevancy is not None
+    ]
+    ragas_used = sum(1 for row in rows if row.answer.used_ragas)
+    graph_recall = [
+        row.retrieval.graph_evidence_recall
+        for row in rows
+        if row.retrieval.graph_evidence_recall is not None
+    ]
     return SystemSummary(
         system=system,
         n_questions=n,
@@ -274,6 +303,7 @@ def _summarize_system(
         recall_at_k_paper=avg(lambda r: r.retrieval.recall_at_k_paper),
         mrr=avg(lambda r: r.retrieval.mrr),
         ndcg_at_k=avg(lambda r: r.retrieval.ndcg_at_k),
+        graph_evidence_recall=(sum(graph_recall) / len(graph_recall) if graph_recall else None),
         citation_precision=avg(lambda r: r.citation.citation_precision),
         citation_recall=avg(lambda r: r.citation.citation_recall),
         citation_validity_rate=avg(lambda r: r.citation.citation_validity_rate),
@@ -282,9 +312,24 @@ def _summarize_system(
         token_f1=avg(lambda r: r.answer.token_f1),
         refusal_correct=avg(lambda r: r.answer.refusal_correct),
         faithfulness_proxy=avg(lambda r: r.answer.faithfulness_proxy),
+        ragas_faithfulness=(sum(ragas_f) / len(ragas_f)) if ragas_f else None,
+        ragas_answer_relevancy=(sum(ragas_r) / len(ragas_r)) if ragas_r else None,
+        ragas_coverage_rate=ragas_used / n if n else 0.0,
+        unique_useful_evidence_per_tool_call=avg(
+            lambda r: _unique_useful_count(r) / max(1, r.output.tool_call_count)
+        ),
         avg_latency_ms=avg(lambda r: float(r.output.latency_ms)),
         avg_tool_calls=avg(lambda r: float(r.output.tool_call_count)),
         avg_tokens=avg(lambda r: float(r.output.token_estimate)),
         total_estimated_cost_usd=sum(r.output.estimated_cost_usd for r in rows),
         by_type=by_type,
     )
+
+
+def _unique_useful_count(result: QuestionSystemResult) -> int:
+    """Unique retrieved gold chunks, falling back to gold papers."""
+    gold_chunks = result.question.gold_chunk_ids()
+    if gold_chunks:
+        return len({hit.chunk_id for hit in result.output.hits} & gold_chunks)
+    gold_papers = result.question.gold_paper_ids()
+    return len({hit.paper_id for hit in result.output.hits} & gold_papers)

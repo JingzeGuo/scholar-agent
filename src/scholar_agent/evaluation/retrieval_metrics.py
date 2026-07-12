@@ -18,6 +18,7 @@ class RetrievalMetrics(BaseModel):
     mrr_paper: float = 0.0
     ndcg_at_k: float = 0.0
     hit_at_k: float = 0.0
+    graph_evidence_recall: float | None = None
     k: int = 0
     n_gold_chunks: int = 0
     n_gold_papers: int = 0
@@ -31,6 +32,7 @@ class RetrievalMetricAggregate(BaseModel):
     mrr_paper: float = 0.0
     ndcg_at_k: float = 0.0
     hit_at_k: float = 0.0
+    graph_evidence_recall: float | None = None
     by_type: dict[str, dict[str, float]] = Field(default_factory=dict)
 
 
@@ -123,6 +125,17 @@ def compute_retrieval_metrics(
     ideal = sorted(grades.values(), reverse=True)[:k]
     idcg = _dcg(ideal) if ideal else 0.0
     ndcg = (dcg / idcg) if idcg > 0 else 0.0
+    graph_recall: float | None = None
+    if question.graph_reasoning_expected:
+        graph_hits = [hit for hit in hit_list if hit.retrieval_method == "graph"]
+        if gold_chunks:
+            graph_recall = len({hit.chunk_id for hit in graph_hits} & gold_chunks) / len(
+                gold_chunks
+            )
+        elif gold_papers:
+            graph_recall = len({hit.paper_id for hit in graph_hits} & gold_papers) / len(
+                gold_papers
+            )
 
     return RetrievalMetrics(
         recall_at_k=recall_chunk if gold_chunks else recall_p,
@@ -131,6 +144,7 @@ def compute_retrieval_metrics(
         mrr_paper=mrr_p,
         ndcg_at_k=ndcg if gold_chunks else hit_p,
         hit_at_k=hit_c if gold_chunks else hit_p,
+        graph_evidence_recall=graph_recall,
         k=k,
         n_gold_chunks=len(gold_chunks),
         n_gold_papers=len(gold_papers),
@@ -166,6 +180,11 @@ def aggregate_retrieval_metrics(
         cnt = max(1, by_type_n[qtype])
         by_type[qtype] = {k: sums[k] / cnt for k in keys}
         by_type[qtype]["n"] = float(cnt)
+    graph_values = [
+        metric.graph_evidence_recall
+        for _question_type, metric in rows
+        if metric.graph_evidence_recall is not None
+    ]
     return RetrievalMetricAggregate(
         n=n,
         recall_at_k=totals["recall_at_k"] / n,
@@ -174,5 +193,6 @@ def aggregate_retrieval_metrics(
         mrr_paper=totals["mrr_paper"] / n,
         ndcg_at_k=totals["ndcg_at_k"] / n,
         hit_at_k=totals["hit_at_k"] / n,
+        graph_evidence_recall=(sum(graph_values) / len(graph_values) if graph_values else None),
         by_type=by_type,
     )

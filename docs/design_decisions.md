@@ -338,7 +338,8 @@ PDF page; unsupported claims are removed or qualified.
 SHA-256 fingerprint in `frozen_split.json`. Loaders refuse silent drift between
 JSONL files and the freeze record. Type mix is fixed (10/10/15/10/5). Gold labels
 use stable `paper_id` plus resolved `chunk_id`/pages from the processed corpus at
-freeze time (`scripts/build_eval_dataset.py`).
+freeze time (`scripts/build_eval_dataset.py`). Before a run, every gold paper,
+chunk, and page is checked against the current canonical store.
 
 **Rationale:** Plan §11.1 and Phase-8 acceptance — identical split for every system.
 
@@ -348,7 +349,8 @@ freeze time (`scripts/build_eval_dataset.py`).
 nDCG), citation (precision/recall/validity/page traceability), and answer
 (token/claim overlap, refusal accuracy, faithfulness proxy) metrics without paid
 APIs. RAGAS is an optional extra (`scholar-agent[eval]` + `--ragas`) that degrades
-gracefully when unavailable.
+gracefully when unavailable. Reports distinguish requested, available, and
+actually-scored RAGAS rows; unavailable values remain null.
 
 **Rationale:** Core tests and CI must stay free of live provider calls.
 
@@ -357,7 +359,12 @@ gracefully when unavailable.
 **Decision:** `naive_dense`, `hybrid_rag`, `hybrid_rerank`, `hybrid_graph`,
 `hybrid_corrective`, `full_agent`, and `static_all_tools` all implement the same
 `SystemOutput` contract and are scored by one ablation harness. Latency, tool
-counts, token estimates, and optional USD cost are recorded per question×system.
+counts, token estimates, and optional USD cost are recorded per question×system
+and category. Explicit hash evaluation uses an isolated index. Saved run configs
+record the actual embedder/reranker, frozen split, selected question IDs, Git
+commit/dirty state, and config/code fingerprints. Multi-tool baselines use
+deterministic round-robin fusion so later graph results cannot be starved by the
+first full top-k list.
 
 **Rationale:** Plan §11.2 systems compared + operational metrics in §11.3.
 

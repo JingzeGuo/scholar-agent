@@ -64,9 +64,7 @@ def _page_traceable_final(answer: FinalAnswer) -> tuple[int, int]:
 def _page_traceable_naive(answer: NaiveRAGAnswer) -> tuple[int, int]:
     if not answer.citations:
         return 0, 0
-    ok = sum(
-        1 for c in answer.citations if c.page_start >= 1 and c.page_end >= c.page_start
-    )
+    ok = sum(1 for c in answer.citations if c.page_start >= 1 and c.page_end >= c.page_start)
     return ok, len(answer.citations)
 
 
@@ -90,9 +88,7 @@ def compute_citation_metrics_from_papers(
             citation_recall=recall,
             citation_validity_rate=validity_rate if cited_papers else 1.0,
             page_traceability_rate=(page_ok / page_total) if page_total else 1.0,
-            unsupported_claim_rate=(
-                n_unsupported_claims / n_claims if n_claims else 0.0
-            ),
+            unsupported_claim_rate=(n_unsupported_claims / n_claims if n_claims else 0.0),
             n_cited=len(cited_papers),
             n_claims=n_claims,
         )
@@ -146,9 +142,7 @@ def compute_citation_metrics_naive(
     )
 
 
-def compute_citation_metrics_final(
-    question: EvalQuestion, answer: FinalAnswer
-) -> CitationMetrics:
+def compute_citation_metrics_final(question: EvalQuestion, answer: FinalAnswer) -> CitationMetrics:
     papers = _papers_from_final(answer)
     page_ok, page_total = _page_traceable_final(answer)
     report = answer.citation_report
@@ -158,9 +152,7 @@ def compute_citation_metrics_final(
     n_unsupported = 0
     if report is not None:
         n_unsupported = sum(
-            1
-            for i in report.issues
-            if i.severity == "error" and "no valid citations" in i.message
+            1 for i in report.issues if i.severity == "error" and "no valid citations" in i.message
         )
     return compute_citation_metrics_from_papers(
         question,

@@ -45,6 +45,12 @@ class SystemOutput(BaseModel):
     answer_text: str = ""
     hits: list[RetrievalHit] = Field(default_factory=list)
     cited_paper_ids: list[str] = Field(default_factory=list)
+    cited_evidence_ids: list[str] = Field(default_factory=list)
+    citation_validity_rate: float = 0.0
+    citation_page_ok: int = 0
+    citation_page_total: int = 0
+    n_claims: int = 0
+    n_unsupported_claims: int = 0
     latency_ms: int = 0
     tool_call_count: int = 0
     iteration_count: int = 0
@@ -65,10 +71,15 @@ def _estimate_cost(tokens: int, *, usd_per_1k: float = 0.0) -> float:
 
 
 def _merge_hits(*groups: list[RetrievalHit], limit: int) -> list[RetrievalHit]:
+    """Round-robin merge so later tools are not starved by the first top-k list."""
     seen: set[str] = set()
     out: list[RetrievalHit] = []
-    for group in groups:
-        for hit in group:
+    max_length = max((len(group) for group in groups), default=0)
+    for rank in range(max_length):
+        for group in groups:
+            if rank >= len(group):
+                continue
+            hit = group[rank]
             if hit.chunk_id in seen:
                 continue
             seen.add(hit.chunk_id)
@@ -88,6 +99,7 @@ class SystemRunner:
     research_max_tools: int = 3
     use_llm: bool = False
     usd_per_1k_tokens: float = 0.0
+    max_latency_ms: int = 120_000
 
     def run(self, system: SystemName | str, question: EvalQuestion) -> SystemOutput:
         started = perf_counter()
@@ -98,9 +110,7 @@ class SystemRunner:
             elif system == "hybrid_rag":
                 out = self._run_naive(question, mode="hybrid", system_name=name)
             elif system == "hybrid_rerank":
-                out = self._run_naive(
-                    question, mode="hybrid_rerank", system_name=name
-                )
+                out = self._run_naive(question, mode="hybrid_rerank", system_name=name)
             elif system == "hybrid_graph":
                 out = self._run_hybrid_graph(question)
             elif system == "hybrid_corrective":
@@ -148,6 +158,14 @@ class SystemRunner:
             answer_text=answer.answer,
             hits=list(answer.hits),
             cited_paper_ids=[c.paper_id for c in answer.citations],
+            citation_validity_rate=self._hit_provenance_rate(list(answer.hits)),
+            citation_page_ok=sum(
+                1
+                for citation in answer.citations
+                if citation.page_start >= 1 and citation.page_end >= citation.page_start
+            ),
+            citation_page_total=len(answer.citations),
+            n_claims=1 if answer.answer.strip() else 0,
             tool_call_count=1,
             iteration_count=1,
             unanswerable_predicted=_looks_unanswerable(answer.answer),
@@ -155,9 +173,7 @@ class SystemRunner:
         )
 
     def _run_hybrid_graph(self, question: EvalQuestion) -> SystemOutput:
-        hybrid = self.toolkit.search(
-            question.question, mode="hybrid_rerank", k=self.top_k
-        )
+        hybrid = self.toolkit.search(question.question, mode="hybrid_rerank", k=self.top_k)
         graph_hits: list[RetrievalHit] = []
         if self.toolkit.graph is not None:
             try:
@@ -176,6 +192,12 @@ class SystemRunner:
             answer_text=answer,
             hits=hits,
             cited_paper_ids=[h.paper_id for h in hits],
+            citation_validity_rate=self._hit_provenance_rate(hits),
+            citation_page_ok=sum(
+                1 for hit in hits if hit.page_start >= 1 and hit.page_end >= hit.page_start
+            ),
+            citation_page_total=len(hits),
+            n_claims=len(hits),
             tool_call_count=2 if graph_hits or self.toolkit.graph is not None else 1,
             iteration_count=1,
             unanswerable_predicted=_looks_unanswerable(answer),
@@ -184,10 +206,11 @@ class SystemRunner:
 
     def _run_workflow(self, question: EvalQuestion, *, full: bool) -> SystemOutput:
         cfg = WorkflowConfig(
-            max_corrective_iterations=self.max_corrective_iterations if full else max(
-                1, self.max_corrective_iterations
-            ),
+            max_corrective_iterations=self.max_corrective_iterations
+            if full
+            else max(1, self.max_corrective_iterations),
             max_total_tool_calls=12 if full else 8,
+            max_latency_ms=self.max_latency_ms,
             research=ResearchAgentConfig(
                 max_tool_calls_per_pass=self.research_max_tools,
                 max_evidence_per_sub_question=self.top_k,
@@ -203,15 +226,17 @@ class SystemRunner:
                 max_evidence_per_sub_question=self.top_k,
                 allow_policy_override=False,
             )
-        result: WorkflowResult = ResearchWorkflow(self.toolkit, config=cfg).run(
-            question.question
-        )
+        result: WorkflowResult = ResearchWorkflow(self.toolkit, config=cfg).run(question.question)
         answer_text = ""
         cited: list[str] = []
         hits: list[RetrievalHit] = []
         if result.final_answer is not None:
             answer_text = result.final_answer.markdown
-            cited = list(result.final_answer.citation_report.cited_paper_ids) if result.final_answer.citation_report else []
+            cited = (
+                list(result.final_answer.citation_report.cited_paper_ids)
+                if result.final_answer.citation_report
+                else []
+            )
             cited = cited or [c.paper_id for c in result.final_answer.source_cards]
         elif result.draft_answer is not None:
             answer_text = result.draft_answer.markdown
@@ -230,8 +255,21 @@ class SystemRunner:
                     retrieval_method=item.retrieval_method,
                 )
             )
-            if item.paper_id not in cited:
-                cited.append(item.paper_id)
+
+        final = result.final_answer
+        report = final.citation_report if final is not None else None
+        cards = final.source_cards if final is not None else []
+        unsupported = 0
+        if report is not None:
+            unsupported = sum(
+                1
+                for issue in report.issues
+                if issue.severity == "error"
+                and (
+                    "no valid citations" in issue.message.lower()
+                    or "does not support" in issue.message.lower()
+                )
+            )
 
         return SystemOutput(
             system="full_agent" if full else "hybrid_corrective",
@@ -239,13 +277,21 @@ class SystemRunner:
             answer_text=answer_text,
             hits=hits,
             cited_paper_ids=cited,
+            cited_evidence_ids=(list(report.cited_evidence_ids) if report is not None else []),
+            citation_validity_rate=(1.0 if report is not None and report.is_valid else 0.0),
+            citation_page_ok=sum(
+                1 for card in cards if card.page_start >= 1 and card.page_end >= card.page_start
+            ),
+            citation_page_total=len(cards),
+            n_claims=len(final.claims) if final is not None else 0,
+            n_unsupported_claims=unsupported,
             tool_call_count=result.tool_call_count,
             iteration_count=result.iteration,
-            unanswerable_predicted=result.unanswerable
-            or _looks_unanswerable(answer_text),
+            unanswerable_predicted=result.unanswerable or _looks_unanswerable(answer_text),
             metadata={
                 "terminated_reason": result.terminated_reason,
                 "coverage": result.verification.coverage_score,
+                "corrective_triggered": result.iteration > 0,
             },
         )
 
@@ -280,11 +326,40 @@ class SystemRunner:
             answer_text=answer,
             hits=hits,
             cited_paper_ids=[h.paper_id for h in hits],
+            citation_validity_rate=self._hit_provenance_rate(hits),
+            citation_page_ok=sum(
+                1 for hit in hits if hit.page_start >= 1 and hit.page_end >= hit.page_start
+            ),
+            citation_page_total=len(hits),
+            n_claims=len(hits),
             tool_call_count=tools,
             iteration_count=1,
             unanswerable_predicted=_looks_unanswerable(answer),
             metadata={"modes": list(modes)},
         )
+
+    def _hit_provenance_rate(self, hits: list[RetrievalHit]) -> float:
+        """Fraction of cited hits that still map to the canonical store."""
+        if not hits:
+            return 1.0
+        store = getattr(self.toolkit, "store", None)
+        if store is None:
+            return 0.0
+        valid = 0
+        for hit in hits:
+            chunk = store.get_chunk(hit.chunk_id)
+            paper = store.get_paper(hit.paper_id)
+            if (
+                chunk is not None
+                and paper is not None
+                and chunk.paper_id == hit.paper_id
+                and hit.page_start >= chunk.page_start
+                and hit.page_end <= chunk.page_end
+                and paper.page_count is not None
+                and hit.page_end <= paper.page_count
+            ):
+                valid += 1
+        return valid / len(hits)
 
 
 def _extractive_from_hits(question: str, hits: list[RetrievalHit]) -> str:
@@ -296,9 +371,7 @@ def _extractive_from_hits(question: str, hits: list[RetrievalHit]) -> str:
     lines = [f"Question: {question}", "", "Evidence notes:"]
     for h in hits[:5]:
         page = (
-            f"p.{h.page_start}"
-            if h.page_start == h.page_end
-            else f"p.{h.page_start}-{h.page_end}"
+            f"p.{h.page_start}" if h.page_start == h.page_end else f"p.{h.page_start}-{h.page_end}"
         )
         snip = " ".join(h.text.split())
         if len(snip) > 240:

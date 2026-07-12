@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -10,12 +12,55 @@ from pydantic import BaseModel, Field
 from scholar_agent.config import AppConfig, load_config
 from scholar_agent.evaluation.ablation import AblationConfig, run_ablation
 from scholar_agent.evaluation.baselines import ALL_SYSTEMS, SystemRunner
-from scholar_agent.evaluation.dataset import EvalDataset, load_eval_dataset
-from scholar_agent.evaluation.report import EvaluationReport, write_report
+from scholar_agent.evaluation.dataset import (
+    EvalDataset,
+    load_eval_dataset,
+    validate_dataset_against_store,
+)
+from scholar_agent.evaluation.ragas_runtime import create_ragas_evaluator
+from scholar_agent.evaluation.report import (
+    EvaluationReport,
+    compute_config_fingerprint,
+    write_report,
+)
 from scholar_agent.logging import get_logger
 from scholar_agent.retrieval.index_builder import load_toolkit
 
 logger = get_logger(__name__)
+
+
+def _code_provenance(repo: Path) -> dict[str, Any]:
+    """Record the exact Git state needed to interpret reproducibility claims."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        diff = subprocess.run(
+            ["git", "diff", "HEAD", "--binary"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        ).stdout
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        dirty = bool(status.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return {"git_commit": None, "git_dirty": None, "code_state_sha256": None}
+    state_hash = sha256((commit + "\n").encode("utf-8") + diff + status.encode("utf-8")).hexdigest()
+    return {
+        "git_commit": commit,
+        "git_dirty": dirty,
+        "code_state_sha256": state_hash,
+    }
 
 
 class EvaluationPaths(BaseModel):
@@ -99,6 +144,9 @@ def run_evaluation(
     if eval_yaml and eval_yaml.is_file():
         eval_data = _load_eval_yaml(eval_yaml)
     budgets = eval_data.get("budgets") or {}
+    cost_config = eval_data.get("cost") or {}
+    usd_per_1k_tokens = float(cost_config.get("usd_per_1k_tokens", 0.0))
+    max_latency_ms = int(budgets.get("max_latency_ms_per_question", 120_000))
     if max_questions is None:
         max_questions = budgets.get("max_questions")
     if not use_llm:
@@ -126,18 +174,46 @@ def run_evaluation(
         validate=True,
     )
 
+    toolkit_config = cfg
+    if embedding_backend == "hash":
+        # Keep the deterministic evaluation index isolated from the production
+        # BGE collection so the requested backend is actually honored.
+        toolkit_config = cfg.model_copy(
+            update={
+                "paths": cfg.paths.model_copy(
+                    update={"indexes_dir": cfg.paths.indexes_dir / "evaluation" / "hash"}
+                )
+            }
+        )
     toolkit = load_toolkit(
-        config=cfg,
+        config=toolkit_config,
         embedding_backend=embedding_backend,  # type: ignore[arg-type]
         reranker_backend="lexical" if embedding_backend == "hash" else "auto",
         load_graph=True,
     )
+    validate_dataset_against_store(dataset, toolkit.store)
+    ragas_evaluator = None
+    ragas_status: dict[str, Any] = {
+        "available": False,
+        "configured": False,
+        "reason": "not requested",
+    }
+    if use_ragas:
+        if toolkit.dense is None:
+            ragas_status["reason"] = "no embedding model is loaded"
+        else:
+            ragas_evaluator, ragas_status = create_ragas_evaluator(
+                cfg.llm,
+                toolkit.dense.embedder,
+            )
     runner = SystemRunner(
         toolkit,
         top_k=top_k,
         max_corrective_iterations=cfg.budgets.max_corrective_iterations,
         research_max_tools=cfg.budgets.max_tool_calls_per_research_pass,
         use_llm=use_llm,
+        usd_per_1k_tokens=usd_per_1k_tokens,
+        max_latency_ms=max_latency_ms,
     )
     ablation_cfg = AblationConfig(
         systems=list(configured_systems),
@@ -145,11 +221,46 @@ def run_evaluation(
         max_questions=max_questions,
         question_ids=question_ids,
         use_ragas=use_ragas,
+        ragas_evaluator=ragas_evaluator,
         use_llm=use_llm,
         max_corrective_iterations=cfg.budgets.max_corrective_iterations,
         research_max_tools=cfg.budgets.max_tool_calls_per_research_pass,
+        usd_per_1k_tokens=usd_per_1k_tokens,
     )
     report, _rows = run_ablation(dataset, runner, ablation_cfg)
+    report.config.update(
+        {
+            "embedding_backend_requested": embedding_backend,
+            "embedding_model_actual": (
+                toolkit.dense.embedder.model_name if toolkit.dense is not None else None
+            ),
+            "reranker_model_actual": (
+                toolkit.reranker.model_name if toolkit.reranker is not None else None
+            ),
+            "dataset_fingerprint": (dataset.split.fingerprint_sha256 if dataset.split else None),
+            "questions_path": str(paths.questions_path),
+            "reference_evidence_path": str(paths.reference_evidence_path),
+            "frozen_split_path": str(paths.frozen_split_path),
+            "max_latency_ms_per_question": max_latency_ms,
+            "ragas_requested": use_ragas,
+            "ragas_available": bool(ragas_status["available"]),
+            "ragas_configured": bool(ragas_status.get("configured")),
+            "ragas_provider": ragas_status.get("provider"),
+            "ragas_model": ragas_status.get("model"),
+            "ragas_embedding_model": ragas_status.get("embedding_model"),
+            "ragas_status_reason": ragas_status.get("reason"),
+            "use_live_llm": use_llm,
+            "random_seed": int(eval_data.get("random_seed", 0)),
+            **_code_provenance(Path(__file__).resolve().parents[3]),
+        }
+    )
+    report.config_fingerprint_sha256 = compute_config_fingerprint(report.config)
+    if use_ragas and ragas_evaluator is None:
+        report.notes.append(
+            "RAGAS was requested but could not be configured: "
+            f"{ragas_status.get('reason', 'unknown reason')}. "
+            "RAGAS fields are null rather than zero."
+        )
     out_paths = write_report(report, paths.output_dir, write_charts=write_charts)
     logger.info(
         "evaluation complete systems=%s questions=%s out=%s",
@@ -160,9 +271,7 @@ def run_evaluation(
     return EvaluationRunResult(
         report=report,
         output_paths={k: str(v) for k, v in out_paths.items()},
-        dataset_fingerprint=(
-            dataset.split.fingerprint_sha256 if dataset.split else None
-        ),
+        dataset_fingerprint=(dataset.split.fingerprint_sha256 if dataset.split else None),
         n_questions=int(report.config.get("n_questions") or 0),
         systems=list(configured_systems),
     )

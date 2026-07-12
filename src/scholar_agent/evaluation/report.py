@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ class SystemSummary(BaseModel):
     recall_at_k_paper: float = 0.0
     mrr: float = 0.0
     ndcg_at_k: float = 0.0
+    graph_evidence_recall: float | None = None
     citation_precision: float = 0.0
     citation_recall: float = 0.0
     citation_validity_rate: float = 0.0
@@ -26,6 +28,10 @@ class SystemSummary(BaseModel):
     token_f1: float = 0.0
     refusal_correct: float = 0.0
     faithfulness_proxy: float = 0.0
+    ragas_faithfulness: float | None = None
+    ragas_answer_relevancy: float | None = None
+    ragas_coverage_rate: float = 0.0
+    unique_useful_evidence_per_tool_call: float = 0.0
     avg_latency_ms: float = 0.0
     avg_tool_calls: float = 0.0
     avg_tokens: float = 0.0
@@ -37,6 +43,7 @@ class EvaluationReport(BaseModel):
     run_id: str
     config: dict[str, Any] = Field(default_factory=dict)
     frozen_split_fingerprint: str | None = None
+    config_fingerprint_sha256: str | None = None
     systems: list[SystemSummary] = Field(default_factory=list)
     per_question: list[dict[str, Any]] = Field(default_factory=list)
     failures: list[dict[str, Any]] = Field(default_factory=list)
@@ -52,6 +59,13 @@ def write_report(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     paths: dict[str, Path] = {}
+
+    config_path = out / "run_config.json"
+    config_path.write_text(
+        json.dumps(report.config, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    paths["run_config_json"] = config_path
 
     json_path = out / "results.json"
     json_path.write_text(
@@ -70,6 +84,7 @@ def write_report(
         "recall_at_k_paper",
         "mrr",
         "ndcg_at_k",
+        "graph_evidence_recall",
         "citation_precision",
         "citation_recall",
         "citation_validity_rate",
@@ -78,6 +93,10 @@ def write_report(
         "token_f1",
         "refusal_correct",
         "faithfulness_proxy",
+        "ragas_faithfulness",
+        "ragas_answer_relevancy",
+        "ragas_coverage_rate",
+        "unique_useful_evidence_per_tool_call",
         "avg_latency_ms",
         "avg_tool_calls",
         "avg_tokens",
@@ -121,11 +140,22 @@ def write_report(
     return paths
 
 
+def compute_config_fingerprint(config: dict[str, Any]) -> str:
+    payload = json.dumps(
+        config,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
 def _markdown_report(report: EvaluationReport) -> str:
     lines = [
         f"# Evaluation report (`{report.run_id}`)",
         "",
         f"Frozen split fingerprint: `{report.frozen_split_fingerprint or 'n/a'}`",
+        f"Run config fingerprint: `{report.config_fingerprint_sha256 or 'n/a'}`",
         "",
         "## Aggregate metrics",
         "",
@@ -146,15 +176,22 @@ def _markdown_report(report: EvaluationReport) -> str:
             continue
         lines.append(f"### {s.system}")
         lines.append("")
-        lines.append("| type | n | recall_paper | mrr | claim_overlap | refusal |")
-        lines.append("|---|---:|---:|---:|---:|---:|")
+        lines.append(
+            "| type | n | recall_paper | mrr | claim_overlap | refusal | "
+            "latency_ms | tools | tokens | cost_usd |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
         for qtype, vals in sorted(s.by_type.items()):
             lines.append(
                 f"| {qtype} | {int(vals.get('n', 0))} | "
                 f"{vals.get('recall_at_k_paper', 0):.3f} | "
                 f"{vals.get('mrr', 0):.3f} | "
                 f"{vals.get('claim_overlap', 0):.3f} | "
-                f"{vals.get('refusal_correct', 0):.3f} |"
+                f"{vals.get('refusal_correct', 0):.3f} | "
+                f"{vals.get('avg_latency_ms', 0):.0f} | "
+                f"{vals.get('avg_tool_calls', 0):.2f} | "
+                f"{vals.get('avg_tokens', 0):.0f} | "
+                f"{vals.get('estimated_cost_usd', 0):.6f} |"
             )
         lines.append("")
     if report.failures:
@@ -175,9 +212,7 @@ def _markdown_report(report: EvaluationReport) -> str:
     return "\n".join(lines)
 
 
-def write_simple_charts(
-    report: EvaluationReport, output_dir: Path
-) -> dict[str, Path]:
+def write_simple_charts(report: EvaluationReport, output_dir: Path) -> dict[str, Path]:
     """Write SVG bar charts without hard dependency on matplotlib."""
     paths: dict[str, Path] = {}
     if not report.systems:
@@ -203,11 +238,11 @@ def write_simple_charts(
         parts = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
             '<rect width="100%" height="100%" fill="white"/>',
-            f'<text x="{width/2}" y="24" text-anchor="middle" '
+            f'<text x="{width / 2}" y="24" text-anchor="middle" '
             f'font-family="sans-serif" font-size="16">{title}</text>',
-            f'<text x="16" y="{margin_t + plot_h/2}" text-anchor="middle" '
+            f'<text x="16" y="{margin_t + plot_h / 2}" text-anchor="middle" '
             f'font-family="sans-serif" font-size="11" '
-            f'transform="rotate(-90 16 {margin_t + plot_h/2})">{ylabel}</text>',
+            f'transform="rotate(-90 16 {margin_t + plot_h / 2})">{ylabel}</text>',
         ]
         # axes
         parts.append(
@@ -227,13 +262,13 @@ def write_simple_charts(
                 f'fill="#3b82f6"/>'
             )
             parts.append(
-                f'<text x="{x + bar_w/2:.1f}" y="{margin_t + plot_h + 14}" '
+                f'<text x="{x + bar_w / 2:.1f}" y="{margin_t + plot_h + 14}" '
                 f'text-anchor="middle" font-family="sans-serif" font-size="10" '
-                f'transform="rotate(25 {x + bar_w/2:.1f} {margin_t + plot_h + 14})">'
+                f'transform="rotate(25 {x + bar_w / 2:.1f} {margin_t + plot_h + 14})">'
                 f"{label}</text>"
             )
             parts.append(
-                f'<text x="{x + bar_w/2:.1f}" y="{y - 4:.1f}" text-anchor="middle" '
+                f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" '
                 f'font-family="sans-serif" font-size="10">{val:.2f}</text>'
             )
         parts.append("</svg>")
@@ -265,4 +300,20 @@ def write_simple_charts(
         [(s.system, s.citation_precision) for s in report.systems],
         ylabel="precision",
     )
+    question_types = sorted(
+        {question_type for summary in report.systems for question_type in summary.by_type}
+    )
+    for question_type in question_types:
+        paths[f"chart_category_{question_type}"] = bar_chart(
+            f"chart_recall_{question_type}.svg",
+            f"Paper Recall@K — {question_type}",
+            [
+                (
+                    summary.system,
+                    summary.by_type.get(question_type, {}).get("recall_at_k_paper", 0.0),
+                )
+                for summary in report.systems
+            ],
+            ylabel="recall",
+        )
     return paths
