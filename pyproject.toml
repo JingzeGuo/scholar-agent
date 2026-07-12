@@ -44,6 +44,10 @@ ui = [
 eval = [
     "ragas>=0.3.1,<0.4",
     "datasets>=2.20",
+    # RAGAS 0.3.1 imports chat_models.vertexai, removed in 0.4.x.
+    "langchain-community>=0.3.9,<0.4",
+    # Imported by RAGAS prompt modules even for text-only evaluation.
+    "pillow>=10",
 ]
 
 [project.scripts]

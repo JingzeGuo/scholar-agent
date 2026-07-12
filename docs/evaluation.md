@@ -60,6 +60,11 @@ Reports record whether RAGAS was requested, installed, configured, and actually
 used; unavailable scores remain `null`, never silently become zero. Default CI
 stays deterministic without paid calls.
 
+The eval extra pins `langchain-community` to the compatible 0.3 series and
+includes Pillow, which RAGAS 0.3.1 imports even for text-only metrics. A live
+DeepSeek smoke run should report `ragas_configured=true`, non-null scores, and
+`ragas_coverage_rate=1.0` in `results.json`.
+
 ## Run
 
 ```bash
