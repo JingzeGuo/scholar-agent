@@ -122,13 +122,64 @@ def test_contradictory_evidence_retained_and_surfaced() -> None:
     assert len(result.conflicting_evidence_ids) >= 2
 
 
+def test_opposite_words_on_unrelated_topics_are_not_conflicts() -> None:
+    plan = Planner().plan("What improves retrieval accuracy?")
+    sq_id = plan.sub_questions[0].id
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                run_id="r1",
+                sq=sq_id,
+                paper="paper_retrieval",
+                chunk="c_retrieval",
+                text="Method A is better for retrieval accuracy on the benchmark.",
+            ),
+            _item(
+                run_id="r1",
+                sq=sq_id,
+                paper="paper_weather",
+                chunk="c_weather",
+                text="Winter weather becomes worse when temperatures decrease.",
+            ),
+        ]
+    )
+    result = Verifier().verify(query=plan.original_query, plan=plan, ledger=ledger)
+    assert result.conflicting_evidence_ids == []
+
+
 def test_empty_ledger_unanswerable_or_missing() -> None:
     plan = Planner().plan("What is Self-RAG?")
     result = Verifier().verify(
         query=plan.original_query, plan=plan, ledger=EvidenceLedger()
     )
     assert result.is_sufficient is False
-    assert result.missing_sub_questions or "corpus_cannot_answer" in result.missing_aspects
+    assert result.missing_sub_questions
+    assert result.unanswerable is False
+    assert result.corrective_actions
+    assert result.corrective_actions[0].target_sub_question_id == plan.sub_questions[0].id
+
+
+def test_generic_definition_words_do_not_cover_unknown_topic() -> None:
+    plan = Planner().plan("What is ZZZZ_NONEXISTENT_TOPIC_XYZ?")
+    sq_id = plan.sub_questions[0].id
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                run_id="r1",
+                sq=sq_id,
+                paper="p_other",
+                chunk="c_other",
+                text=(
+                    "This paper provides a factual definition of topic models "
+                    "for retrieval evaluation."
+                ),
+            )
+        ]
+    )
+    result = Verifier().verify(query=plan.original_query, plan=plan, ledger=ledger)
+    assert result.is_sufficient is False
+    assert sq_id in result.missing_sub_questions
+    assert result.corrective_actions
 
 
 def test_partial_coverage_emits_corrective_queries() -> None:
@@ -171,4 +222,5 @@ def test_partial_coverage_emits_corrective_queries() -> None:
     assert result.is_sufficient is False
     assert "sq_b" in result.missing_sub_questions
     assert result.corrective_queries
+    assert all(action.target_sub_question_id == "sq_b" for action in result.corrective_actions)
     assert any("CRAG" in q or "crag" in q.lower() for q in result.corrective_queries)

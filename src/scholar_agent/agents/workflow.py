@@ -24,12 +24,16 @@ from typing_extensions import TypedDict
 from scholar_agent.agents.planner import Planner
 from scholar_agent.agents.researcher import ResearchAgent, ResearchAgentConfig
 from scholar_agent.agents.verifier import Verifier
-from scholar_agent.ids import make_sub_question_id, new_run_id, normalize_text
+from scholar_agent.ids import new_run_id
 from scholar_agent.logging import get_logger
 from scholar_agent.models.base import EventType, ExecutionEvent, QueryType
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
-from scholar_agent.models.workflow import ResearchRunState, VerificationResult
+from scholar_agent.models.workflow import (
+    CorrectiveQuery,
+    ResearchRunState,
+    VerificationResult,
+)
 from scholar_agent.retrieval.tools import RetrievalToolkit
 
 logger = get_logger(__name__)
@@ -68,6 +72,7 @@ class WorkflowState(TypedDict, total=False):
     events: list[dict[str, Any]]
     verification: dict[str, Any] | None
     corrective_queries: list[str]
+    corrective_actions: list[dict[str, Any]]
     iteration: int
     tool_call_count: int
     prev_evidence_ids: list[str]
@@ -75,6 +80,7 @@ class WorkflowState(TypedDict, total=False):
     unanswerable: bool
     max_corrective_iterations: int
     max_total_tool_calls: int
+    max_latency_ms: int
     started_ms: float
 
 
@@ -109,6 +115,7 @@ class ResearchWorkflow:
             ],
             "verification": None,
             "corrective_queries": [],
+            "corrective_actions": [],
             "iteration": 0,
             "tool_call_count": 0,
             "prev_evidence_ids": [],
@@ -116,6 +123,7 @@ class ResearchWorkflow:
             "unanswerable": False,
             "max_corrective_iterations": self.config.max_corrective_iterations,
             "max_total_tool_calls": self.config.max_total_tool_calls,
+            "max_latency_ms": self.config.max_latency_ms,
             "started_ms": perf_counter() * 1000,
         }
         final: WorkflowState = app.invoke(initial)
@@ -167,7 +175,10 @@ class ResearchWorkflow:
     def _node_research(self, state: WorkflowState) -> dict[str, Any]:
         plan = QueryPlan.model_validate(state["plan"])
         iteration = int(state.get("iteration") or 0)
-        corrective = list(state.get("corrective_queries") or [])
+        corrective = [
+            CorrectiveQuery.model_validate(action)
+            for action in state.get("corrective_actions") or []
+        ]
         existing = EvidenceLedger(
             items=[EvidenceItem.model_validate(e) for e in state.get("evidence") or []]
         )
@@ -176,22 +187,30 @@ class ResearchWorkflow:
         # First pass: research all sub-questions. Corrective passes: only missing.
         if iteration == 0 or not corrective:
             targets = list(plan.sub_questions)
-            research_result = self.researcher.research_many(
-                targets,
+            new_ledger, tool_calls, events = self._research_targets(
+                targets=targets,
+                existing=existing,
                 original_query=plan.original_query,
-                parallel=self.config.parallel_research,
                 run_id=state["run_id"],
+                remaining_global=max(
+                    0,
+                    self.config.max_total_tool_calls
+                    - int(state.get("tool_call_count") or 0),
+                ),
+                deadline_ms=(
+                    float(state.get("started_ms") or perf_counter() * 1000)
+                    + int(state.get("max_latency_ms") or self.config.max_latency_ms)
+                ),
             )
-            new_ledger = existing.merge(research_result.evidence_ledger.items)
-            tool_calls = research_result.tool_call_count
-            events = [e.model_dump(mode="json") for e in research_result.events]
         else:
             # Targeted corrective retrieval from verifier queries
             tool_calls = 0
             events = []
             new_ledger = existing
-            for i, cq in enumerate(corrective):
-                if tool_calls >= self.config.max_total_tool_calls:
+            for action in corrective:
+                if self._elapsed_ms(state) >= int(
+                    state.get("max_latency_ms") or self.config.max_latency_ms
+                ):
                     break
                 remaining_budget = self.config.max_total_tool_calls - (
                     int(state.get("tool_call_count") or 0) + tool_calls
@@ -199,12 +218,10 @@ class ResearchWorkflow:
                 if remaining_budget <= 0:
                     break
                 sq = SubQuestion(
-                    id=make_sub_question_id(
-                        normalize_text(plan.original_query)[:32], cq, 1000 + iteration * 10 + i
-                    ),
-                    question=cq,
+                    id=action.target_sub_question_id,
+                    question=action.query,
                     query_type=QueryType.KEYWORD,
-                    required_evidence=["corrective evidence"],
+                    required_evidence=[action.missing_aspect],
                     status=SubQuestionStatus.MISSING,
                 )
                 # Clamp researcher tool budget to remaining global budget
@@ -221,7 +238,7 @@ class ResearchWorkflow:
                     sq,
                     run_id=state["run_id"],
                     corrective=True,
-                    missing_aspect=cq,
+                    missing_aspect=action.query,
                 )
                 tool_calls += result.tool_call_count
                 new_ledger = new_ledger.merge(result.evidence)
@@ -251,9 +268,67 @@ class ResearchWorkflow:
             "evidence": [e.model_dump(mode="json") for e in new_ledger.items],
             "tool_call_count": int(state.get("tool_call_count") or 0) + tool_calls,
             "events": _append_event_dicts(state, all_new_events),
-            "prev_evidence_ids": list(new_ids),
+            "prev_evidence_ids": sorted(new_ids),
             "iteration": iteration,
         }
+
+    def _research_targets(
+        self,
+        *,
+        targets: list[SubQuestion],
+        existing: EvidenceLedger,
+        original_query: str,
+        run_id: str,
+        remaining_global: int,
+        deadline_ms: float,
+    ) -> tuple[EvidenceLedger, int, list[dict[str, Any]]]:
+        """Run initial targets without ever oversubscribing the global tool cap."""
+        if (
+            not targets
+            or remaining_global <= 0
+            or perf_counter() * 1000 >= deadline_ms
+        ):
+            return existing, 0, []
+
+        per_pass = self.config.research.max_tool_calls_per_pass
+        worst_case_calls = len(targets) * per_pass
+        if self.config.parallel_research and worst_case_calls <= remaining_global:
+            result = self.researcher.research_many(
+                targets,
+                original_query=original_query,
+                parallel=True,
+                run_id=run_id,
+            )
+            return (
+                existing.merge(result.evidence_ledger.items),
+                result.tool_call_count,
+                [event.model_dump(mode="json") for event in result.events],
+            )
+
+        ledger = existing
+        total_calls = 0
+        events: list[dict[str, Any]] = []
+        for target in targets:
+            if perf_counter() * 1000 >= deadline_ms:
+                break
+            remaining = remaining_global - total_calls
+            if remaining <= 0:
+                break
+            pass_config = self.config.research.model_copy(
+                update={"max_tool_calls_per_pass": min(per_pass, remaining)}
+            )
+            pass_result = ResearchAgent(
+                self.toolkit, config=pass_config
+            ).research_sub_question(
+                target,
+                run_id=run_id,
+            )
+            total_calls += pass_result.tool_call_count
+            ledger = ledger.merge(pass_result.evidence)
+            events.extend(
+                event.model_dump(mode="json") for event in pass_result.events
+            )
+        return ledger, total_calls, events
 
     def _node_verify(self, state: WorkflowState) -> dict[str, Any]:
         plan = QueryPlan.model_validate(state["plan"])
@@ -271,7 +346,7 @@ class ResearchWorkflow:
         # corrective ran but unique new was 0 — research node already logged it.
         # We recompute vs the ids before this iteration by reading last ITERATION event.
         unique_new = self._last_unique_new(state)
-        unanswerable = "corpus_cannot_answer" in verification.missing_aspects
+        unanswerable = verification.unanswerable
 
         event = ExecutionEvent(
             run_id=state["run_id"],
@@ -283,6 +358,10 @@ class ResearchWorkflow:
                 "coverage_score": verification.coverage_score,
                 "missing_sub_questions": verification.missing_sub_questions,
                 "corrective_queries": verification.corrective_queries,
+                "corrective_actions": [
+                    action.model_dump(mode="json")
+                    for action in verification.corrective_actions
+                ],
                 "conflicting_evidence_ids": verification.conflicting_evidence_ids,
                 "unanswerable": unanswerable,
                 "unique_new_evidence": unique_new,
@@ -292,28 +371,86 @@ class ResearchWorkflow:
         # Determine termination reason if we should stop
         iteration = int(state.get("iteration") or 0)
         tool_calls = int(state.get("tool_call_count") or 0)
-        max_iter = int(state.get("max_corrective_iterations") or 3)
-        max_tools = int(state.get("max_total_tool_calls") or 20)
+        max_iter_value = state.get("max_corrective_iterations")
+        max_iter = int(max_iter_value if max_iter_value is not None else 3)
+        max_tools_value = state.get("max_total_tool_calls")
+        max_tools = int(max_tools_value if max_tools_value is not None else 20)
+        max_latency_value = state.get("max_latency_ms")
+        max_latency = int(max_latency_value if max_latency_value is not None else 180_000)
+        elapsed_ms = self._elapsed_ms(state)
         terminated: str | None = None
 
         if verification.is_sufficient:
             terminated = "evidence_sufficient"
         elif unanswerable:
             terminated = "corpus_cannot_answer"
+        elif elapsed_ms >= max_latency:
+            terminated = "latency_budget_exhausted"
         elif tool_calls >= max_tools:
             terminated = "tool_budget_exhausted"
-        elif iteration >= max_iter:
-            terminated = "iteration_budget_exhausted"
         elif iteration > 0 and unique_new == 0:
-            terminated = "no_new_evidence"
-        elif not verification.corrective_queries and not verification.is_sufficient:
+            if not verification.covered_sub_questions:
+                terminated = "corpus_cannot_answer"
+                unanswerable = True
+            else:
+                terminated = "no_new_evidence"
+        elif iteration >= max_iter:
+            if not verification.covered_sub_questions and iteration > 0:
+                terminated = "corpus_cannot_answer"
+                unanswerable = True
+            else:
+                terminated = "iteration_budget_exhausted"
+        elif not verification.corrective_actions and not verification.is_sufficient:
             terminated = "no_corrective_queries"
 
+        if unanswerable and not verification.unanswerable:
+            verification = verification.model_copy(
+                update={
+                    "unanswerable": True,
+                    "missing_aspects": list(verification.missing_aspects)
+                    + ["corpus_cannot_answer"],
+                    "corrective_queries": [],
+                    "corrective_actions": [],
+                }
+            )
+            event = event.model_copy(
+                update={
+                    "payload": {
+                        **event.payload,
+                        "unanswerable": True,
+                        "corrective_queries": [],
+                        "corrective_actions": [],
+                    }
+                }
+            )
+
         new_events = [event]
+        if terminated in {
+            "tool_budget_exhausted",
+            "iteration_budget_exhausted",
+            "latency_budget_exhausted",
+        }:
+            new_events.append(
+                ExecutionEvent(
+                    run_id=state["run_id"],
+                    event_type=EventType.BUDGET_HIT,
+                    component="workflow",
+                    summary=terminated,
+                    payload={
+                        "iteration": iteration,
+                        "tool_call_count": tool_calls,
+                        "elapsed_ms": elapsed_ms,
+                    },
+                )
+            )
         updates: dict[str, Any] = {
             "plan": updated_plan.model_dump(mode="json"),
             "verification": verification.model_dump(mode="json"),
             "corrective_queries": list(verification.corrective_queries),
+            "corrective_actions": [
+                action.model_dump(mode="json")
+                for action in verification.corrective_actions
+            ],
             "unanswerable": unanswerable,
         }
         if terminated:
@@ -328,9 +465,14 @@ class ResearchWorkflow:
                     component="workflow",
                     summary=(
                         f"corrective iteration {iteration + 1}: "
-                        f"{len(verification.corrective_queries)} queries"
+                        f"{len(verification.corrective_actions)} queries"
                     ),
-                    payload={"queries": verification.corrective_queries},
+                    payload={
+                        "actions": [
+                            action.model_dump(mode="json")
+                            for action in verification.corrective_actions
+                        ]
+                    },
                 )
             )
         updates["events"] = _append_event_dicts(state, new_events)
@@ -370,16 +512,21 @@ class ResearchWorkflow:
             return "finish"
         # Continue corrective research if we still have queries and budget
         iteration = int(state.get("iteration") or 0)
-        max_iter = int(state.get("max_corrective_iterations") or 3)
+        max_iter_value = state.get("max_corrective_iterations")
+        max_iter = int(max_iter_value if max_iter_value is not None else 3)
         if iteration > max_iter:
             return "finish"
-        if not state.get("corrective_queries"):
+        if not state.get("corrective_actions"):
             return "finish"
         if int(state.get("tool_call_count") or 0) >= int(
             state.get("max_total_tool_calls") or 20
         ):
             return "finish"
         return "research"
+
+    def _elapsed_ms(self, state: WorkflowState) -> int:
+        started = float(state.get("started_ms") or perf_counter() * 1000)
+        return max(0, int(perf_counter() * 1000 - started))
 
     def _last_unique_new(self, state: WorkflowState) -> int:
         for event in reversed(state.get("events") or []):

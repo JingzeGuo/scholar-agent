@@ -10,6 +10,22 @@ from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import QueryPlan
 
 
+class CorrectiveQuery(BaseModel):
+    """Actionable retrieval request tied to the plan gap it must repair."""
+
+    query: str
+    target_sub_question_id: str
+    missing_aspect: str
+
+    @field_validator("query", "target_sub_question_id", "missing_aspect")
+    @classmethod
+    def _corrective_fields_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must be non-empty")
+        return cleaned
+
+
 class VerificationResult(BaseModel):
     is_sufficient: bool
     coverage_score: float = Field(ge=0.0, le=1.0)
@@ -19,6 +35,8 @@ class VerificationResult(BaseModel):
     conflicting_evidence_ids: list[str] = Field(default_factory=list)
     missing_aspects: list[str] = Field(default_factory=list)
     corrective_queries: list[str] = Field(default_factory=list)
+    corrective_actions: list[CorrectiveQuery] = Field(default_factory=list)
+    unanswerable: bool = False
     # Concise decision explanation — never private chain-of-thought
     rationale_summary: str
 

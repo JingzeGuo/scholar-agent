@@ -715,10 +715,13 @@ def ask_cmd(
             if max_iterations is not None
             else cfg.budgets.max_corrective_iterations
         ),
+        max_latency_ms=cfg.budgets.max_latency_ms,
         research=ResearchAgentConfig(
             max_tool_calls_per_pass=max_tools
             or cfg.budgets.max_tool_calls_per_research_pass,
+            max_iterations_per_pass=cfg.budgets.max_research_iterations_per_pass,
             max_evidence_per_sub_question=cfg.budgets.max_evidence_per_sub_question,
+            max_latency_ms=cfg.budgets.max_latency_ms,
         ),
         parallel_research=not no_parallel,
     )

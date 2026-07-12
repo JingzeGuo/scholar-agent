@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from time import sleep
+
 from scholar_agent.agents.researcher import ResearchAgentConfig
 from scholar_agent.agents.workflow import ResearchWorkflow, WorkflowConfig
 from scholar_agent.ids import make_chunk_id
@@ -84,14 +86,7 @@ def test_workflow_terminates_when_sufficient() -> None:
         ),
     )
     result = wf.run("What is Self-RAG?")
-    assert result.terminated_reason in {
-        "evidence_sufficient",
-        "iteration_budget_exhausted",
-        "no_new_evidence",
-        "no_corrective_queries",
-        "tool_budget_exhausted",
-        "completed",
-    }
+    assert result.terminated_reason == "evidence_sufficient"
     # Should have a plan and verification
     assert result.plan.sub_questions
     assert result.verification is not None
@@ -111,7 +106,8 @@ def test_missing_evidence_triggers_corrective_retrieval() -> None:
         def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
             self.calls.append(query)
             # Initial research on main question: irrelevant only
-            if self.phase == 0 and "find" not in query.lower() and "evidence about" not in query.lower():
+            if self.phase == 0:
+                self.phase = 1
                 text = "Unrelated astronomy notes about nebulae and stellar formation."
                 hit = RetrievalHit(
                     chunk_id=make_chunk_id("p_bad", page_start=1, page_end=1, text=text),
@@ -124,7 +120,6 @@ def test_missing_evidence_triggers_corrective_retrieval() -> None:
                 )
                 return RetrievalResult(query=query, method="hybrid_rerank", hits=[hit])
             # Corrective queries get real evidence
-            self.phase = 1
             return super().search(query, mode=mode, k=k, filters=filters)
 
     toolkit = TwoPhaseToolkit()
@@ -141,13 +136,38 @@ def test_missing_evidence_triggers_corrective_retrieval() -> None:
         ),
     )
     result = wf.run("What is Self-RAG?")
-    # Either corrective loop ran or finished with insufficient/unanswerable — must terminate
-    assert result.terminated_reason
+    assert result.terminated_reason == "evidence_sufficient"
     event_types = [e.event_type.value for e in result.events]
     assert "verification" in event_types
-    # If first verify was insufficient, expect corrective event or second research
-    if "corrective" in event_types:
-        assert result.iteration >= 1 or result.tool_call_count >= 1
+    assert "corrective" in event_types
+    assert result.iteration == 1
+    original_id = result.plan.sub_questions[0].id
+    assert any(item.sub_question_id == original_id for item in result.evidence_ledger.items)
+
+
+def test_empty_first_pass_still_triggers_targeted_retrieval() -> None:
+    class EmptyThenEvidenceToolkit(ScriptedToolkit):
+        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+            self.calls.append(query)
+            if len(self.calls) == 1:
+                return RetrievalResult(query=query, method="hybrid_rerank", hits=[])
+            return super().search(query, mode=mode, k=k, filters=filters)
+
+    toolkit = EmptyThenEvidenceToolkit()
+    result = ResearchWorkflow(
+        toolkit,  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_corrective_iterations=2,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=1,
+                allow_policy_override=False,
+            ),
+            parallel_research=False,
+        ),
+    ).run("What is Self-RAG?")
+    assert result.terminated_reason == "evidence_sufficient"
+    assert result.iteration == 1
+    assert any(event.event_type.value == "corrective" for event in result.events)
 
 
 def test_no_new_evidence_stops_loop() -> None:
@@ -155,7 +175,7 @@ def test_no_new_evidence_stops_loop() -> None:
         def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
             self.calls.append(query)
             # Always the same chunk/text → no unique new after first pass
-            text = "Fixed passage that never changes regardless of query tokens."
+            text = "Self-RAG retrieves on demand using reflection tokens."
             hit = RetrievalHit(
                 chunk_id="chunk_fixed_always",
                 paper_id="paper_fixed",
@@ -179,17 +199,8 @@ def test_no_new_evidence_stops_loop() -> None:
         ),
     )
     result = wf.run("Compare Self-RAG versus CRAG")
-    assert result.terminated_reason in {
-        "no_new_evidence",
-        "iteration_budget_exhausted",
-        "no_corrective_queries",
-        "evidence_sufficient",
-        "tool_budget_exhausted",
-        "corpus_cannot_answer",
-        "completed",
-    }
-    # Must not infinite loop
-    assert result.iteration <= 3
+    assert result.terminated_reason == "no_new_evidence"
+    assert result.iteration == 1
 
 
 def test_conflicts_surfaced_in_verification() -> None:
@@ -258,18 +269,96 @@ def test_iteration_budget_terminates() -> None:
     wf = ResearchWorkflow(
         toolkit,  # type: ignore[arg-type]
         config=WorkflowConfig(
-            max_corrective_iterations=1,
+            max_corrective_iterations=0,
             research=ResearchAgentConfig(max_tool_calls_per_pass=1, allow_policy_override=False),
             parallel_research=False,
         ),
     )
     result = wf.run("What is Self-RAG?")
-    assert result.terminated_reason
-    assert result.iteration <= 1 or result.terminated_reason in {
-        "corpus_cannot_answer",
-        "no_corrective_queries",
-        "iteration_budget_exhausted",
-        "no_new_evidence",
-        "tool_budget_exhausted",
-        "evidence_sufficient",
-    }
+    assert result.terminated_reason == "iteration_budget_exhausted"
+    assert result.iteration == 0
+
+
+def test_unanswerable_after_targeted_retrieval_exhaustion() -> None:
+    class ChangingIrrelevantToolkit(ScriptedToolkit):
+        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+            index = len(self.calls)
+            self.calls.append(query)
+            text = f"Astronomy observation {index} about nebulae and stellar formation."
+            hit = RetrievalHit(
+                chunk_id=f"chunk_irrelevant_{index}",
+                paper_id=f"paper_irrelevant_{index}",
+                text=text,
+                page_start=1,
+                page_end=1,
+                score=0.1,
+                retrieval_method=mode,
+            )
+            return RetrievalResult(query=query, method="hybrid_rerank", hits=[hit])
+
+    result = ResearchWorkflow(
+        ChangingIrrelevantToolkit(),  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_corrective_iterations=1,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=1,
+                allow_policy_override=False,
+            ),
+            parallel_research=False,
+        ),
+    ).run("What is ZZZZ_NONEXISTENT_TOPIC_XYZ?")
+    assert result.terminated_reason == "corpus_cannot_answer"
+    assert result.unanswerable is True
+    assert result.verification.unanswerable is True
+    assert result.verification.corrective_queries == []
+
+
+def test_global_tool_budget_is_never_exceeded() -> None:
+    toolkit = ScriptedToolkit()
+    result = ResearchWorkflow(
+        toolkit,  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_total_tool_calls=2,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=2,
+                allow_policy_override=False,
+            ),
+            parallel_research=True,
+        ),
+    ).run("Compare Self-RAG versus CRAG")
+    assert result.tool_call_count == 2
+    assert len(toolkit.calls) == 2
+    assert result.terminated_reason == "tool_budget_exhausted"
+    assert any(event.event_type.value == "budget_hit" for event in result.events)
+
+
+def test_latency_budget_terminates_workflow() -> None:
+    class SlowToolkit(ScriptedToolkit):
+        def search(self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None) -> RetrievalResult:  # type: ignore[override]
+            sleep(0.005)
+            self.calls.append(query)
+            text = "Astronomy notes about nebulae and stellar formation."
+            hit = RetrievalHit(
+                chunk_id="chunk_slow_irrelevant",
+                paper_id="paper_astronomy",
+                text=text,
+                page_start=1,
+                page_end=1,
+                score=0.1,
+                retrieval_method=mode,
+            )
+            return RetrievalResult(query=query, method="hybrid_rerank", hits=[hit])
+
+    result = ResearchWorkflow(
+        SlowToolkit(),  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_latency_ms=1,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=1,
+                allow_policy_override=False,
+            ),
+            parallel_research=False,
+        ),
+    ).run("What is a nonexistent retrieval method?")
+    assert result.terminated_reason == "latency_budget_exhausted"
+    assert any(event.event_type.value == "budget_hit" for event in result.events)

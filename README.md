@@ -59,9 +59,9 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 ### Phase 6
 
 - Structured Planner (`QueryPlan` only; no free-form plans)
-- Independent Verifier with corrective queries + conflict surfacing
+- Independent Verifier with target-bound corrective actions + conflict surfacing
 - Full LangGraph loop: plan → research → verify → corrective research
-- Exhaustive termination (sufficient / budgets / no-new-evidence / unanswerable)
+- Exhaustive termination (sufficient / global budgets / no-new-evidence / unanswerable)
 
 ## Quick start
 
@@ -120,7 +120,7 @@ uv run scholar-agent corpus summary -m data/corpus_manifest.jsonl
 - Manifest: `data/corpus_manifest.jsonl` (metadata + content hashes)
 - PDFs: `data/papers/{arxiv_id}.pdf`
 
-Later phases add ingestion, retrieval, graph, full agent workflow, evaluation, and Streamlit demo.
+Later phases add the evidence-constrained Writer, evaluation framework, and Streamlit demo.
 
 ## Project layout
 

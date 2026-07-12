@@ -15,7 +15,7 @@ from scholar_agent.ids import normalize_text
 from scholar_agent.logging import get_logger
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
-from scholar_agent.models.workflow import VerificationResult
+from scholar_agent.models.workflow import CorrectiveQuery, VerificationResult
 
 logger = get_logger(__name__)
 
@@ -29,6 +29,41 @@ _NEGATION_PAIRS = [
     ("effective", "ineffective"),
     ("succeeds", "fails"),
 ]
+_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "about",
+    "for",
+    "how",
+    "in",
+    "is",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "what",
+    "which",
+    "with",
+}
+_SOFT_REQUIREMENTS = {
+    "both sides",
+    "comparison",
+    "definition",
+    "definition_or_fact",
+    "passages",
+    "supporting passage",
+}
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", normalize_text(text))
+        if token not in _STOP_WORDS and len(token) > 1
+    }
 
 
 @dataclass
@@ -54,11 +89,14 @@ class Verifier:
         missing: list[str] = []
         missing_aspects: list[str] = []
         unsupported: list[str] = []
-        corrective: list[str] = []
+        corrective: list[CorrectiveQuery] = []
 
         for sq in plan.sub_questions:
             items = by_sq.get(sq.id, [])
-            relevant = [e for e in items if self._is_relevant(sq, e)]
+            # The ledger is shared: a passage retrieved for one sub-question may
+            # legitimately cover another. This also preserves coverage when the
+            # reducer merges a duplicate chunk that has only one owning ID.
+            relevant = [e for e in ledger.items if self._is_relevant(sq, e)]
             if len(relevant) >= self.min_evidence_per_sub_question:
                 covered.append(sq.id)
                 # Check required evidence keywords lightly
@@ -71,7 +109,11 @@ class Verifier:
                 if not items:
                     missing_aspects.append(f"{sq.id}: no evidence retrieved")
                     corrective.append(
-                        f"Find supporting passages for: {sq.question}"
+                        CorrectiveQuery(
+                            query=f"Find supporting passages for: {sq.question}",
+                            target_sub_question_id=sq.id,
+                            missing_aspect="supporting passages",
+                        )
                     )
                 else:
                     missing_aspects.append(
@@ -79,7 +121,11 @@ class Verifier:
                         f"({len(relevant)}/{len(items)} relevant)"
                     )
                     corrective.append(
-                        f"Retrieve more relevant evidence for: {sq.question}"
+                        CorrectiveQuery(
+                            query=f"Retrieve more relevant evidence for: {sq.question}",
+                            target_sub_question_id=sq.id,
+                            missing_aspect="relevant evidence",
+                        )
                     )
                 if items:
                     # Mark weak claims as unsupported
@@ -98,12 +144,20 @@ class Verifier:
         if not diversity_ok:
             coverage_score = min(coverage_score, 0.7)
             missing_aspects.append(diversity_note)
-            if not any("diverse" in c.lower() for c in corrective):
+            if not any("distinct papers" in c.query.lower() for c in corrective):
+                target = next(
+                    (sq for sq in plan.sub_questions if sq.id in missing),
+                    plan.sub_questions[0],
+                )
                 corrective.append(
-                    f"Gather evidence from additional distinct papers for: {query}"
+                    CorrectiveQuery(
+                        query=f"Gather evidence from additional distinct papers for: {query}",
+                        target_sub_question_id=target.id,
+                        missing_aspect="source diversity",
+                    )
                 )
 
-        unanswerable = self._detect_unanswerable(plan, ledger, covered, missing)
+        unanswerable = self._detect_unanswerable(plan)
         is_sufficient = (
             not missing
             and not unanswerable
@@ -137,10 +191,10 @@ class Verifier:
         )
 
         # Deduplicate corrective queries while preserving order
-        seen_c: set[str] = set()
-        unique_corrective: list[str] = []
+        seen_c: set[tuple[str, str]] = set()
+        unique_corrective: list[CorrectiveQuery] = []
         for c in corrective:
-            key = normalize_text(c)
+            key = (c.target_sub_question_id, normalize_text(c.query))
             if key not in seen_c:
                 seen_c.add(key)
                 unique_corrective.append(c)
@@ -153,7 +207,9 @@ class Verifier:
             unsupported_claims=unsupported[:20],
             conflicting_evidence_ids=conflicts,
             missing_aspects=missing_aspects[:20],
-            corrective_queries=unique_corrective[:10],
+            corrective_queries=[action.query for action in unique_corrective[:10]],
+            corrective_actions=unique_corrective[:10],
+            unanswerable=unanswerable,
             rationale_summary=rationale,
         )
         logger.info(
@@ -183,16 +239,20 @@ class Verifier:
         return plan.model_copy(update={"sub_questions": updated})
 
     def _is_relevant(self, sq: SubQuestion, item: EvidenceItem) -> bool:
-        q_tokens = set(re.findall(r"[a-z0-9]+", normalize_text(sq.question)))
-        e_tokens = set(re.findall(r"[a-z0-9]+", normalize_text(item.evidence_text)))
+        q_tokens = _content_tokens(sq.question)
+        e_tokens = _content_tokens(item.evidence_text)
         if not q_tokens or not e_tokens:
             return False
-        overlap = len(q_tokens & e_tokens) / len(q_tokens)
-        if overlap >= self.min_relevance_token_overlap:
+        overlap_count = len(q_tokens & e_tokens)
+        overlap = overlap_count / len(q_tokens)
+        required_overlap = 1 if len(q_tokens) == 1 else 2
+        if overlap_count >= required_overlap and overlap >= self.min_relevance_token_overlap:
             return True
         # Also accept if any required evidence keyword appears
         for req in sq.required_evidence:
-            req_t = set(re.findall(r"[a-z0-9]+", normalize_text(req)))
+            if normalize_text(req) in _SOFT_REQUIREMENTS:
+                continue
+            req_t = _content_tokens(req)
             if req_t and len(req_t & e_tokens) / len(req_t) >= 0.5:
                 return True
         return False
@@ -200,26 +260,23 @@ class Verifier:
     def _requirement_covered(self, req: str, items: list[EvidenceItem]) -> bool:
         req_norm = normalize_text(req)
         # Soft requirements like "supporting passage" always ok if any item exists
-        if req_norm in {
-            "supporting passage",
-            "definition_or_fact",
-            "definition",
-            "passages",
-            "both sides",
-            "comparison",
-        }:
+        if req_norm in _SOFT_REQUIREMENTS:
             return bool(items)
-        req_tokens = set(re.findall(r"[a-z0-9]+", req_norm))
+        req_tokens = _content_tokens(req_norm)
         if not req_tokens:
             return bool(items)
         for item in items:
-            e_tokens = set(re.findall(r"[a-z0-9]+", normalize_text(item.evidence_text)))
+            e_tokens = _content_tokens(item.evidence_text)
             if len(req_tokens & e_tokens) / len(req_tokens) >= 0.4:
                 return True
         return False
 
-    def _corrective_for_aspect(self, sq: SubQuestion, req: str) -> str:
-        return f"Find evidence about '{req}' for sub-question: {sq.question}"
+    def _corrective_for_aspect(self, sq: SubQuestion, req: str) -> CorrectiveQuery:
+        return CorrectiveQuery(
+            query=f"Find evidence about '{req}' for sub-question: {sq.question}",
+            target_sub_question_id=sq.id,
+            missing_aspect=req,
+        )
 
     def _find_conflicts(self, items: list[EvidenceItem]) -> list[str]:
         """Detect simple cross-source polarity conflicts; retain both IDs."""
@@ -231,13 +288,28 @@ class Verifier:
             by_paper[item.paper_id].append(item)
 
         conflict_ids: list[str] = []
-        texts = [(i.evidence_id, normalize_text(i.evidence_text), i.paper_id) for i in items]
-        for i, (id_a, text_a, paper_a) in enumerate(texts):
-            for id_b, text_b, paper_b in texts[i + 1 :]:
+        texts = [
+            (
+                item.evidence_id,
+                normalize_text(item.evidence_text),
+                item.paper_id,
+                item.sub_question_id,
+            )
+            for item in items
+        ]
+        for i, (id_a, text_a, paper_a, sq_a) in enumerate(texts):
+            for id_b, text_b, paper_b, sq_b in texts[i + 1 :]:
                 if paper_a == paper_b:
                     continue
                 for pos, neg in _NEGATION_PAIRS:
-                    if (pos in text_a and neg in text_b) or (neg in text_a and pos in text_b):
+                    polarity_differs = (pos in text_a and neg in text_b) or (
+                        neg in text_a and pos in text_b
+                    )
+                    context_a = _content_tokens(text_a) - {pos, neg}
+                    context_b = _content_tokens(text_b) - {pos, neg}
+                    shared_context = len(context_a & context_b)
+                    required_context = 1 if sq_a == sq_b else 2
+                    if polarity_differs and shared_context >= required_context:
                         conflict_ids.extend([id_a, id_b])
         # Also surface explicit contradiction flags on items
         for item in items:
@@ -268,30 +340,12 @@ class Verifier:
             f"source diversity too low ({len(papers)} papers; expected ≥{min(need, 2)})",
         )
 
-    def _detect_unanswerable(
-        self,
-        plan: QueryPlan,
-        ledger: EvidenceLedger,
-        covered: list[str],
-        missing: list[str],
-    ) -> bool:
-        """Heuristic: empty ledger after research, or zero relevance across all items."""
-        if not plan.sub_questions:
-            return True
-        if not ledger.items and missing:
-            return True
-        # All sub-questions missing and every item fails basic token overlap with original query
-        if missing and len(covered) == 0 and ledger.items:
-            q_tokens = set(re.findall(r"[a-z0-9]+", normalize_text(plan.original_query)))
-            any_overlap = False
-            for item in ledger.items:
-                e_tokens = set(re.findall(r"[a-z0-9]+", normalize_text(item.evidence_text)))
-                if q_tokens and len(q_tokens & e_tokens) / len(q_tokens) >= 0.05:
-                    any_overlap = True
-                    break
-            if not any_overlap:
-                return True
-        return False
+    def _detect_unanswerable(self, plan: QueryPlan) -> bool:
+        """Detect only structural impossibility; retry history belongs to workflow."""
+        # A single empty or irrelevant retrieval pass is not enough evidence that
+        # the corpus cannot answer. The workflow makes that decision only after a
+        # targeted corrective pass also fails to add useful evidence.
+        return not plan.sub_questions
 
     def _rationale(
         self,

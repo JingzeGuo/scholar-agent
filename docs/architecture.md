@@ -1,4 +1,4 @@
-# Architecture (Phase 0 snapshot)
+# Architecture (implemented through Phase 6)
 
 ScholarAgent is an evidence-driven multi-agent literature research system.
 This document tracks the architecture as implemented; see
@@ -45,7 +45,7 @@ User query
 | Knowledge graph | `scholar_agent.graph` | Extract, resolve, MultiDiGraph, graph retrieve |
 | Router | `scholar_agent.retrieval.router` | Query type → retrieval policy |
 | Research Agent | `scholar_agent.agents.researcher` | Adaptive tool loop + bounded safe fan-out + evidence ledger |
-| Planner / Verifier / Workflow | `agents/planner.py`, `verifier.py`, `workflow.py` | Corrective multi-agent loop |
+| Planner / Verifier / Workflow | `agents/planner.py`, `verifier.py`, `workflow.py` | Target-bound corrective loop + exhaustive termination |
 | CLI | `scholar_agent.cli` | `ask`, `research`, `retrieve`, `graph`, … |
 
 ## Prototype loop

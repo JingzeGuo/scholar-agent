@@ -56,7 +56,11 @@ from scholar_agent.models.retrieval import (
     RetrievalResult,
 )
 from scholar_agent.models.routing import RetrievalPolicy, RoutingDecision, ToolAction
-from scholar_agent.models.workflow import ResearchRunState, VerificationResult
+from scholar_agent.models.workflow import (
+    CorrectiveQuery,
+    ResearchRunState,
+    VerificationResult,
+)
 
 __all__ = [
     "BudgetStatus",
@@ -65,6 +69,7 @@ __all__ = [
     "CitationRef",
     "CitationReport",
     "ClaimWithCitations",
+    "CorrectiveQuery",
     "CorpusIngestionReport",
     "CorpusManifestEntry",
     "DraftAnswer",

@@ -281,13 +281,18 @@ LLM planning is optional later and not required for acceptance.
 
 **Decision:** Verifier only sees query, plan, and evidence ledger. It returns
 coverage, conflicts, missing aspects, and **actionable** corrective queries—not
-only `is_sufficient=false`. Contradictions are retained and listed by evidence ID.
+only `is_sufficient=false`. Each corrective action carries its target
+sub-question ID and missing aspect so retrieved evidence repairs the original
+plan gap. Contradictions are retained and listed by evidence ID.
 
 ### ADR-027: Corrective loop termination is exhaustive
 
 **Decision:** The LangGraph workflow stops on sufficient evidence, iteration
-budget, tool budget, no-new-evidence, unanswerable corpus, or empty corrective
-query list. Every path emits `run_finished` with a reason.
+budget, global tool budget, latency budget, no-new-evidence, unanswerable corpus,
+or an empty corrective-action list. Empty or irrelevant first-pass results cause
+targeted retrieval; the corpus is marked unanswerable only after corrective
+retrieval also fails. Every path emits `run_finished` with a reason, and budget
+terminations emit `BUDGET_HIT`.
 
 ---
 
