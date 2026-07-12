@@ -63,6 +63,7 @@ class LLMConfig(BaseModel):
 
 class BudgetsConfig(BaseModel):
     max_tool_calls_per_research_pass: int = Field(default=4, ge=1)
+    max_research_iterations_per_pass: int = Field(default=4, ge=1)
     max_corrective_iterations: int = Field(default=3, ge=0)
     max_evidence_per_sub_question: int = Field(default=8, ge=1)
     max_total_tokens: int = Field(default=100_000, ge=1)
@@ -154,6 +155,7 @@ class EnvSettings(BaseSettings):
     openai_api_key: str | None = None
 
     scholar_max_tool_calls: int | None = None
+    scholar_max_research_iterations: int | None = None
     scholar_max_corrective_iterations: int | None = None
     scholar_request_timeout_s: float | None = None
     scholar_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None
@@ -204,6 +206,8 @@ def apply_env_overrides(config: AppConfig, env: EnvSettings | None = None) -> Ap
 
     if env.scholar_max_tool_calls is not None:
         budgets.max_tool_calls_per_research_pass = env.scholar_max_tool_calls
+    if env.scholar_max_research_iterations is not None:
+        budgets.max_research_iterations_per_pass = env.scholar_max_research_iterations
     if env.scholar_max_corrective_iterations is not None:
         budgets.max_corrective_iterations = env.scholar_max_corrective_iterations
 

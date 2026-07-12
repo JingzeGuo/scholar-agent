@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
@@ -33,8 +34,10 @@ logger = get_logger(__name__)
 
 class ResearchAgentConfig(BaseModel):
     max_tool_calls_per_pass: int = Field(default=4, ge=1)
+    max_iterations_per_pass: int = Field(default=4, ge=1)
     max_evidence_per_sub_question: int = Field(default=8, ge=1)
     max_parallel_sub_questions: int = Field(default=4, ge=1)
+    max_latency_ms: int = Field(default=120_000, ge=1)
     # When True, may run a secondary tool if first yields little evidence
     allow_policy_override: bool = True
 
@@ -48,6 +51,8 @@ class ResearchPassResult(BaseModel):
     actions: list[ToolAction] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     tool_call_count: int = 0
+    iteration_count: int = 0
+    latency_ms: int = 0
     terminated_reason: str
     events: list[ExecutionEvent] = Field(default_factory=list)
 
@@ -61,6 +66,8 @@ class ResearchRunResult(BaseModel):
     evidence_ledger: EvidenceLedger = Field(default_factory=EvidenceLedger)
     events: list[ExecutionEvent] = Field(default_factory=list)
     tool_call_count: int = 0
+    iteration_count: int = 0
+    latency_ms: int = 0
     parallel: bool = False
 
 
@@ -69,7 +76,9 @@ class _SubResearchState(TypedDict, total=False):
     sub_question: dict[str, Any]
     routing: dict[str, Any]
     tool_call_count: int
+    iteration: int
     max_tool_calls: int
+    max_iterations: int
     max_evidence: int
     evidence: list[dict[str, Any]]
     actions: list[dict[str, Any]]
@@ -97,6 +106,7 @@ class ResearchAgent:
         missing_aspect: str | None = None,
     ) -> ResearchPassResult:
         rid = run_id or new_run_id()
+        started = perf_counter()
         has_graph = self.toolkit.graph is not None
         routing = recommend_policy(
             sub_question.question,
@@ -137,16 +147,58 @@ class ResearchAgent:
         ledger = EvidenceLedger()
         actions: list[ToolAction] = []
         tool_calls = 0
+        iterations = 0
         terminated = "completed"
         modes_queue = list(modes)
         seen_modes: set[str] = set()
 
         # Primary recommended mode(s)
-        while tool_calls < self.config.max_tool_calls_per_pass and modes_queue:
+        while modes_queue:
+            latency_ms = int((perf_counter() - started) * 1000)
+            if latency_ms >= self.config.max_latency_ms:
+                terminated = "latency_budget_exhausted"
+                events.append(
+                    ExecutionEvent(
+                        run_id=rid,
+                        event_type=EventType.BUDGET_HIT,
+                        component="researcher",
+                        summary="max research latency reached",
+                        payload={
+                            "max_latency_ms": self.config.max_latency_ms,
+                            "latency_ms": latency_ms,
+                        },
+                    )
+                )
+                break
+            if tool_calls >= self.config.max_tool_calls_per_pass:
+                terminated = "tool_budget_exhausted"
+                events.append(
+                    ExecutionEvent(
+                        run_id=rid,
+                        event_type=EventType.BUDGET_HIT,
+                        component="researcher",
+                        summary="max tool calls per research pass reached",
+                        payload={"max_tool_calls": self.config.max_tool_calls_per_pass},
+                    )
+                )
+                break
+            if iterations >= self.config.max_iterations_per_pass:
+                terminated = "iteration_budget_exhausted"
+                events.append(
+                    ExecutionEvent(
+                        run_id=rid,
+                        event_type=EventType.BUDGET_HIT,
+                        component="researcher",
+                        summary="max research iterations reached",
+                        payload={"max_iterations": self.config.max_iterations_per_pass},
+                    )
+                )
+                break
             mode = modes_queue.pop(0)
             if mode in seen_modes:
                 continue
             seen_modes.add(mode)
+            iterations += 1
             if len(ledger.items) >= self.config.max_evidence_per_sub_question:
                 terminated = "evidence_budget_reached"
                 events.append(
@@ -190,12 +242,32 @@ class ResearchAgent:
                         f"new_unique={len(new_items)}"
                     ),
                     payload={
-                        "hit_ids": [h.chunk_id for h in result.hits],
+                        "hits": [
+                            {
+                                "chunk_id": hit.chunk_id,
+                                "paper_id": hit.paper_id,
+                                "page_start": hit.page_start,
+                                "page_end": hit.page_end,
+                                "score": hit.score,
+                                "rerank_score": hit.rerank_score,
+                            }
+                            for hit in result.hits
+                        ],
                         "new_evidence_ids": [e.evidence_id for e in new_items],
                         "method": result.method,
                     },
                 )
             )
+            if result.debug.get("error"):
+                events.append(
+                    ExecutionEvent(
+                        run_id=rid,
+                        event_type=EventType.ERROR,
+                        component="researcher",
+                        summary=f"{action.tool_name} failed",
+                        payload={"error_type": "retrieval_tool_error"},
+                    )
+                )
             if new_items:
                 ledger = ledger.merge(new_items)
                 events.append(
@@ -213,6 +285,7 @@ class ResearchAgent:
                 self.config.allow_policy_override
                 and len(ledger.items) < max(1, self.config.max_evidence_per_sub_question // 2)
                 and tool_calls < self.config.max_tool_calls_per_pass
+                and iterations < self.config.max_iterations_per_pass
                 and not modes_queue
             ):
                 alt = self._complementary_mode(routing.recommended_policy, seen_modes)
@@ -231,24 +304,13 @@ class ResearchAgent:
                         )
                     )
 
-        if tool_calls >= self.config.max_tool_calls_per_pass and terminated == "completed":
-            terminated = "tool_budget_exhausted"
-            events.append(
-                ExecutionEvent(
-                    run_id=rid,
-                    event_type=EventType.BUDGET_HIT,
-                    component="researcher",
-                    summary="max tool calls per research pass reached",
-                    payload={"max_tool_calls": self.config.max_tool_calls_per_pass},
-                )
-            )
-
         # Cap evidence strictly
         if len(ledger.items) > self.config.max_evidence_per_sub_question:
             ledger = EvidenceLedger(
                 items=ledger.items[: self.config.max_evidence_per_sub_question]
             )
 
+        latency_ms = int((perf_counter() - started) * 1000)
         events.append(
             ExecutionEvent(
                 run_id=rid,
@@ -257,7 +319,9 @@ class ResearchAgent:
                 summary=f"research pass terminated: {terminated}",
                 payload={
                     "tool_call_count": tool_calls,
+                    "iteration_count": iterations,
                     "evidence_count": len(ledger.items),
+                    "latency_ms": latency_ms,
                 },
             )
         )
@@ -269,6 +333,8 @@ class ResearchAgent:
             actions=actions,
             evidence=list(ledger.items),
             tool_call_count=tool_calls,
+            iteration_count=iterations,
+            latency_ms=latency_ms,
             terminated_reason=terminated,
             events=events,
         )
@@ -283,18 +349,26 @@ class ResearchAgent:
     ) -> ResearchRunResult:
         """Research multiple sub-questions; merge evidence with deterministic reducer."""
         rid = run_id or new_run_id()
+        actual_parallel = parallel and self._parallel_safe(sub_questions)
         events: list[ExecutionEvent] = [
             ExecutionEvent(
                 run_id=rid,
                 event_type=EventType.RUN_STARTED,
                 component="researcher",
-                summary=f"multi research start: n={len(sub_questions)} parallel={parallel}",
-                payload={"original_query": original_query},
+                summary=(
+                    f"multi research start: n={len(sub_questions)} "
+                    f"parallel={actual_parallel}"
+                ),
+                payload={
+                    "original_query": original_query,
+                    "parallel_requested": parallel,
+                    "parallel_safe": actual_parallel,
+                },
             )
         ]
         passes: list[ResearchPassResult] = []
 
-        if parallel and len(sub_questions) > 1:
+        if actual_parallel:
             max_workers = min(self.config.max_parallel_sub_questions, len(sub_questions))
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 futures = {
@@ -313,9 +387,13 @@ class ResearchAgent:
 
         ledger = EvidenceLedger()
         total_tools = 0
+        total_iterations = 0
+        total_latency_ms = 0
         for p in passes:
             ledger = ledger.merge(p.evidence)
             total_tools += p.tool_call_count
+            total_iterations += p.iteration_count
+            total_latency_ms += p.latency_ms
             events.extend(p.events)
 
         events.append(
@@ -327,7 +405,11 @@ class ResearchAgent:
                     f"multi research finished: passes={len(passes)} "
                     f"evidence={len(ledger.items)} tools={total_tools}"
                 ),
-                payload={"parallel": parallel and len(sub_questions) > 1},
+                payload={
+                    "parallel": actual_parallel,
+                    "iteration_count": total_iterations,
+                    "latency_ms": total_latency_ms,
+                },
             )
         )
         return ResearchRunResult(
@@ -337,7 +419,9 @@ class ResearchAgent:
             evidence_ledger=ledger,
             events=events,
             tool_call_count=total_tools,
-            parallel=parallel and len(sub_questions) > 1,
+            iteration_count=total_iterations,
+            latency_ms=total_latency_ms,
+            parallel=actual_parallel,
         )
 
     def research_query(
@@ -453,6 +537,18 @@ class ResearchAgent:
                 return c
         return None
 
+    def _parallel_safe(self, sub_questions: list[SubQuestion]) -> bool:
+        """Parallelize only independent-looking, uniquely keyed pending work."""
+        if len(sub_questions) < 2 or self.config.max_parallel_sub_questions < 2:
+            return False
+        ids = [question.id for question in sub_questions]
+        normalized = [" ".join(question.question.lower().split()) for question in sub_questions]
+        return (
+            len(ids) == len(set(ids))
+            and len(normalized) == len(set(normalized))
+            and all(question.status == SubQuestionStatus.PENDING for question in sub_questions)
+        )
+
 
 def hits_to_evidence(
     hits: list[RetrievalHit],
@@ -520,50 +616,77 @@ def _mode_to_policy(mode: str) -> RetrievalPolicy:
 def build_research_subgraph(agent: ResearchAgent) -> Any:
     """Compile a minimal LangGraph loop for one sub-question (budget-aware)."""
 
+    def append_event_dicts(
+        state: _SubResearchState,
+        *events: ExecutionEvent,
+    ) -> list[dict[str, Any]]:
+        return list(state.get("events") or []) + [
+            event.model_dump(mode="json") for event in events
+        ]
+
     def decide(state: _SubResearchState) -> dict[str, Any]:
         tool_calls = int(state.get("tool_call_count") or 0)
         max_tools = int(state.get("max_tool_calls") or 4)
+        iterations = int(state.get("iteration") or 0)
+        max_iterations = int(state.get("max_iterations") or 4)
         evidence = list(state.get("evidence") or [])
         max_ev = int(state.get("max_evidence") or 8)
         queue = list(state.get("modes_queue") or [])
         if tool_calls >= max_tools:
             return {
                 "terminated_reason": "tool_budget_exhausted",
-                "events": [
+                "events": append_event_dicts(
+                    state,
                     ExecutionEvent(
                         run_id=state["run_id"],
                         event_type=EventType.BUDGET_HIT,
                         component="researcher.graph",
                         summary="tool budget exhausted",
-                    ).model_dump(mode="json")
-                ],
+                    ),
+                ),
+            }
+        if iterations >= max_iterations:
+            return {
+                "terminated_reason": "iteration_budget_exhausted",
+                "events": append_event_dicts(
+                    state,
+                    ExecutionEvent(
+                        run_id=state["run_id"],
+                        event_type=EventType.BUDGET_HIT,
+                        component="researcher.graph",
+                        summary="iteration budget exhausted",
+                    ),
+                ),
             }
         if len(evidence) >= max_ev:
             return {
                 "terminated_reason": "evidence_budget_reached",
-                "events": [
+                "events": append_event_dicts(
+                    state,
                     ExecutionEvent(
                         run_id=state["run_id"],
                         event_type=EventType.BUDGET_HIT,
                         component="researcher.graph",
                         summary="evidence budget reached",
-                    ).model_dump(mode="json")
-                ],
+                    ),
+                ),
             }
         if not queue:
-            return {"terminated_reason": "completed", "events": []}
+            return {"terminated_reason": "completed"}
         mode = queue[0]
         return {
             "last_action": {"mode": mode},
             "modes_queue": queue[1:],
-            "events": [
+            "iteration": iterations + 1,
+            "events": append_event_dicts(
+                state,
                 ExecutionEvent(
                     run_id=state["run_id"],
                     event_type=EventType.DECISION,
                     component="researcher.graph",
                     summary=f"next mode={mode}",
-                ).model_dump(mode="json")
-            ],
+                ),
+            ),
         }
 
     def execute(state: _SubResearchState) -> dict[str, Any]:
@@ -579,21 +702,63 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
             mode=mode,
             routing=routing,
             existing=existing,
+            max_new=max(
+                0,
+                int(state.get("max_evidence") or 8) - len(existing.items),
+            ),
         )
         merged = existing.merge(new_items)
+        selected_event = ExecutionEvent(
+            run_id=state["run_id"],
+            event_type=EventType.TOOL_SELECTED,
+            component="researcher.graph",
+            summary=f"tool={action.tool_name}",
+            payload=action.model_dump(mode="json"),
+        )
+        result_event = ExecutionEvent(
+            run_id=state["run_id"],
+            event_type=EventType.TOOL_RESULT,
+            component="researcher.graph",
+            summary=f"{mode} hits={len(result.hits)} new={len(new_items)}",
+            payload={
+                "hits": [
+                    {
+                        "chunk_id": hit.chunk_id,
+                        "paper_id": hit.paper_id,
+                        "page_start": hit.page_start,
+                        "page_end": hit.page_end,
+                        "score": hit.score,
+                    }
+                    for hit in result.hits
+                ]
+            },
+        )
+        new_events = [selected_event, result_event]
+        if result.debug.get("error"):
+            new_events.append(
+                ExecutionEvent(
+                    run_id=state["run_id"],
+                    event_type=EventType.ERROR,
+                    component="researcher.graph",
+                    summary=f"{action.tool_name} failed",
+                    payload={"error_type": "retrieval_tool_error"},
+                )
+            )
+        if new_items:
+            new_events.append(
+                ExecutionEvent(
+                    run_id=state["run_id"],
+                    event_type=EventType.EVIDENCE_ADDED,
+                    component="researcher.graph",
+                    summary=f"added {len(new_items)} evidence items",
+                )
+            )
         return {
             "tool_call_count": int(state.get("tool_call_count") or 0) + 1,
             "evidence": [e.model_dump(mode="json") for e in merged.items],
             "actions": list(state.get("actions") or []) + [action.model_dump(mode="json")],
             "last_new_count": len(new_items),
-            "events": [
-                ExecutionEvent(
-                    run_id=state["run_id"],
-                    event_type=EventType.TOOL_RESULT,
-                    component="researcher.graph",
-                    summary=f"{mode} hits={len(result.hits)} new={len(new_items)}",
-                ).model_dump(mode="json")
-            ],
+            "events": append_event_dicts(state, *new_events),
         }
 
     def route_after_decide(state: _SubResearchState) -> Literal["execute", "finish"]:
@@ -608,6 +773,8 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
             return "finish"
         if int(state.get("tool_call_count") or 0) >= int(state.get("max_tool_calls") or 4):
             return "finish"
+        if int(state.get("iteration") or 0) >= int(state.get("max_iterations") or 4):
+            return "finish"
         if len(state.get("evidence") or []) >= int(state.get("max_evidence") or 8):
             return "finish"
         if not state.get("modes_queue"):
@@ -615,17 +782,30 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
         return "decide"
 
     def finish(state: _SubResearchState) -> dict[str, Any]:
-        reason = state.get("terminated_reason") or "completed"
+        reason = state.get("terminated_reason")
+        if reason is None and state.get("modes_queue"):
+            if int(state.get("tool_call_count") or 0) >= int(
+                state.get("max_tool_calls") or 4
+            ):
+                reason = "tool_budget_exhausted"
+            elif int(state.get("iteration") or 0) >= int(
+                state.get("max_iterations") or 4
+            ):
+                reason = "iteration_budget_exhausted"
+            elif len(state.get("evidence") or []) >= int(state.get("max_evidence") or 8):
+                reason = "evidence_budget_reached"
+        reason = reason or "completed"
         return {
             "terminated_reason": reason,
-            "events": [
+            "events": append_event_dicts(
+                state,
                 ExecutionEvent(
                     run_id=state["run_id"],
                     event_type=EventType.TERMINATED,
                     component="researcher.graph",
                     summary=f"subgraph terminated: {reason}",
-                ).model_dump(mode="json")
-            ],
+                ),
+            ),
         }
 
     graph = StateGraph(_SubResearchState)

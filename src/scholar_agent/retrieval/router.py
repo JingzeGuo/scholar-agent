@@ -40,6 +40,11 @@ _CORRECTIVE_RE = re.compile(
     r"\b(missing|additional evidence|find more|corrective|need evidence about)\b",
     re.I,
 )
+_GENERAL_EVIDENCE_RE = re.compile(
+    r"\b(provide|find|show|give|gather)\s+(?:me\s+)?(?:the\s+)?evidence\b|"
+    r"\bevidence\s+(?:for|supporting|about|on)\b",
+    re.I,
+)
 
 # Known method/dataset tokens from seed aliases (favor keyword/hybrid)
 _KNOWN_KEYWORDS = {normalize_text(k) for k in SEED_ALIASES}
@@ -61,6 +66,9 @@ def classify_query_type(query: str) -> tuple[QueryType, list[str]]:
     if _RELATIONAL_RE.search(q):
         signals.append("relational_cue")
         return QueryType.RELATIONAL, signals
+    if _GENERAL_EVIDENCE_RE.search(q):
+        signals.append("default_general_evidence")
+        return QueryType.SEMANTIC, signals
 
     acronyms = _ACRONYM_RE.findall(q)
     if acronyms:
@@ -115,7 +123,12 @@ def recommend_policy(
         aspect = missing_aspect or query
         aspect_type, aspect_signals = classify_query_type(aspect)
         signals.extend([f"aspect_{s}" for s in aspect_signals])
-        policy = _policy_for_type(aspect_type, has_graph=has_graph)
+        policy = (
+            RetrievalPolicy.HYBRID_RERANK
+            if aspect_type == QueryType.SEMANTIC
+            and "default_general_evidence" in aspect_signals
+            else _policy_for_type(aspect_type, has_graph=has_graph)
+        )
         return RoutingDecision(
             query=query,
             query_type=aspect_type,
@@ -127,7 +140,13 @@ def recommend_policy(
             signals=signals,
         )
 
-    policy = _policy_for_type(query_type, has_graph=has_graph)
+    # A conceptual paraphrase is dense-friendly, while a general evidence
+    # request needs broader hybrid candidates plus reranking. Both use the
+    # semantic query type, so preserve the classifier signal here.
+    if query_type == QueryType.SEMANTIC and "default_general_evidence" in signals:
+        policy = RetrievalPolicy.HYBRID_RERANK
+    else:
+        policy = _policy_for_type(query_type, has_graph=has_graph)
     rationale = _rationale(query_type, policy, has_graph=has_graph)
     return RoutingDecision(
         query=query,
@@ -157,6 +176,8 @@ def _policy_for_type(query_type: QueryType, *, has_graph: bool) -> RetrievalPoli
 
 
 def _rationale(query_type: QueryType, policy: RetrievalPolicy, *, has_graph: bool) -> str:
+    if query_type == QueryType.SEMANTIC and policy == RetrievalPolicy.HYBRID_RERANK:
+        return "General evidence request → broad hybrid candidates + reranker"
     mapping = {
         QueryType.SEMANTIC: "Conceptual paraphrase → dense retrieval",
         QueryType.KEYWORD: "Exact model/dataset/metric/acronym → sparse or hybrid",

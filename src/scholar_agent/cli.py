@@ -99,6 +99,10 @@ def config_cmd(
         "budgets.max_corrective_iterations",
         str(cfg.budgets.max_corrective_iterations),
     )
+    table.add_row(
+        "budgets.max_research_iterations",
+        str(cfg.budgets.max_research_iterations_per_pass),
+    )
     table.add_row("chunking.target_tokens", str(cfg.chunking.target_tokens))
     table.add_row("paths.processed_dir", str(cfg.paths.processed_dir))
     console.print(table)
@@ -556,6 +560,11 @@ _RESEARCH_MAX_EVIDENCE_OPT = typer.Option(
     "--max-evidence",
     help="Max evidence items per sub-question",
 )
+_RESEARCH_MAX_ITERATIONS_OPT = typer.Option(
+    None,
+    "--max-iterations",
+    help="Max inspect/act iterations per sub-question",
+)
 _NO_PARALLEL_OPT = typer.Option(
     False,
     "--no-parallel",
@@ -570,6 +579,7 @@ def research_cmd(
     embedding_backend: str = _EMBED_BACKEND_OPT,
     max_tools: int | None = _RESEARCH_MAX_TOOLS_OPT,
     max_evidence: int | None = _RESEARCH_MAX_EVIDENCE_OPT,
+    max_iterations: int | None = _RESEARCH_MAX_ITERATIONS_OPT,
     no_parallel: bool = _NO_PARALLEL_OPT,
     json_output: bool = _JSON_OPT,
 ) -> None:
@@ -594,6 +604,9 @@ def research_cmd(
         or cfg.budgets.max_tool_calls_per_research_pass,
         max_evidence_per_sub_question=max_evidence
         or cfg.budgets.max_evidence_per_sub_question,
+        max_iterations_per_pass=max_iterations
+        or cfg.budgets.max_research_iterations_per_pass,
+        max_latency_ms=cfg.budgets.max_latency_ms,
     )
     agent = ResearchAgent(toolkit, config=agent_cfg)
 
@@ -642,6 +655,7 @@ def research_cmd(
     console.print(f"  {routing_preview.rationale}", markup=False)
     console.print(
         f"[bold]tools[/bold]: {result.tool_call_count}  "
+        f"iterations={result.iteration_count}  "
         f"evidence={len(result.evidence_ledger.items)}  "
         f"parallel={result.parallel}"
     )

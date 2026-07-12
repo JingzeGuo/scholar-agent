@@ -24,6 +24,7 @@ def test_load_default_config(default_config_path: Path, repo_root: Path) -> None
     assert cfg.llm.main_model == "deepseek-v4-pro"
     assert cfg.llm.fast_model == "deepseek-v4-flash"
     assert cfg.budgets.max_tool_calls_per_research_pass == 4
+    assert cfg.budgets.max_research_iterations_per_pass == 4
     assert cfg.chunking.target_tokens == 600
     assert cfg.paths.processed_dir.is_absolute()
     assert cfg.paths.processed_dir == (repo_root / "data" / "processed").resolve()
@@ -35,6 +36,7 @@ def test_env_overrides_api_key_and_budgets(default_config_path: Path, repo_root:
         deepseek_api_key="sk-test-key",
         deepseek_main_model="deepseek-custom",
         scholar_max_tool_calls=2,
+        scholar_max_research_iterations=3,
         scholar_max_corrective_iterations=1,
         scholar_log_level="DEBUG",
     )
@@ -42,6 +44,7 @@ def test_env_overrides_api_key_and_budgets(default_config_path: Path, repo_root:
     assert updated.llm.api_key == "sk-test-key"
     assert updated.llm.main_model == "deepseek-custom"
     assert updated.budgets.max_tool_calls_per_research_pass == 2
+    assert updated.budgets.max_research_iterations_per_pass == 3
     assert updated.budgets.max_corrective_iterations == 1
     assert updated.logging.level == "DEBUG"
     # Original config object remains unchanged

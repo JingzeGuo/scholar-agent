@@ -60,6 +60,14 @@ def test_synthesis_uses_hybrid_rerank() -> None:
     assert decision.recommended_policy == RetrievalPolicy.HYBRID_RERANK
 
 
+def test_general_evidence_question_uses_hybrid_rerank() -> None:
+    query = "Provide evidence supporting retrieval quality improvements"
+    query_type, signals = classify_query_type(query)
+    assert query_type == QueryType.SEMANTIC
+    assert "default_general_evidence" in signals
+    assert recommend_policy(query).recommended_policy == RetrievalPolicy.HYBRID_RERANK
+
+
 def test_corrective_routes_from_missing_aspect() -> None:
     decision = recommend_policy(
         "need more evidence",

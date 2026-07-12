@@ -248,20 +248,22 @@ Research Agent logs both the recommendation and any complementary-tool override.
 **Rationale:** Acceptance requires different tools for labeled query types
 without live LLM dependency.
 
-### ADR-023: Hard tool and evidence budgets in the Research Agent
+### ADR-023: Hard execution budgets in the Research Agent
 
-**Decision:** Per sub-question caps (`max_tool_calls_per_pass`,
-`max_evidence_per_sub_question`) are enforced in code paths, not prompts.
-Exceeding a cap emits `BUDGET_HIT` execution events and stops the loop.
+**Decision:** Per sub-question tool-call, inspect/act iteration, evidence, and
+latency caps are enforced in code paths, not prompts. Exceeding a cap emits a
+`BUDGET_HIT` execution event and stops the loop. Retrieval itself makes no LLM
+call, so token consumption remains governed by the global workflow budget.
 
 **Rationale:** Plan §10.2 safety budgets; tests assert budgets cannot be
 exceeded.
 
 ### ADR-024: Parallel sub-question research with deterministic merge
 
-**Decision:** Independent sub-questions may run via a thread pool; evidence is
-merged with the existing chunk+span ledger reducer in original sub-question
-order.
+**Decision:** Pending sub-questions with unique IDs and normalized question text
+may run via a bounded thread pool. Duplicate or non-pending work falls back to
+serial execution. Evidence is merged with the existing chunk+span ledger reducer
+in original sub-question order.
 
 **Rationale:** Plan allows fan-out where safe; reducers must remain deterministic.
 

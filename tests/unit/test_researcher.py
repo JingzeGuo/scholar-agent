@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from time import sleep
+
 from scholar_agent.agents.researcher import (
     ResearchAgent,
     ResearchAgentConfig,
+    build_research_subgraph,
     hits_to_evidence,
 )
 from scholar_agent.agents.state import merge_evidence
@@ -14,6 +17,7 @@ from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import SubQuestion, SubQuestionStatus
 from scholar_agent.models.retrieval import RetrievalHit, RetrievalResult
 from scholar_agent.models.routing import RetrievalPolicy
+from scholar_agent.retrieval.router import policy_to_tool_modes, recommend_policy
 from scholar_agent.retrieval.tools import RetrievalToolkit
 
 
@@ -50,6 +54,12 @@ class FakeToolkit(RetrievalToolkit):
         )
         method = mode if mode in {"dense", "sparse", "hybrid", "hybrid_rerank", "graph"} else "hybrid"
         return RetrievalResult(query=query, method=method, hits=[hit])  # type: ignore[arg-type]
+
+
+class SlowFakeToolkit(FakeToolkit):
+    def search(self, *args, **kwargs) -> RetrievalResult:  # type: ignore[no-untyped-def,override]
+        sleep(0.005)
+        return super().search(*args, **kwargs)
 
 
 def _sq(qid: str, question: str, qtype: QueryType) -> SubQuestion:
@@ -165,6 +175,63 @@ def test_tool_budget_cannot_be_exceeded() -> None:
     }
 
 
+def test_iteration_budget_cannot_be_exceeded() -> None:
+    toolkit = FakeToolkit(has_graph=True)
+    agent = ResearchAgent(
+        toolkit,  # type: ignore[arg-type]
+        config=ResearchAgentConfig(
+            max_tool_calls_per_pass=4,
+            max_iterations_per_pass=1,
+            max_evidence_per_sub_question=8,
+            allow_policy_override=False,
+        ),
+    )
+    result = agent.research_sub_question(
+        _sq("sq_iter", "Compare Self-RAG versus CRAG", QueryType.COMPARISON)
+    )
+    assert result.iteration_count == 1
+    assert result.tool_call_count == 1
+    assert result.terminated_reason == "iteration_budget_exhausted"
+
+
+def test_finishing_exactly_at_budget_is_not_reported_exhausted() -> None:
+    toolkit = FakeToolkit(has_graph=True)
+    agent = ResearchAgent(
+        toolkit,  # type: ignore[arg-type]
+        config=ResearchAgentConfig(
+            max_tool_calls_per_pass=2,
+            max_iterations_per_pass=2,
+            max_evidence_per_sub_question=8,
+            allow_policy_override=False,
+        ),
+    )
+    result = agent.research_sub_question(
+        _sq("sq_exact", "Compare Self-RAG versus CRAG", QueryType.COMPARISON)
+    )
+    assert result.tool_call_count == 2
+    assert result.iteration_count == 2
+    assert result.terminated_reason == "completed"
+
+
+def test_latency_budget_stops_additional_tools() -> None:
+    toolkit = SlowFakeToolkit(has_graph=True)
+    agent = ResearchAgent(
+        toolkit,  # type: ignore[arg-type]
+        config=ResearchAgentConfig(
+            max_tool_calls_per_pass=4,
+            max_iterations_per_pass=4,
+            max_evidence_per_sub_question=8,
+            max_latency_ms=1,
+            allow_policy_override=False,
+        ),
+    )
+    result = agent.research_sub_question(
+        _sq("sq_slow", "Compare Self-RAG versus CRAG", QueryType.COMPARISON)
+    )
+    assert result.tool_call_count == 1
+    assert result.terminated_reason == "latency_budget_exhausted"
+
+
 def test_evidence_budget_cannot_be_exceeded() -> None:
     toolkit = FakeToolkit(has_graph=False)
     agent = ResearchAgent(
@@ -204,6 +271,24 @@ def test_parallel_multi_subquestion_merges_ledger() -> None:
     assert "run_finished" in types
 
 
+def test_duplicate_questions_are_not_parallelized() -> None:
+    agent = ResearchAgent(
+        FakeToolkit(has_graph=False),  # type: ignore[arg-type]
+        config=ResearchAgentConfig(max_tool_calls_per_pass=1),
+    )
+    run = agent.research_many(
+        [
+            _sq("sq_1", "What is Self-RAG?", QueryType.SEMANTIC),
+            _sq("sq_2", "  what IS self-rag? ", QueryType.SEMANTIC),
+        ],
+        original_query="duplicate work",
+        parallel=True,
+    )
+    assert run.parallel is False
+    assert run.events[0].payload["parallel_requested"] is True
+    assert run.events[0].payload["parallel_safe"] is False
+
+
 def test_budget_events_emitted() -> None:
     toolkit = FakeToolkit(has_graph=True)
     agent = ResearchAgent(
@@ -218,3 +303,70 @@ def test_budget_events_emitted() -> None:
     assert any(
         e.event_type.value in {"budget_hit", "terminated", "tool_result"} for e in result.events
     )
+
+
+def test_tool_result_trace_contains_sources_pages_and_scores() -> None:
+    agent = ResearchAgent(
+        FakeToolkit(has_graph=False),  # type: ignore[arg-type]
+        config=ResearchAgentConfig(allow_policy_override=False),
+    )
+    result = agent.research_sub_question(
+        _sq("sq_trace", "What is RAG conceptually?", QueryType.SEMANTIC)
+    )
+    tool_event = next(event for event in result.events if event.event_type.value == "tool_result")
+    hit = tool_event.payload["hits"][0]
+    assert hit["chunk_id"]
+    assert hit["paper_id"] == "paper_demo"
+    assert hit["page_start"] == 1
+    assert hit["score"] == 0.9
+
+
+def test_research_subgraph_preserves_events_and_state_budgets() -> None:
+    agent = ResearchAgent(
+        FakeToolkit(has_graph=True),  # type: ignore[arg-type]
+        config=ResearchAgentConfig(
+            max_tool_calls_per_pass=4,
+            max_iterations_per_pass=4,
+            max_evidence_per_sub_question=8,
+            allow_policy_override=False,
+        ),
+    )
+    sub_question = _sq(
+        "sq_graph",
+        "Compare Self-RAG versus CRAG",
+        QueryType.COMPARISON,
+    )
+    routing = recommend_policy(
+        sub_question.question,
+        query_type=sub_question.query_type,
+        has_graph=True,
+    )
+    graph = build_research_subgraph(agent)
+    state = graph.invoke(
+        {
+            "run_id": "run_subgraph",
+            "sub_question": sub_question.model_dump(mode="json"),
+            "routing": routing.model_dump(mode="json"),
+            "tool_call_count": 0,
+            "iteration": 0,
+            "max_tool_calls": 4,
+            "max_iterations": 1,
+            "max_evidence": 1,
+            "evidence": [],
+            "actions": [],
+            "events": [],
+            "modes_queue": policy_to_tool_modes(routing.recommended_policy),
+        }
+    )
+    assert state["tool_call_count"] == 1
+    assert state["iteration"] == 1
+    assert len(state["evidence"]) <= 1
+    assert state["terminated_reason"] in {
+        "iteration_budget_exhausted",
+        "evidence_budget_reached",
+    }
+    event_types = [event["event_type"] for event in state["events"]]
+    assert "decision" in event_types
+    assert "tool_selected" in event_types
+    assert "tool_result" in event_types
+    assert "terminated" in event_types

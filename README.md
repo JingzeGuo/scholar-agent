@@ -52,9 +52,9 @@ Full design: [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 ### Phase 5
 
 - Adaptive query classifier / retrieval router (rule-based, offline)
-- Research Agent tool loop with hard tool & evidence budgets
-- Evidence ledger merge + structured execution events
-- Optional parallel multi-sub-question research
+- Research Agent tool loop with hard tool, iteration, evidence, and latency budgets
+- Evidence ledger merge + structured source/page/score execution events
+- Safe parallel multi-sub-question research with deterministic merge order
 
 ## Quick start
 
