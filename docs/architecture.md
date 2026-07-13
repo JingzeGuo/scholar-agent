@@ -39,8 +39,8 @@ flowchart LR
 ```text
 PDF corpus
   → metadata + page parsing (PyMuPDF)
-  → header/footer cleanup + section heuristics
-  → token-aware chunking (stable chunk_id)
+  → prevalence-based header/footer cleanup + section/page-span mapping
+  → exact-token chunking (stable chunk_id + minimal physical page range)
   → canonical chunk store (source of truth)
   → dense index / BM25 / provenance-linked graph
   → optional extraction disk cache
@@ -81,9 +81,13 @@ User query
 ## Graph provenance and entity resolution
 
 1. Extract relations with **evidence spans** grounded in chunk text.
-2. Validate spans against the chunk store (drop ungrounded triples).
+2. Reload the PDF and localize each complete span to its minimal contiguous
+   physical-page window; drop spans that cannot be localized.
 3. Resolve surfaces: seed aliases → string/embedding candidates → optional LLM judge.
-4. Persist NetworkX MultiDiGraph node-link JSON; every edge joins back to `chunk_id` → pages.
+4. Persist NetworkX MultiDiGraph node-link JSON plus build metadata; every edge
+   joins back to `chunk_id` and its own `page_number`–`page_end` range.
+5. Runtime loading rejects stale/partial graphs whose corpus or schema identity
+   differs from the canonical chunk store.
 
 ## Corrective loop termination
 
@@ -103,6 +107,8 @@ Stops when any of:
 - Graceful degradation when graph/index missing (`degraded` debug / empty hits).
 - Retrieved text delimited as untrusted data.
 - Disk cache: versioned keys, atomic writes, corruption → miss.
+- Artifact identity: dense, sparse, graph, evaluation, and replay records bind to
+  the canonical corpus fingerprint; stale graph/replay data is rejected.
 
 ## Constraints
 

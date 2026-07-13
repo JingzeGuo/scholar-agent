@@ -2,6 +2,11 @@
 
 Evidence-driven multi-agent GraphRAG for literature research.
 
+![ScholarAgent offline replay](docs/assets/scholaragent_replay.gif)
+
+*Replay-derived, provider-free demo: plan → adaptive retrieval → verification →
+page-grounded answer. Generate it with `scripts/build_demo_gif.py`.*
+
 A **Planner** decomposes complex questions, a **Researcher** chooses hybrid or
 graph retrieval tools under budgets, a **Verifier** checks evidence coverage and
 may request corrective retrieval, and a **Writer** answers only from verified
@@ -25,7 +30,7 @@ evidence—with ablations to measure what actually helps.
 | No stop condition | Agents thrash on tools | Corrective budgets, no-new-evidence stop |
 | Graph as oracle | Triples treated as facts | Provenance-backed edges only |
 
-**Measured (offline hash embeddings, frozen 50-Q split, clean run `run_7ef8e4f006d7449d`):**
+**Measured (offline hash embeddings, frozen 50-Q split, clean run `run_5bb1f439f19842cb`):**
 dense-only paper Recall@8 **0.13** vs hybrid_rerank **0.61**. Source:
 [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
 
@@ -85,10 +90,12 @@ Replay: `data/demo/runs/selfrag_vs_crag.json`
 
 | evidence_id | paper_id | pages | claim support (snippet) |
 |---|---|---|---|
-| `ev_selfrag` | `paper_arxiv_2310_11511` | p.1 | Self-RAG / reflection tokens |
+| `ev_selfrag` | `paper_arxiv_2310_11511` | p.10–11 | Self-RAG / reflection tokens |
 | `ev_crag` | `paper_arxiv_2401_15884` | p.1 | CRAG corrective retrieval |
 
-Final answer cites `[paper_arxiv_2310_11511 p.1]` and `[paper_arxiv_2401_15884 p.1]`.
+Final answer cites `[paper_arxiv_2310_11511 p.10-11]` and
+`[paper_arxiv_2401_15884 p.1]`. Replay loading rechecks these mappings against
+the current canonical store when local artifacts are available.
 
 ---
 
@@ -100,8 +107,8 @@ Final answer cites `[paper_arxiv_2310_11511 p.1]` and `[paper_arxiv_2401_15884 p
 | Locally ingested papers | **120** (when PDFs present) | `data/processed/papers.jsonl` (gitignored) |
 | Chunks | **5858** | local `data/processed/chunks.jsonl` |
 | Pages (last ingest report) | **2593** | local `ingestion_report.json` |
-| Graph nodes / edges | **2625 / 4238** | local `graph_stats.json` via `graph inspect` |
-| Relations with evidence | **4238 / 4238** | all edges provenance-backed |
+| Graph nodes / edges | **2636 / 4263** | local `graph_stats.json` via `graph stats` |
+| Relations with evidence | **4263 / 4263** | independent PDF-span audit; 4181 single-page + 82 cross-page |
 | PDFs committed? | **No** | `.gitignore` — download via script |
 
 If you clone without downloading PDFs, treat full-corpus stats as **unavailable
@@ -131,24 +138,34 @@ Artifacts: `data/evaluation/{questions,reference_evidence,frozen_split}.jsonl|js
 
 ### Quantitative results (measured offline)
 
-**Configuration:** hashing embedder + lexical rerank · no live LLM · cost $0.00 ·
-clean run `run_7ef8e4f006d7449d`. Full table:
-[`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
+**Configuration:** hashing embedder + lexical rerank · graph loaded · no live LLM ·
+cost $0.00 · clean run `run_5bb1f439f19842cb` · corpus fingerprint `79d20fac…`.
+Full table: [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
 
 | system | paper R@8 | cite P | latency ms |
 |---|---:|---:|---:|
-| naive_dense | 0.13 | 0.033 | 4.6 |
-| hybrid_rerank | 0.61 | 0.168 | 10.1 |
-| hybrid_graph | **0.67** | 0.214 | 290.9 |
-| full_agent | 0.52 | **0.274** | 350.5 |
+| naive_dense | 0.13 | 0.033 | 4.4 |
+| hybrid_rerank | 0.61 | 0.169 | 11.6 |
+| hybrid_graph | **0.67** | 0.212 | 301.5 |
+| full_agent | 0.54 | **0.288** | 587.2 |
 
 **Per-category (paper R@8):** hybrid_rerank factual/keyword **0.90**; comparison
-**0.57**; relational **0.40**. Full agent unanswerable refusals: **0/5**.
+**0.57**; relational **0.40**. Full agent unanswerable refusals: **5/5**.
+Corrective loops trigger safely but `improvement_after_correction = 0.0` offline.
 
-**Not run / unavailable without credentials or BGE weights:** production-embedder
-full eval; paid RAGAS on the full split; live DeepSeek cost curves.
+**Optional live shared-LLM run** (`run_20de25c647c1433f`, DeepSeek flash):
+[`docs/results/live_shared_llm_eval_summary.md`](docs/results/live_shared_llm_eval_summary.md).
+Retrieval paper R@8 matches the offline hash table; citation precision rises under
+shared generation (e.g. hybrid_rerank cite P **0.588**).
+
+**Not run / unavailable:** full frozen-split eval with production BGE +
+cross-encoder end-to-end (weights can be local; full 50×7 ST re-measure not
+claimed here); RAGAS on the full 50×7 split (smoke verified separately).
 
 **Fixture-only:** unit/E2E tests under `tests/` (not full-corpus metrics).
+
+**Dataset review:** 50/50 AI-assisted independent review
+(`data/evaluation/manual_review_manifest.json`) — **not** human-signed audit.
 
 Failure analysis: [`docs/failure_analysis.md`](docs/failure_analysis.md).
 
@@ -176,9 +193,14 @@ uv run mypy src
 uv run python scripts/download_corpus.py --target 120 --skip-existing
 uv run scholar-agent corpus validate -m data/corpus_manifest.jsonl --check-pdfs
 uv run scholar-agent ingest --manifest data/corpus_manifest.jsonl
-uv run scholar-agent index build --embedding-backend hash
+uv run scholar-agent index build --embedding-backend st
 uv run scholar-agent graph build
 ```
+
+Canonical ingestion requires the configured exact tokenizer
+(`tiktoken:cl100k_base`) and records its backend plus an ingestion-configuration
+fingerprint. `--allow-tokenizer-fallback` is an explicit non-canonical diagnostic
+escape hatch; it is never used for the measured corpus.
 
 ---
 
@@ -191,7 +213,7 @@ uv run scholar-agent ingest --help
 uv run scholar-agent graph inspect
 uv run scholar-agent ask --help
 uv run scholar-agent evaluate --help
-uv run scholar-agent ablate --help   # alias of evaluate (all systems by default)
+uv run scholar-agent ablate --all    # alias of evaluate; --all is also the default
 ```
 
 | Command | Description |
@@ -242,6 +264,8 @@ uv run scholar-agent demo --replay selfrag_vs_crag
 ```
 
 Full script: [`docs/demo_script.md`](docs/demo_script.md). UI notes: [`docs/demo.md`](docs/demo.md).
+The committed GIF above is rebuilt from the same provenance-checked replay data,
+so the interview path does not require a provider or browser session.
 
 ---
 
@@ -261,7 +285,8 @@ disk cache with corruption handling, untrusted-content delimiters, secret-safe l
 ## Limitations
 
 1. Offline hash metrics are **not** BGE/cross-encoder production quality.
-2. Full agent **fails unanswerable refusals** (0/5) in the measured offline run.
+2. Corrective loops **trigger but do not improve** gold paper recall offline
+   (`improvement_after_correction = 0.0`).
 3. Graph improves paper recall but multiplies latency (~30× in that run).
 4. PDFs, indexes, and raw eval outputs are local (gitignored).
 5. Single-user CLI/Streamlit prototype — not multi-tenant production.

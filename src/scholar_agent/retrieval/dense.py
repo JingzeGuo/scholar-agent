@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from scholar_agent.models.corpus import Chunk
 from scholar_agent.models.retrieval import RetrievalFilters, RetrievalHit
 from scholar_agent.retrieval.chunk_store import ChunkStore
@@ -36,6 +38,7 @@ class DenseIndex:
         self.store = store
         self.meta = meta
         self.persist_dir = persist_dir
+        self._exact_hash_cache: tuple[list[str], np.ndarray] | None = None
 
     @classmethod
     def build(
@@ -176,8 +179,11 @@ class DenseIndex:
         if not query.strip() or len(self.store) == 0:
             return []
         # Over-fetch then filter
-        fetch_k = min(len(self.store), max(k * 4, k))
         query_emb = self.embedder.embed_query(query)
+        if isinstance(self.embedder, HashingEmbedder):
+            return self._search_hash_exact(query_emb, k=k, filters=filters)
+
+        fetch_k = min(len(self.store), max(k * 4, k))
         result = self._collection.query(
             query_embeddings=[query_emb],
             n_results=fetch_k,
@@ -226,3 +232,67 @@ class DenseIndex:
             if len(hits) >= k:
                 break
         return hits
+
+    def _search_hash_exact(
+        self,
+        query_embedding: list[float],
+        *,
+        k: int,
+        filters: RetrievalFilters | None,
+    ) -> list[RetrievalHit]:
+        """Exact, stably tie-broken search for deterministic offline evaluation.
+
+        The small 64-dimensional hash backend creates many equal similarities.
+        HNSW is free to return tied neighbors in a different order across
+        processes, which makes frozen-split metrics drift. Loading the already
+        persisted vectors once and applying exact cosine/dot-product scoring is
+        cheap for this corpus and guarantees ``chunk_id`` tie-breaking. Production
+        sentence-transformer indexes continue to use Chroma ANN above.
+        """
+        ids, matrix = self._load_exact_hash_vectors()
+        query: np.ndarray = np.asarray(query_embedding, dtype=np.float32)
+        scores = matrix @ query
+        order = sorted(
+            range(len(ids)),
+            key=lambda index: (-float(scores[index]), ids[index]),
+        )
+        hits: list[RetrievalHit] = []
+        for rank, index in enumerate(order, start=1):
+            chunk = self.store.get_chunk(ids[index])
+            if chunk is None or (filters and not _passes_filters(chunk, filters)):
+                continue
+            hits.append(
+                RetrievalHit(
+                    chunk_id=chunk.chunk_id,
+                    paper_id=chunk.paper_id,
+                    text=chunk.text,
+                    page_start=chunk.page_start,
+                    page_end=chunk.page_end,
+                    section=chunk.section,
+                    score=float(scores[index]),
+                    dense_rank=rank,
+                    retrieval_method="dense",
+                )
+            )
+            if len(hits) >= k:
+                break
+        return hits
+
+    def _load_exact_hash_vectors(self) -> tuple[list[str], np.ndarray]:
+        if self._exact_hash_cache is not None:
+            return self._exact_hash_cache
+        payload = self._collection.get(include=["embeddings"])
+        raw_ids = [str(value) for value in payload.get("ids") or []]
+        raw_embeddings = payload.get("embeddings")
+        if raw_embeddings is None or len(raw_ids) != len(raw_embeddings):
+            raise ValueError("dense hash index embeddings are missing or misaligned")
+        pairs = sorted(
+            zip(raw_ids, raw_embeddings, strict=True),
+            key=lambda pair: pair[0],
+        )
+        ids = [pair[0] for pair in pairs]
+        matrix = np.asarray([pair[1] for pair in pairs], dtype=np.float32)
+        if matrix.ndim != 2 or matrix.shape[1] != self.embedder.dimension:
+            raise ValueError("dense hash index embedding dimension mismatch")
+        self._exact_hash_cache = (ids, matrix)
+        return self._exact_hash_cache

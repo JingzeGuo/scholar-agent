@@ -1,7 +1,7 @@
 # Interview guide
 
 Concise answers for a junior Agent/RAG engineering interview. Numbers below are
-from the **offline hash-embedding** clean run `run_7ef8e4f006d7449d` unless noted.
+from the **offline hash-embedding** clean run `run_5bb1f439f19842cb` unless noted.
 They are **not** production BGE claims. Full table:
 [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md).
 
@@ -30,8 +30,9 @@ loops terminate measurably.
 **Strongest measured result (this config).** Hybrid retrieval lifts paper
 Recall@8 from **0.13** (dense) to **0.61**; adding graph reaches **0.67**.
 
-**Main limitation.** On this offline deterministic run the full agent fails all
-**5/5** unanswerable refusals, and graph multiplies latency (~10 ms → ~291 ms).
+**Main limitation.** Graph multiplies latency (~12 ms → ~301 ms). Corrective
+loops trigger safely but show **0.0** gold-recall improvement offline. The 50-Q
+labels are AI-assisted reviewed, not human-signed.
 
 ---
 
@@ -146,11 +147,11 @@ token support. Unsupported claims are removed or flagged; invented IDs fail.
 Largest jump: **dense → hybrid** on aggregate paper recall (**0.13 → 0.61**),
 especially factual/keyword (**0.10/0.20 → 0.90/0.90**). Graph adds a further lift
 on comparison (**0.57 → 0.67** paper R@8). Full agent citation precision is best
-(**0.274**) but not best recall.
+(**0.288**) but not best recall.
 
 ### 15. Which module failed to help or caused regressions?
 
-- **Unanswerable handling** in the full agent: **0/5** refusals offline.
+- **Corrective improvement**: triggers with precision 1.0 but **0.0** gold-recall gain offline.
 - **Graph** can reduce paper recall on some comparison items vs pure hybrid while
   increasing latency.
 - **Lexical rerank** vs plain hybrid_rag is nearly tied under hash embeddings

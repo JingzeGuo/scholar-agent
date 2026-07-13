@@ -145,18 +145,35 @@ improving the interview narrative for text-native arXiv PDFs.
 
 **Decision:** Chunk sizes are measured with `tiktoken` (`cl100k_base`), not
 character counts. Defaults: target 600 tokens, overlap 80, min 80. Prefer
-section boundaries; split long sections with overlapping token windows.
+section boundaries; split long sections with overlapping token windows. Canonical
+ingestion resolves the configured tokenizer before reading any PDF and fails fast
+when it is unavailable. `--allow-tokenizer-fallback` exists only for explicitly
+non-canonical diagnostics, and the report records the actual backend.
 
 **Rationale:** Plan §8.2 explicitly forbids marketing character splits as token
 splits.
 
-### ADR-015: Idempotent ingest keyed by PDF content hash
+### ADR-015: Idempotent ingest keyed by content and configuration
 
-**Decision:** Skip re-processing when `Paper.content_hash` matches the on-disk
-PDF hash and chunks already exist for that `paper_id`. `--force` rebuilds.
-Rebuilt chunks keep stable IDs when text is unchanged.
+**Decision:** Skip re-processing only when `Paper.content_hash` matches the
+on-disk PDF hash, chunks exist for that `paper_id`, and the persisted ingestion
+configuration fingerprint matches tokenizer/chunking/parser settings. `--force`
+rebuilds. Rebuilt chunks keep stable IDs when text and physical page range are
+unchanged.
 
 **Rationale:** Plan acceptance requires idempotent duplicate ingestion.
+
+### ADR-015A: Physical page provenance is assigned before concatenation
+
+**Decision:** Header/footer cleanup is based on normalized prevalence across
+pages. Sections retain per-text-span physical-page mappings, and artificial
+separators have no page owner. A chunk receives the minimal page interval touched
+by its real text tokens; separator overlap cannot move a chunk onto an adjacent
+page. `scripts/audit_page_provenance.py` independently checks the persisted
+chunks against the PDFs.
+
+**Rationale:** Page citations are only meaningful when chunk ranges describe the
+source PDF, not section concatenation artifacts.
 
 ---
 
@@ -189,7 +206,7 @@ citations without requiring an LLM. Optional `--llm` uses DeepSeek when configur
 **Rationale:** Acceptance requires page references in baseline answers; offline
 reproducibility must not depend on live APIs.
 
-### ADR-019: Project-local production model cache
+### ADR-019A: Project-local production model cache
 
 **Decision:** BGE and CrossEncoder use a shared cache under the repository's ignored
 `.cache/huggingface/hub` directory by default. `SCHOLAR_MODEL_CACHE` and `HF_HOME` can override
@@ -204,7 +221,7 @@ Git. Offline CI continues to use the lightweight hash/lexical backends.
 
 ## Phase 4
 
-### ADR-019: Offline heuristic extraction first; LLM optional later
+### ADR-019B: Offline heuristic extraction first; LLM optional later
 
 **Decision:** Default graph extraction is schema-constrained and heuristic
 (seed aliases + cue patterns + co-occurrence), fully offline. Relations are
@@ -234,6 +251,20 @@ query-entity path coverage, and a hop penalty. Longest-span entity linking avoid
 matching `RAG` inside `Self-RAG`; low-relevance tails are filtered.
 
 **Rationale:** Plan §8.7 and §9.4.
+
+### ADR-021A: Graph relations carry minimal physical-page ranges
+
+**Decision:** After chunk-level grounding, graph construction reloads cleaned
+physical PDF pages and locates each complete evidence span in the shortest
+contiguous page window. Relations persist `page_number` and `page_end`; spans
+that cannot be localized are discarded. `graph_meta.json` binds graph schema,
+extraction schema, build options, and canonical corpus fingerprint. Runtime
+retrieval disables a missing, partial, or stale graph instead of silently loading
+it. `scripts/audit_graph_provenance.py` verifies every stored range independently.
+
+**Rationale:** A chunk may cross a page boundary, while a relation's supporting
+sentence may occupy only one page. Relation provenance therefore needs its own
+physical localization and rebuild identity.
 
 ---
 
@@ -348,9 +379,11 @@ chunk, and page is checked against the current canonical store.
 **Decision:** Default evaluation computes deterministic retrieval (Recall@K, MRR,
 nDCG), citation (precision/recall/validity/page traceability), and answer
 (token/claim overlap, refusal accuracy, faithfulness proxy) metrics without paid
-APIs. RAGAS is an optional extra (`scholar-agent[eval]` + `--ragas`) that degrades
-gracefully when unavailable. Reports distinguish requested, available, and
-actually-scored RAGAS rows; unavailable values remain null.
+APIs. RAGAS is an optional extra (`scholar-agent[eval]` + `--ragas`) that uses
+explicit project provider/model/embedder adapters. Reports distinguish requested,
+available, configured, attempted, cached, and actually-scored rows; unavailable
+or non-finite values remain null. Its versioned cache stores only allowlisted
+validated numeric scores under hashed inputs—never prompts or provider payloads.
 
 **Rationale:** Core tests and CI must stay free of live provider calls.
 
@@ -365,6 +398,13 @@ record the actual embedder/reranker, frozen split, selected question IDs, Git
 commit/dirty state, and config/code fingerprints. Multi-tool baselines use
 deterministic round-robin fusion so later graph results cannot be starved by the
 first full top-k list.
+
+When `--llm` is enabled, every evidence-bearing system uses the same versioned
+`evaluation-grounded-answer-v1` prompt and configured fast model after retrieval.
+Offline runs are explicitly labeled `offline_heterogeneous`; live rows record
+whether generation ran, requested/actual model, prompt ID, and provider token
+usage. Run configs also record canonical corpus, dense, sparse, and graph
+fingerprints plus graph load/schema state.
 
 **Rationale:** Plan §11.2 systems compared + operational metrics in §11.3.
 
@@ -405,6 +445,11 @@ IDs and source cards.
 trace required by Phase 9; committed replay fixtures must meet the same
 provenance standard as live answers.
 
+Replay loading revalidates its corpus fingerprint and canonical source mappings
+when the local processed store exists. The committed README GIF is generated
+from these replay records by `scripts/build_demo_gif.py` and visibly labels
+itself as an offline replay; it is not presented as a live browser recording.
+
 ---
 
 
@@ -413,9 +458,10 @@ provenance standard as live answers.
 ### ADR-036: Disk cache only for pure offline computations
 
 **Decision:** Introduce `scholar_agent.storage.cache.DiskCache` for deterministic
-JSON values (initially graph chunk extraction). Keys include namespace, schema
-version, and content hashes. Atomic writes; corrupt entries become misses.
-Mutable workflow state and live LLM outputs are never cached.
+JSON values (graph chunk extraction and validated numeric RAGAS metrics). Keys
+include namespace, schema version, content/model identity, and hashes. Atomic
+writes; corrupt entries become misses. Mutable workflow state, prompts, raw live
+LLM outputs, provider reasoning, and provider payloads are never cached.
 
 **Context:** Phase 10 requires caching with tested invalidation. Graph extraction
 over thousands of chunks is pure and expensive enough to benefit.

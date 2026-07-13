@@ -1,10 +1,18 @@
 # Demo script (interview + offline backup)
 
-This document is a **reproducible script**, not a recorded video. No demo video
-file is claimed.
+This document is a reproducible walkthrough. The committed
+[`scholaragent_replay.gif`](assets/scholaragent_replay.gif) is generated from the
+provenance-checked offline replay; it is explicitly labelled as replay-derived,
+not a live browser recording.
 
 Related: [`docs/demo.md`](demo.md) (UI modes), committed runs under
 `data/demo/runs/`.
+
+Rebuild the GIF deterministically:
+
+```bash
+uv run python scripts/build_demo_gif.py
+```
 
 ---
 
@@ -36,8 +44,8 @@ In the UI, open **Replay** and select `selfrag_vs_crag`.
 | 3:20–3:50 | Graph path (if live/graph built) | Graph inspect: edge → evidence span → chunk → PDF page. In pure replay, point to source cards with chunk IDs. |
 | 3:50–4:30 | Verifier gap + corrective | Replay notes: first pass may miss one comparison side; corrective iteration pulls the missing paper. |
 | 4:30–5:20 | Final page-level citations | Answer claims with `[paper … p.N]`; Sources tab maps claim → chunk → PDF page. |
-| 5:20–6:00 | Ablation comparison | Mention offline results: hybrid_graph best paper recall (0.67); full_agent best cite precision (0.274); unanswerable refusals still weak. |
-| 6:00–6:30 | One limitation | Offline hash run: full agent **0/5** unanswerable refusals; graph adds latency. |
+| 5:20–6:00 | Ablation comparison | Mention offline results: hybrid_graph best paper recall (0.67); full_agent best cite precision (0.288); unanswerable refusals **5/5**. |
+| 6:00–6:30 | One limitation | Offline hash run: corrective improvement metric **0.0**; graph adds latency (~12→301 ms). |
 
 ### Stable sample questions
 
@@ -85,6 +93,7 @@ uv run scholar-agent graph inspect   # needs local processed graph
 
 ### Assets
 
+- [ ] Replay-derived GIF renders correctly in README
 - [ ] Architecture Mermaid from README
 - [ ] Aggregate metrics table from `docs/results/offline_hash_eval_summary.md`
 - [ ] One failure story from `docs/failure_analysis.md`

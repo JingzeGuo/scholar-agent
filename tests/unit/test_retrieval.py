@@ -203,6 +203,42 @@ def test_dense_index_stable_ids(tmp_path: Path) -> None:
     assert hits[0].retrieval_method == "dense"
 
 
+def test_hash_dense_search_is_exact_and_stably_tie_broken(tmp_path: Path) -> None:
+    chunks = [
+        _chunk("paper_b", "identical retrieval passage", 1),
+        _chunk("paper_a", "identical retrieval passage", 1),
+    ]
+    papers = [
+        Paper(
+            paper_id=paper_id,
+            title=paper_id,
+            pdf_path=f"{paper_id}.pdf",
+            content_hash=content_hash(paper_id),
+        )
+        for paper_id in ("paper_a", "paper_b")
+    ]
+    store = ChunkStore(chunks, papers)
+    index = DenseIndex.build(
+        store,
+        embedder=HashingEmbedder(dimension=32),
+        persist_dir=tmp_path / "exact_hash",
+        collection_name="exact_hash",
+    )
+
+    # The deterministic hash path must not delegate tied results to HNSW.
+    def unexpected_ann_query(**_kwargs: object) -> object:
+        raise AssertionError("hash search should use exact persisted vectors")
+
+    index._collection.query = unexpected_ann_query
+    first = index.search("identical retrieval passage", k=2)
+    second = index.search("identical retrieval passage", k=2)
+
+    expected = sorted(chunk.chunk_id for chunk in chunks)
+    assert [hit.chunk_id for hit in first] == expected
+    assert [hit.chunk_id for hit in second] == expected
+    assert first[0].score == pytest.approx(first[1].score)
+
+
 def test_index_builder_rebuilds_when_requested_embedder_changes(tmp_path: Path) -> None:
     store = _fixture_store()
     cfg = _index_config(tmp_path, store, model_name="fake-a")

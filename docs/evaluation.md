@@ -49,16 +49,54 @@ system reports unique useful gold evidence per tool call.
 **Citations:** precision/recall vs gold papers, validity rate, page traceability,
 unsupported claim rate.
 
-**Answers:** claim/token overlap with reference claims, refusal accuracy on
-unanswerable items, faithfulness proxy (answer tokens covered by contexts).
+**Answers:** claim/token overlap, deterministic claim-correctness and
+completeness proxies, refusal accuracy, faithfulness proxy, and contradiction
+handling when an annotation or Verifier event makes that metric applicable.
+Claim correctness averages the closest token-F1 reference match for each
+predicted claim unit; completeness averages reference-claim token recall. These
+are lexical proxies, not expert semantic judgments.
+
+**Agents/operations:** plan coverage and tool-selection accuracy are reported
+only for adaptive workflow rows. Corrective-trigger precision is computed only
+for observed triggers with answerable gold labels: a trigger is justified when
+the pre-correction gold-evidence recall is incomplete. Chunk recall is used when
+chunk labels exist, otherwise paper recall; the basis is stored per row.
+Improvement is final minus pre-correction recall on that same basis.
+Input/output tokens, iterations, latency, estimated
+cost, and an explicit error rate are also reported. Every nullable metric has a
+coverage rate; missing evidence is `null`, never converted to zero.
+Tool-selection labels accept dense/hybrid policies for factual questions,
+sparse/hybrid policies for keyword questions, hybrid policies for comparisons,
+and graph policies for relational questions; unanswerable rows have no tool
+gold label and remain `null`.
+
+Offline evaluation intentionally compares heterogeneous answer renderers
+(extractive baselines versus the structured deterministic Writer) and records
+`generation_regime=offline_heterogeneous`. With `--llm`, every system that
+retrieves evidence—including workflow systems—is passed through the same
+`evaluation-grounded-answer-v1` prompt and configured fast model after
+retrieval. Per-question rows record whether generation was actually called,
+the requested and provider-returned model, prompt ID, and provider/estimated
+token source. A requested live run fails configuration early when no API key is
+available instead of silently falling back.
 
 **Optional RAGAS:** `uv sync --extra eval` and `scholar-agent evaluate --ragas`
 (requires a configured DeepSeek/OpenAI-compatible API key and makes paid live
 LLM calls). The evaluator explicitly uses the project's configured provider and
 the retrieval embedder; it never falls back to RAGAS's implicit OpenAI defaults.
 Reports record whether RAGAS was requested, installed, configured, and actually
-used; unavailable scores remain `null`, never silently become zero. Default CI
-stays deterministic without paid calls.
+used. RAGAS 0.3.1 metrics run independently through explicit LangChain
+adapters, so one parser/provider failure cannot discard a valid peer metric.
+Unavailable or non-finite scores remain `null`, never silently become zero;
+per-question rows and run config contain secret-free status, failure code, and
+exception class fields. Default CI stays deterministic without paid calls.
+
+Paid RAGAS calls use a versioned disk cache under
+`data/evaluation/.cache/ragas_metrics/`. Cache records contain only validated
+numeric metrics; API keys, raw provider responses, questions, answers, and
+contexts are not persisted. Partial successes are cached under schema
+`ragas-metrics-v2`; a second identical run reports `ragas_cached=true` without
+another paid judge call.
 
 The eval extra pins `langchain-community` to the compatible 0.3 series and
 includes Pillow, which RAGAS 0.3.1 imports even for text-only metrics. A live
@@ -80,6 +118,10 @@ uv run scholar-agent evaluate --config configs/default.yaml \
   --eval-config configs/evaluation.yaml \
   --embedding-backend hash
 
+# Paid apples-to-apples answer generation (explicit opt-in)
+uv run scholar-agent evaluate --embedding-backend hash --llm \
+  --output-dir outputs/evaluation/live-shared-generation
+
 make evaluate-smoke
 ```
 
@@ -88,6 +130,7 @@ Outputs under `outputs/evaluation/` (gitignored recommended):
 - `results.json`, `aggregate_metrics.csv`, `per_question_metrics.csv`
 - `run_config.json` with dataset/config/code fingerprints
 - `report.md`, `failures.json`
+- `corrective_before_after.json` with structured initial/final evidence and recall
 - SVG charts: aggregate recall, per-category recall, latency, cost, citation precision
 
 An explicit `--embedding-backend hash` uses an isolated deterministic index at
@@ -96,26 +139,38 @@ collection. The report stores both requested and actual embedding/reranker names
 
 ## Measured offline audit
 
-The complete 50×7 clean audit run `run_7ef8e4f006d7449d` used hashing embeddings and
-lexical reranking. Paper Recall@8 ranged from 0.13 (`naive_dense`) to 0.67
-(`hybrid_graph`); the full agent reached 0.52 paper recall and 0.274 citation
-precision but failed all five unanswerable refusals. These are
-configuration-specific measurements, not production-model claims.
+The complete 50×7 clean audit run `run_5bb1f439f19842cb` (commit `c741887`,
+corpus fingerprint `79d20fac…`) used hashing embeddings, lexical reranking, and
+a loaded provenance-backed graph. Paper Recall@8 ranged from 0.13
+(`naive_dense`) to 0.67 (`hybrid_graph`); the full agent reached 0.54 paper
+recall, 0.288 citation precision, and **5/5** unanswerable refusals. Corrective
+loops triggered with precision 1.0 but `improvement_after_correction = 0.0`.
+These are configuration-specific measurements, not production-model claims.
 
-Committed numeric snapshot (for README / interviews without regenerating
+Committed numeric snapshots (for README / interviews without regenerating
 gitignored `outputs/`):
 
 - [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md)
+- [`docs/results/live_shared_llm_eval_summary.md`](results/live_shared_llm_eval_summary.md)
+  (optional DeepSeek shared-generation regime)
 
-Local full artifact (when present): `outputs/evaluation/phase8-final-clean/`.
+Local full artifacts (when present):
 
-See `docs/failure_analysis.md` for six manually reviewed cases.
+- `outputs/evaluation/phase8-final-clean-c741887/`
+- `outputs/evaluation/phase8-final-live-79d20/`
+
+Dataset review: AI-assisted independent review of all 50 questions
+(`data/evaluation/manual_review_manifest.json`); **not** a human-signed audit.
+
+See `docs/failure_analysis.md` for measured failure cases.
 
 ## Discipline
 
 - Do not tune systems against individual frozen questions in prompts.
 - Report **per-category** metrics, not only micro-averages.
-- Latency and estimated token cost are recorded for every question×system.
-- Per-category tables include latency, tool calls, token estimates, and cost.
+- Latency, input/output token counts, estimated cost, and error rate are
+  recorded for every question×system.
+- Per-category tables include retrieval, answer, citation, latency, tool,
+  token, and cost metrics.
 - Manual failure analysis: `notebooks/error_analysis.ipynb` and
   `docs/failure_analysis.md`.
