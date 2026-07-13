@@ -25,7 +25,8 @@ Properties:
 
 - Deterministic SHA-256 keys over namespace + schema version + canonical JSON payload.
 - Atomic writes (`tempfile` + `os.replace`).
-- Corrupt JSON → miss + delete file; stats track `corruptions`.
+- Full 64-character SHA-256 digests (not truncated application IDs).
+- Corrupt JSON or an embedded-key mismatch → miss + delete file; stats track `corruptions`.
 - Schema mismatch → miss + delete; stats track `invalidations`.
 - Observability: `hits` / `misses` / `stores` / `corruptions` / `invalidations`.
 - No secrets: only JSON-serializable pure data.
@@ -47,5 +48,6 @@ Properties:
 
 ## Tests
 
-`tests/unit/test_cache.py` covers hit, miss, schema invalidation, corruption,
+`tests/unit/test_cache.py` covers hit, miss, full-length deterministic keys,
+schema invalidation, corruption/key mismatch, non-finite payload rejection,
 `get_or_set`, and clear.

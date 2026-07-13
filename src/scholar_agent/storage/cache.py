@@ -84,7 +84,9 @@ class DiskCache:
                 "payload": payload,
             }
         )
-        return content_hash(canonical)
+        # Cache entries can be long-lived and numerous, so retain the complete
+        # SHA-256 digest instead of the shorter identifiers used elsewhere.
+        return content_hash(canonical, length=64)
 
     def path_for_key(self, key: str) -> Path:
         if len(key) < 4 or not all(c in "0123456789abcdef" for c in key.lower()):
@@ -131,6 +133,16 @@ class DiskCache:
         if raw.get("namespace") != self.namespace:
             self.stats.invalidations += 1
             self.stats.misses += 1
+            _safe_unlink(path)
+            return None
+        if raw.get("key") != key:
+            self.stats.corruptions += 1
+            self.stats.misses += 1
+            logger.warning(
+                "cache_key_mismatch namespace=%s key=%s",
+                self.namespace,
+                key[:12],
+            )
             _safe_unlink(path)
             return None
         if "value" not in raw:
@@ -201,7 +213,13 @@ class DiskCache:
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def _atomic_write_text(path: Path, text: str) -> None:

@@ -96,9 +96,9 @@ collection. The report stores both requested and actual embedding/reranker names
 
 ## Measured offline audit
 
-The complete 50×7 audit run `run_f23303cfda91408c` used hashing embeddings and
+The complete 50×7 clean audit run `run_7ef8e4f006d7449d` used hashing embeddings and
 lexical reranking. Paper Recall@8 ranged from 0.13 (`naive_dense`) to 0.67
-(`hybrid_graph`); the full agent reached 0.53 paper recall and 0.274 citation
+(`hybrid_graph`); the full agent reached 0.52 paper recall and 0.274 citation
 precision but failed all five unanswerable refusals. These are
 configuration-specific measurements, not production-model claims.
 
@@ -107,7 +107,7 @@ gitignored `outputs/`):
 
 - [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md)
 
-Local full artifact (when present): `outputs/evaluation/phase8-full-audit-v2/`.
+Local full artifact (when present): `outputs/evaluation/phase8-final-clean/`.
 
 See `docs/failure_analysis.md` for six manually reviewed cases.
 

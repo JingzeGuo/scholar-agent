@@ -1,12 +1,12 @@
 # Failure analysis
 
-Evidence source: complete offline run **`run_f23303cfda91408c`**
+Evidence source: complete offline clean run **`run_7ef8e4f006d7449d`**
 (50 frozen questions × 7 systems).
 
 | Field | Value |
 |---|---|
 | Dataset fingerprint | `9382ed8119ad4072c3ef45fd6cc5b64b20d0ea91c09271ace302e6105c175d8e` |
-| Local artifact | `outputs/evaluation/phase8-full-audit-v2/` (gitignored) |
+| Local artifact | `outputs/evaluation/phase8-final-clean/` (gitignored) |
 | Summary snapshot | [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md) |
 | Config | `hashing-embedder-v1`, lexical rerank, no live LLM/RAGAS, cost $0.00 |
 
@@ -22,7 +22,7 @@ this configuration only.
 | **Scenario** | Keyword question: “What does the RAGAs framework evaluate?” |
 | **Observable symptom** | `naive_dense` paper Recall@8 = **0.0**; `hybrid_rerank` = **1.0** |
 | **Affected component** | Dense retrieval / hashing embedder |
-| **Reproduction** | Offline eval row `q_k08` in `per_question_metrics.csv` of run `run_f23303cfda91408c` |
+| **Reproduction** | Offline eval row `q_k08` in `per_question_metrics.csv` of run `run_7ef8e4f006d7449d` |
 | **Root cause** | Hash embedding is weak for exact product/framework names; BM25 supplies the exact-token signal. |
 | **Fix** | Keep hybrid (dense+BM25 RRF) as the default keyword/hybrid route; do not present dense-only as production quality. |
 | **Verification after fix** | Hybrid systems recover paper recall on keyword slice to **0.90** aggregate. |
@@ -36,7 +36,7 @@ this configuration only.
 | Field | Detail |
 |---|---|
 | **Scenario** | Relational: hallucination surveys → automated RAG evaluation metrics (RAGAs). |
-| **Observable symptom** | `hybrid_rerank` paper R@8 = **0.0**; `hybrid_graph` = **0.5**. Aggregate hybrid latency **~10.6 ms** vs hybrid_graph **~309.1 ms**. |
+| **Observable symptom** | `hybrid_rerank` paper R@8 = **0.0**; `hybrid_graph` = **0.5**. Aggregate hybrid latency **~10.1 ms** vs hybrid_graph **~290.9 ms**. |
 | **Affected component** | Graph retrieval / path ranking |
 | **Reproduction** | `q_r09` in the same run; aggregate latencies in `aggregate_metrics.csv`. |
 | **Root cause** | Graph paths recover a related gold paper outside hybrid top-k, but traversal dominates CPU time under this index. |
@@ -54,7 +54,7 @@ this configuration only.
 | **Scenario** | Comparison: RETRO vs Atlas. |
 | **Observable symptom** | `hybrid_rerank` paper R@8 = **1.0**; round-robin `hybrid_graph` = **0.5**. |
 | **Affected component** | Multi-tool merge / graph slot allocation |
-| **Reproduction** | `q_c15` per-question metrics in run `run_f23303cfda91408c`. |
+| **Reproduction** | `q_c15` per-question metrics in run `run_7ef8e4f006d7449d`. |
 | **Root cause** | Reserving top-k slots for graph hits improves tool diversity but can evict a relevant hybrid hit. |
 | **Fix (partial)** | Documented as design risk; adaptive slot allocation deferred. Prefer selective graph routing. |
 | **Verification after fix** | Aggregate hybrid_graph paper R@8 still **0.67** (best), but per-question regressions remain. |
@@ -68,7 +68,7 @@ this configuration only.
 | Field | Detail |
 |---|---|
 | **Scenario** | Comparison: Toolformer vs ReAct. |
-| **Observable symptom** | `hybrid_rerank` paper R@8 = **0.5**; `full_agent` = **1.0**. Yet aggregate paper recall is **0.61** (hybrid_rerank) vs **0.53** (full_agent). |
+| **Observable symptom** | `hybrid_rerank` paper R@8 = **0.5**; `full_agent` = **1.0**. Yet aggregate paper recall is **0.61** (hybrid_rerank) vs **0.52** (full_agent). |
 | **Affected component** | Planner decomposition + evidence budgets |
 | **Reproduction** | `q_c05` plus system aggregates in the same run. |
 | **Root cause** | Decomposition can retrieve both comparison sides, while per-sub-question caps and ledger ordering omit gold chunks on simpler questions. |
@@ -113,7 +113,7 @@ this configuration only.
 
 ## Aggregate interpretation
 
-- Best paper Recall@8: **`hybrid_graph` 0.67** (latency **309.1 ms**).
+- Best paper Recall@8: **`hybrid_graph` 0.67** (latency **290.9 ms**).
 - Best citation precision among systems: **`full_agent` 0.274**.
 - Citation validity / page traceability: **1.0** (structural), not semantic correctness.
 - Cost: **$0.00** in this configuration (no paid model).

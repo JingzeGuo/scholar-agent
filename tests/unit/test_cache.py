@@ -25,7 +25,9 @@ def test_cache_hit_and_miss(tmp_path: Path) -> None:
 def test_cache_key_deterministic(tmp_path: Path) -> None:
     cache = DiskCache(root=tmp_path / "cache")
     payload = {"b": 2, "a": [1, 3]}
-    assert cache.make_key(payload) == cache.make_key({"a": [1, 3], "b": 2})
+    key = cache.make_key(payload)
+    assert key == cache.make_key({"a": [1, 3], "b": 2})
+    assert len(key) == 64
 
 
 def test_schema_version_invalidates(tmp_path: Path) -> None:
@@ -49,6 +51,26 @@ def test_corrupt_entry_treated_as_miss(tmp_path: Path) -> None:
     assert cache.get(key) is None
     assert cache.stats.corruptions == 1
     assert not path.exists()
+
+
+def test_embedded_key_mismatch_treated_as_corruption(tmp_path: Path) -> None:
+    cache = DiskCache(root=tmp_path / "cache", namespace="demo")
+    key = cache.make_key({"k": 1})
+    path = cache.set(key, {"safe": True})
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["key"] = "0" * 64
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    assert cache.get(key) is None
+    assert cache.stats.corruptions == 1
+    assert not path.exists()
+
+
+def test_non_finite_payload_is_rejected(tmp_path: Path) -> None:
+    cache = DiskCache(root=tmp_path / "cache")
+
+    with pytest.raises(ValueError, match="JSON compliant"):
+        cache.make_key({"score": float("nan")})
 
 
 def test_get_or_set_computes_once(tmp_path: Path) -> None:

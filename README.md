@@ -25,7 +25,7 @@ evidence—with ablations to measure what actually helps.
 | No stop condition | Agents thrash on tools | Corrective budgets, no-new-evidence stop |
 | Graph as oracle | Triples treated as facts | Provenance-backed edges only |
 
-**Measured (offline hash embeddings, frozen 50-Q split, run `run_f23303cfda91408c`):**
+**Measured (offline hash embeddings, frozen 50-Q split, clean run `run_7ef8e4f006d7449d`):**
 dense-only paper Recall@8 **0.13** vs hybrid_rerank **0.61**. Source:
 [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
 
@@ -132,15 +132,15 @@ Artifacts: `data/evaluation/{questions,reference_evidence,frozen_split}.jsonl|js
 ### Quantitative results (measured offline)
 
 **Configuration:** hashing embedder + lexical rerank · no live LLM · cost $0.00 ·
-run `run_f23303cfda91408c`. Full table:
+clean run `run_7ef8e4f006d7449d`. Full table:
 [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
 
 | system | paper R@8 | cite P | latency ms |
 |---|---:|---:|---:|
-| naive_dense | 0.13 | 0.032 | 4.9 |
-| hybrid_rerank | 0.61 | 0.169 | 10.6 |
-| hybrid_graph | **0.67** | 0.214 | 309.1 |
-| full_agent | 0.53 | **0.274** | 366.7 |
+| naive_dense | 0.13 | 0.033 | 4.6 |
+| hybrid_rerank | 0.61 | 0.168 | 10.1 |
+| hybrid_graph | **0.67** | 0.214 | 290.9 |
+| full_agent | 0.52 | **0.274** | 350.5 |
 
 **Per-category (paper R@8):** hybrid_rerank factual/keyword **0.90**; comparison
 **0.57**; relational **0.40**. Full agent unanswerable refusals: **0/5**.

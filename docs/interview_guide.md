@@ -1,7 +1,7 @@
 # Interview guide
 
 Concise answers for a junior Agent/RAG engineering interview. Numbers below are
-from the **offline hash-embedding** run `run_f23303cfda91408c` unless noted.
+from the **offline hash-embedding** clean run `run_7ef8e4f006d7449d` unless noted.
 They are **not** production BGE claims. Full table:
 [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md).
 
@@ -31,7 +31,7 @@ loops terminate measurably.
 Recall@8 from **0.13** (dense) to **0.61**; adding graph reaches **0.67**.
 
 **Main limitation.** On this offline deterministic run the full agent fails all
-**5/5** unanswerable refusals, and graph multiplies latency (~10 ms → ~309 ms).
+**5/5** unanswerable refusals, and graph multiplies latency (~10 ms → ~291 ms).
 
 ---
 
