@@ -97,8 +97,8 @@ def _split_long_section(
     min_tokens: int,
     encoding_name: str,
 ) -> list[Chunk]:
-    """Split a long section by tokens; approximate page range from section span."""
-    token_ids = encode_tokens(section.text, encoding_name=encoding_name)
+    """Split a long section by tokens with exact page provenance when available."""
+    token_ids, token_pages = _section_token_stream(section, encoding_name=encoding_name)
     if not token_ids:
         return []
 
@@ -116,8 +116,22 @@ def _split_long_section(
             pass
         text = decode_tokens(window, encoding_name=encoding_name).strip()
         if text:
-            # Page range: proportional estimate within section pages
-            page_start, page_end = _estimate_pages(section, start=start, end=end, total_tokens=n)
+            if token_pages is None:
+                # Backwards-compatible SectionBlock values do not contain a
+                # page→text map.  The complete section range is conservative
+                # and truthful; a proportional guess is not.
+                page_start, page_end = section.page_start, section.page_end
+            else:
+                # Inter-page separators carry formatting but no source claim.
+                # Ignoring their sentinel prevents a window that ends exactly
+                # on ``\n\n`` from spuriously including the following page.
+                window_pages = [page for page in token_pages[start:end] if page is not None]
+                if not window_pages:
+                    # A stripped, non-empty decoded window should always own
+                    # at least one content token.  Keep this guard explicit so
+                    # future tokenizer changes cannot fabricate provenance.
+                    raise ValueError("non-empty chunk window has no source page")
+                page_start, page_end = min(window_pages), max(window_pages)
             chunks.append(
                 _make_chunk(
                     paper_id=paper_id,
@@ -148,20 +162,28 @@ def _split_long_section(
     return chunks
 
 
-def _estimate_pages(
+def _section_token_stream(
     section: SectionBlock,
     *,
-    start: int,
-    end: int,
-    total_tokens: int,
-) -> tuple[int, int]:
-    if section.page_start == section.page_end or total_tokens <= 0:
-        return section.page_start, section.page_end
-    span = section.page_end - section.page_start
-    frac_a = start / total_tokens
-    frac_b = max(start + 1, end) / total_tokens
-    page_a = section.page_start + int(span * frac_a)
-    page_b = section.page_start + int(span * frac_b)
-    page_a = min(max(page_a, section.page_start), section.page_end)
-    page_b = min(max(page_b, page_a), section.page_end)
-    return page_a, page_b
+    encoding_name: str,
+) -> tuple[list[int], list[int | None] | None]:
+    """Return token IDs and their originating PDF page numbers.
+
+    Separators use a ``None`` sentinel because they carry no source claim.
+    Attribution to either neighboring page would make a token window ending or
+    beginning exactly on the separator report a page with no chunk content.
+    """
+    if not section.page_texts:
+        return encode_tokens(section.text, encoding_name=encoding_name), None
+
+    token_ids: list[int] = []
+    token_pages: list[int | None] = []
+    for item in section.page_texts:
+        if token_ids:
+            separator = encode_tokens("\n\n", encoding_name=encoding_name)
+            token_ids.extend(separator)
+            token_pages.extend([None] * len(separator))
+        page_tokens = encode_tokens(item.text, encoding_name=encoding_name)
+        token_ids.extend(page_tokens)
+        token_pages.extend([item.page_number] * len(page_tokens))
+    return token_ids, token_pages

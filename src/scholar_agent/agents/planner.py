@@ -19,6 +19,44 @@ logger = get_logger(__name__)
 
 _VS_SPLIT = re.compile(r"\s+(?:vs\.?|versus)\s+", re.I)
 _AND_SPLIT = re.compile(r"\s+and\s+", re.I)
+_ANCHOR_TOKEN = re.compile(r"\b[A-Za-z0-9]+(?:[-_=][A-Za-z0-9]+)*\b")
+_QUESTION_WORDS = {
+    "According",
+    "Compare",
+    "How",
+    "What",
+    "When",
+    "Where",
+    "Which",
+    "Who",
+    "Why",
+}
+
+
+def extract_answer_anchors(query: str) -> list[str]:
+    """Extract exact named/version anchors that evidence must preserve.
+
+    The rule is syntax based rather than corpus- or benchmark-specific: years,
+    acronyms, camel-case names, and mixed-case/versioned hyphenated names are
+    retained.  This prevents a passage sharing only generic words such as
+    ``model`` or ``retrieval`` from making an unrelated question answerable.
+    """
+    anchors: list[str] = []
+    for token in _ANCHOR_TOKEN.findall(query):
+        if token in _QUESTION_WORDS:
+            continue
+        letters = "".join(char for char in token if char.isalpha())
+        is_year = bool(re.fullmatch(r"(?:19|20)\d{2}", token))
+        is_acronym = len(letters) >= 2 and letters.isupper()
+        is_camel = any(char.isupper() for char in token[1:]) and any(
+            char.islower() for char in token
+        )
+        is_versioned_name = ("-" in token or "=" in token or "_" in token) and (
+            any(char.isupper() for char in token) or any(char.isdigit() for char in token)
+        )
+        if (is_year or is_acronym or is_camel or is_versioned_name) and token not in anchors:
+            anchors.append(token)
+    return anchors
 
 
 @dataclass
@@ -66,6 +104,18 @@ class Planner:
             ]
             answer_type = "factual" if qtype == QueryType.KEYWORD else "semantic"
             diversity = 1
+
+        anchors = extract_answer_anchors(query)
+        if anchors:
+            anchored: list[SubQuestion] = []
+            for sub_question in sub_qs:
+                requirements = list(sub_question.required_evidence)
+                for anchor in extract_answer_anchors(sub_question.question) or anchors:
+                    requirement = f"anchor:{anchor}"
+                    if requirement not in requirements:
+                        requirements.append(requirement)
+                anchored.append(sub_question.model_copy(update={"required_evidence": requirements}))
+            sub_qs = anchored
 
         plan = QueryPlan(
             original_query=query,

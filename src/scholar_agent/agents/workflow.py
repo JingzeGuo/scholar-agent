@@ -33,7 +33,7 @@ from scholar_agent.agents.writer import Writer
 from scholar_agent.ids import new_run_id
 from scholar_agent.logging import get_logger
 from scholar_agent.models.answer import DraftAnswer, FinalAnswer
-from scholar_agent.models.base import EventType, ExecutionEvent, QueryType
+from scholar_agent.models.base import BudgetStatus, EventType, ExecutionEvent, QueryType, TokenUsage
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
 from scholar_agent.models.workflow import (
@@ -49,6 +49,7 @@ logger = get_logger(__name__)
 class WorkflowConfig(BaseModel):
     max_corrective_iterations: int = Field(default=3, ge=0)
     max_total_tool_calls: int = Field(default=20, ge=1)
+    max_total_tokens: int = Field(default=100_000, ge=1)
     max_latency_ms: int = Field(default=180_000, ge=1)
     research: ResearchAgentConfig = Field(default_factory=ResearchAgentConfig)
     parallel_research: bool = True
@@ -65,6 +66,7 @@ class WorkflowResult(BaseModel):
     iteration: int
     tool_call_count: int
     latency_ms: int
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
     terminated_reason: str
     events: list[ExecutionEvent] = Field(default_factory=list)
     unanswerable: bool = False
@@ -84,11 +86,14 @@ class WorkflowState(TypedDict, total=False):
     corrective_actions: list[dict[str, Any]]
     iteration: int
     tool_call_count: int
+    estimated_tokens: int
+    token_budget_blocked: bool
     prev_evidence_ids: list[str]
     terminated_reason: str | None
     unanswerable: bool
     max_corrective_iterations: int
     max_total_tool_calls: int
+    max_total_tokens: int
     max_latency_ms: int
     started_ms: float
     draft_answer: dict[str, Any] | None
@@ -135,11 +140,14 @@ class ResearchWorkflow:
             "corrective_actions": [],
             "iteration": 0,
             "tool_call_count": 0,
+            "estimated_tokens": 0,
+            "token_budget_blocked": False,
             "prev_evidence_ids": [],
             "terminated_reason": None,
             "unanswerable": False,
             "max_corrective_iterations": self.config.max_corrective_iterations,
             "max_total_tool_calls": self.config.max_total_tool_calls,
+            "max_total_tokens": self.config.max_total_tokens,
             "max_latency_ms": self.config.max_latency_ms,
             "started_ms": perf_counter() * 1000,
             "draft_answer": None,
@@ -209,7 +217,7 @@ class ResearchWorkflow:
         # First pass: research all sub-questions. Corrective passes: only missing.
         if iteration == 0 or not corrective:
             targets = list(plan.sub_questions)
-            new_ledger, tool_calls, events = self._research_targets(
+            new_ledger, tool_calls, estimated_tokens, events = self._research_targets(
                 targets=targets,
                 existing=existing,
                 original_query=plan.original_query,
@@ -217,6 +225,10 @@ class ResearchWorkflow:
                 remaining_global=max(
                     0,
                     self.config.max_total_tool_calls - int(state.get("tool_call_count") or 0),
+                ),
+                remaining_tokens=max(
+                    0,
+                    self.config.max_total_tokens - int(state.get("estimated_tokens") or 0),
                 ),
                 deadline_ms=(
                     float(state.get("started_ms") or perf_counter() * 1000)
@@ -226,6 +238,7 @@ class ResearchWorkflow:
         else:
             # Targeted corrective retrieval from verifier queries
             tool_calls = 0
+            estimated_tokens = 0
             events = []
             new_ledger = existing
             for action in corrective:
@@ -237,6 +250,11 @@ class ResearchWorkflow:
                     int(state.get("tool_call_count") or 0) + tool_calls
                 )
                 if remaining_budget <= 0:
+                    break
+                remaining_token_budget = self.config.max_total_tokens - (
+                    int(state.get("estimated_tokens") or 0) + estimated_tokens
+                )
+                if remaining_token_budget <= 0:
                     break
                 sq = SubQuestion(
                     id=action.target_sub_question_id,
@@ -251,7 +269,11 @@ class ResearchWorkflow:
                         "max_tool_calls_per_pass": min(
                             self.config.research.max_tool_calls_per_pass,
                             remaining_budget,
-                        )
+                        ),
+                        "max_total_tokens_per_pass": min(
+                            self.config.research.max_total_tokens_per_pass,
+                            remaining_token_budget,
+                        ),
                     }
                 )
                 agent = ResearchAgent(self.toolkit, config=pass_cfg)
@@ -262,6 +284,7 @@ class ResearchWorkflow:
                     missing_aspect=action.query,
                 )
                 tool_calls += result.tool_call_count
+                estimated_tokens += result.token_usage.total_tokens
                 new_ledger = new_ledger.merge(result.evidence)
                 events.extend(e.model_dump(mode="json") for e in result.events)
 
@@ -274,20 +297,33 @@ class ResearchWorkflow:
             component="workflow",
             summary=(
                 f"research iteration={iteration} tools+={tool_calls} "
-                f"unique_new_evidence={unique_new}"
+                f"tokens+={estimated_tokens} unique_new_evidence={unique_new}"
             ),
             payload={
                 "iteration": iteration,
                 "tool_calls_delta": tool_calls,
+                "estimated_tokens_delta": estimated_tokens,
                 "unique_new_evidence": unique_new,
                 "corrective": bool(corrective) and iteration > 0,
+                # Ordered post-merge snapshot. Evaluation compares this first-pass
+                # top-k against the final top-k; aggregating every raw tool hit
+                # would give the initial side an unfairly larger candidate pool.
+                "evidence_chunk_ids": [item.chunk_id for item in new_ledger.items],
+                "evidence_paper_ids": [item.paper_id for item in new_ledger.items],
             },
         )
         all_new_events = events + [iter_event.model_dump(mode="json")]
+        token_budget_blocked = any(
+            event.get("event_type") == EventType.BUDGET_HIT.value
+            and "token" in str(event.get("summary") or "").lower()
+            for event in events
+        )
 
         return {
             "evidence": [e.model_dump(mode="json") for e in new_ledger.items],
             "tool_call_count": int(state.get("tool_call_count") or 0) + tool_calls,
+            "estimated_tokens": int(state.get("estimated_tokens") or 0) + estimated_tokens,
+            "token_budget_blocked": bool(state.get("token_budget_blocked")) or token_budget_blocked,
             "events": _append_event_dicts(state, all_new_events),
             "prev_evidence_ids": sorted(new_ids),
             "iteration": iteration,
@@ -301,16 +337,32 @@ class ResearchWorkflow:
         original_query: str,
         run_id: str,
         remaining_global: int,
+        remaining_tokens: int,
         deadline_ms: float,
-    ) -> tuple[EvidenceLedger, int, list[dict[str, Any]]]:
-        """Run initial targets without ever oversubscribing the global tool cap."""
-        if not targets or remaining_global <= 0 or perf_counter() * 1000 >= deadline_ms:
-            return existing, 0, []
+    ) -> tuple[EvidenceLedger, int, int, list[dict[str, Any]]]:
+        """Run targets without oversubscribing global tool or token caps."""
+        if (
+            not targets
+            or remaining_global <= 0
+            or remaining_tokens <= 0
+            or perf_counter() * 1000 >= deadline_ms
+        ):
+            return existing, 0, 0, []
 
         per_pass = self.config.research.max_tool_calls_per_pass
         worst_case_calls = len(targets) * per_pass
         if self.config.parallel_research and worst_case_calls <= remaining_global:
-            result = self.researcher.research_many(
+            per_target_tokens = min(
+                self.config.research.max_total_tokens_per_pass,
+                max(1, remaining_tokens // len(targets)),
+            )
+            parallel_agent = ResearchAgent(
+                self.toolkit,
+                config=self.config.research.model_copy(
+                    update={"max_total_tokens_per_pass": per_target_tokens}
+                ),
+            )
+            result = parallel_agent.research_many(
                 targets,
                 original_query=original_query,
                 parallel=True,
@@ -319,29 +371,39 @@ class ResearchWorkflow:
             return (
                 existing.merge(result.evidence_ledger.items),
                 result.tool_call_count,
+                result.token_usage.total_tokens,
                 [event.model_dump(mode="json") for event in result.events],
             )
 
         ledger = existing
         total_calls = 0
+        total_tokens = 0
         events: list[dict[str, Any]] = []
         for target in targets:
             if perf_counter() * 1000 >= deadline_ms:
                 break
             remaining = remaining_global - total_calls
-            if remaining <= 0:
+            token_remaining = remaining_tokens - total_tokens
+            if remaining <= 0 or token_remaining <= 0:
                 break
             pass_config = self.config.research.model_copy(
-                update={"max_tool_calls_per_pass": min(per_pass, remaining)}
+                update={
+                    "max_tool_calls_per_pass": min(per_pass, remaining),
+                    "max_total_tokens_per_pass": min(
+                        self.config.research.max_total_tokens_per_pass,
+                        token_remaining,
+                    ),
+                }
             )
             pass_result = ResearchAgent(self.toolkit, config=pass_config).research_sub_question(
                 target,
                 run_id=run_id,
             )
             total_calls += pass_result.tool_call_count
+            total_tokens += pass_result.token_usage.total_tokens
             ledger = ledger.merge(pass_result.evidence)
             events.extend(event.model_dump(mode="json") for event in pass_result.events)
-        return ledger, total_calls, events
+        return ledger, total_calls, total_tokens, events
 
     def _node_verify(self, state: WorkflowState) -> dict[str, Any]:
         plan = QueryPlan.model_validate(state["plan"])
@@ -381,10 +443,13 @@ class ResearchWorkflow:
         # Determine termination reason if we should stop
         iteration = int(state.get("iteration") or 0)
         tool_calls = int(state.get("tool_call_count") or 0)
+        estimated_tokens = int(state.get("estimated_tokens") or 0)
         max_iter_value = state.get("max_corrective_iterations")
         max_iter = int(max_iter_value if max_iter_value is not None else 3)
         max_tools_value = state.get("max_total_tool_calls")
         max_tools = int(max_tools_value if max_tools_value is not None else 20)
+        max_tokens_value = state.get("max_total_tokens")
+        max_tokens = int(max_tokens_value if max_tokens_value is not None else 100_000)
         max_latency_value = state.get("max_latency_ms")
         max_latency = int(max_latency_value if max_latency_value is not None else 180_000)
         elapsed_ms = self._elapsed_ms(state)
@@ -398,6 +463,8 @@ class ResearchWorkflow:
             terminated = "latency_budget_exhausted"
         elif tool_calls >= max_tools:
             terminated = "tool_budget_exhausted"
+        elif estimated_tokens >= max_tokens or bool(state.get("token_budget_blocked")):
+            terminated = "token_budget_exhausted"
         elif iteration > 0 and unique_new == 0:
             if not verification.covered_sub_questions:
                 terminated = "corpus_cannot_answer"
@@ -439,6 +506,7 @@ class ResearchWorkflow:
             "tool_budget_exhausted",
             "iteration_budget_exhausted",
             "latency_budget_exhausted",
+            "token_budget_exhausted",
         }:
             new_events.append(
                 ExecutionEvent(
@@ -449,6 +517,7 @@ class ResearchWorkflow:
                     payload={
                         "iteration": iteration,
                         "tool_call_count": tool_calls,
+                        "estimated_tokens": estimated_tokens,
                         "elapsed_ms": elapsed_ms,
                     },
                 )
@@ -572,6 +641,7 @@ class ResearchWorkflow:
                 "terminated_reason": reason,
                 "iteration": state.get("iteration"),
                 "tool_call_count": state.get("tool_call_count"),
+                "estimated_tokens": state.get("estimated_tokens"),
                 "latency_ms": latency,
                 "unanswerable": state.get("unanswerable"),
                 "citation_valid": citation_valid,
@@ -600,6 +670,10 @@ class ResearchWorkflow:
         if not state.get("corrective_actions"):
             return "write"
         if int(state.get("tool_call_count") or 0) >= int(state.get("max_total_tool_calls") or 20):
+            return "write"
+        if bool(state.get("token_budget_blocked")) or int(
+            state.get("estimated_tokens") or 0
+        ) >= int(state.get("max_total_tokens") or 100_000):
             return "write"
         return "research"
 
@@ -638,6 +712,28 @@ class ResearchWorkflow:
         final: FinalAnswer | None = None
         if state.get("final_answer"):
             final = FinalAnswer.model_validate(state["final_answer"])
+        token_usage = TokenUsage(
+            prompt_tokens=int(state.get("estimated_tokens") or 0),
+            total_tokens=int(state.get("estimated_tokens") or 0),
+        )
+        corrective_limit = state.get("max_corrective_iterations")
+        budget_status = BudgetStatus(
+            tool_call_count=int(state.get("tool_call_count") or 0),
+            max_tool_calls=int(
+                state.get("max_total_tool_calls") or self.config.max_total_tool_calls
+            ),
+            iteration=int(state.get("iteration") or 0),
+            max_iterations=int(
+                corrective_limit
+                if corrective_limit is not None
+                else self.config.max_corrective_iterations
+            ),
+            token_usage=token_usage,
+            max_total_tokens=int(state.get("max_total_tokens") or self.config.max_total_tokens),
+            latency_ms=latency,
+            max_latency_ms=int(state.get("max_latency_ms") or self.config.max_latency_ms),
+            terminated_reason=str(state.get("terminated_reason") or "completed"),
+        )
         snapshot = ResearchRunState(
             run_id=run_id,
             query=state["query"],
@@ -650,7 +746,9 @@ class ResearchWorkflow:
             corrective_queries=list(state.get("corrective_queries") or []),
             iteration=int(state.get("iteration") or 0),
             tool_call_count=int(state.get("tool_call_count") or 0),
+            token_usage=token_usage,
             latency_ms=latency,
+            budgets=budget_status,
             execution_events=events,
             draft_answer=draft,
             final_answer=final,
@@ -666,6 +764,7 @@ class ResearchWorkflow:
             iteration=int(state.get("iteration") or 0),
             tool_call_count=int(state.get("tool_call_count") or 0),
             latency_ms=latency,
+            token_usage=token_usage,
             terminated_reason=str(state.get("terminated_reason") or "completed"),
             events=events,
             unanswerable=bool(state.get("unanswerable")),

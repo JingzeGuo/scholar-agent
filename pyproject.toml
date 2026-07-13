@@ -33,6 +33,7 @@ dependencies = [
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
+    "pillow>=10",
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML>=6.0",
@@ -64,6 +65,7 @@ packages = ["src/scholar_agent"]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
+    "pillow>=10",
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML>=6.0",
@@ -78,7 +80,7 @@ markers = [
     "live: tests that call paid/live providers (opt-in)",
     "slow: slower integration tests",
 ]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers -m 'not live'"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

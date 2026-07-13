@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from scholar_agent.agents.planner import Planner
+from scholar_agent.agents.planner import Planner, extract_answer_anchors
 from scholar_agent.models.base import QueryType
 
 
@@ -32,3 +32,14 @@ def test_plan_is_structured_not_string() -> None:
     plan = Planner().plan("Which datasets does DPR evaluate on?")
     assert hasattr(plan, "sub_questions")
     assert all(hasattr(sq, "required_evidence") for sq in plan.sub_questions)
+
+
+def test_named_versions_and_years_become_exact_answer_anchors() -> None:
+    query = "Which GPU powered AcmeAI's private 2027 training run for Model-X2?"
+    assert extract_answer_anchors(query) == ["GPU", "AcmeAI", "2027", "Model-X2"]
+    plan = Planner().plan(query)
+    requirements = plan.sub_questions[0].required_evidence
+    assert "anchor:GPU" in requirements
+    assert "anchor:AcmeAI" in requirements
+    assert "anchor:2027" in requirements
+    assert "anchor:Model-X2" in requirements

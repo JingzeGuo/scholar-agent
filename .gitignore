@@ -54,6 +54,8 @@ data/evaluation/**
 !data/evaluation/questions.jsonl
 !data/evaluation/reference_evidence.jsonl
 !data/evaluation/frozen_split.json
+!data/evaluation/manual_review.jsonl
+!data/evaluation/manual_review_manifest.json
 # Offline interview demo runs (Phase 9)
 !data/demo/
 !data/demo/**

@@ -6,7 +6,7 @@ import re
 
 from scholar_agent.ingestion.tokens import count_tokens
 from scholar_agent.models.corpus import PaperPage
-from scholar_agent.models.ingestion import SectionBlock
+from scholar_agent.models.ingestion import SectionBlock, SectionPageText
 
 # Numbered academic headings: "1 Introduction", "1. Introduction", "1.2 Method"
 _NUMBERED = re.compile(
@@ -59,29 +59,41 @@ def is_section_heading(line: str) -> bool:
     return bool(_NUMBERED.match(text) or _NUMBERED_LOOSE.match(text))
 
 
-def pages_to_sections(pages: list[PaperPage]) -> list[SectionBlock]:
+def pages_to_sections(
+    pages: list[PaperPage],
+    *,
+    encoding_name: str = "cl100k_base",
+) -> list[SectionBlock]:
     """Split cleaned pages into section blocks with page provenance."""
     blocks: list[SectionBlock] = []
     current_title: str | None = None
-    current_lines: list[str] = []
-    page_start: int | None = None
-    page_end: int | None = None
+    page_lines: list[tuple[int, list[str]]] = []
+
+    def append_line(page_number: int, line: str) -> None:
+        if not page_lines or page_lines[-1][0] != page_number:
+            page_lines.append((page_number, []))
+        lines = page_lines[-1][1]
+        if line or (lines and lines[-1] != ""):
+            lines.append(line)
 
     def flush() -> None:
-        nonlocal current_lines, page_start, page_end, current_title
-        text = "\n".join(current_lines).strip()
-        if text and page_start is not None and page_end is not None:
+        nonlocal page_lines, current_title
+        page_texts = [
+            SectionPageText(page_number=page_number, text="\n".join(lines).strip())
+            for page_number, lines in page_lines
+            if "\n".join(lines).strip()
+        ]
+        if page_texts:
             blocks.append(
                 SectionBlock(
                     title=current_title,
-                    page_start=page_start,
-                    page_end=page_end,
-                    text=text,
+                    page_start=page_texts[0].page_number,
+                    page_end=page_texts[-1].page_number,
+                    text="\n\n".join(item.text for item in page_texts),
+                    page_texts=page_texts,
                 )
             )
-        current_lines = []
-        page_start = None
-        page_end = None
+        page_lines = []
 
     for page in pages:
         if page.is_empty:
@@ -89,42 +101,60 @@ def pages_to_sections(pages: list[PaperPage]) -> list[SectionBlock]:
         for line in page.text.split("\n"):
             stripped = line.strip()
             if not stripped:
-                if current_lines and current_lines[-1] != "":
-                    current_lines.append("")
+                append_line(page.page_number, "")
                 continue
             if is_section_heading(stripped):
                 flush()
                 current_title = stripped
-                page_start = page.page_number
-                page_end = page.page_number
                 continue
-            if page_start is None:
-                page_start = page.page_number
-            page_end = page.page_number
-            current_lines.append(stripped)
+            append_line(page.page_number, stripped)
     flush()
-    return merge_small_sections(blocks)
+    return merge_small_sections(blocks, encoding_name=encoding_name)
 
 
 def merge_small_sections(
     sections: list[SectionBlock],
     *,
     min_tokens: int = 80,
+    encoding_name: str = "cl100k_base",
 ) -> list[SectionBlock]:
     """Merge undersized sections into the previous block to avoid micro-chunks."""
     if not sections:
         return []
     merged: list[SectionBlock] = []
     for section in sections:
-        tokens = count_tokens(section.text)
+        tokens = count_tokens(section.text, encoding_name=encoding_name)
         if merged and tokens < min_tokens:
             prev = merged[-1]
+            page_texts = _merge_page_texts(prev.page_texts, section.page_texts)
             merged[-1] = SectionBlock(
                 title=prev.title,
                 page_start=prev.page_start,
                 page_end=max(prev.page_end, section.page_end),
                 text=(prev.text + "\n\n" + section.text).strip(),
+                page_texts=page_texts,
             )
         else:
             merged.append(section)
+    return merged
+
+
+def _merge_page_texts(
+    left: list[SectionPageText],
+    right: list[SectionPageText],
+) -> list[SectionPageText]:
+    """Merge adjacent section provenance, coalescing a shared PDF page."""
+    if not left or not right:
+        # Old serialized SectionBlock values may not have page_texts.  Keeping
+        # the list empty makes the chunker use the conservative full range.
+        return []
+    merged = [item.model_copy() for item in left]
+    for item in right:
+        if merged[-1].page_number == item.page_number:
+            merged[-1] = SectionPageText(
+                page_number=item.page_number,
+                text=f"{merged[-1].text}\n\n{item.text}",
+            )
+        else:
+            merged.append(item.model_copy())
     return merged

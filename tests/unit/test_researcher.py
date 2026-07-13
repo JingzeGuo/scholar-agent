@@ -372,3 +372,41 @@ def test_research_subgraph_preserves_events_and_state_budgets() -> None:
     assert "tool_selected" in event_types
     assert "tool_result" in event_types
     assert "terminated" in event_types
+
+
+def test_token_budget_caps_evidence_and_emits_structured_event() -> None:
+    agent = ResearchAgent(
+        FakeToolkit(has_graph=False),  # type: ignore[arg-type]
+        config=ResearchAgentConfig(
+            max_total_tokens_per_pass=10,
+            max_tool_calls_per_pass=2,
+            allow_policy_override=False,
+        ),
+    )
+    result = agent.research_sub_question(_sq("sq_tokens", "What is RAPTOR?", QueryType.SEMANTIC))
+    assert result.token_usage.total_tokens <= 10
+    assert result.terminated_reason == "token_budget_exhausted"
+    assert any(event.event_type.value == "budget_hit" for event in result.events)
+
+
+def test_research_run_aggregates_token_usage() -> None:
+    agent = ResearchAgent(
+        FakeToolkit(has_graph=False),  # type: ignore[arg-type]
+        config=ResearchAgentConfig(
+            max_total_tokens_per_pass=100,
+            max_tool_calls_per_pass=1,
+            allow_policy_override=False,
+        ),
+    )
+    result = agent.research_many(
+        [
+            _sq("sq_t1", "What is RAPTOR?", QueryType.SEMANTIC),
+            _sq("sq_t2", "What is CRAG?", QueryType.SEMANTIC),
+        ],
+        original_query="Two questions",
+        parallel=False,
+    )
+    assert result.token_usage.total_tokens == sum(
+        research_pass.token_usage.total_tokens for research_pass in result.passes
+    )
+    assert result.token_usage.total_tokens > 0

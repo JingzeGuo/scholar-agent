@@ -24,6 +24,7 @@ from scholar_agent.models.base import (
     ExecutionEvent,
     QueryType,
     StructuredError,
+    TokenUsage,
 )
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import SubQuestion, SubQuestionStatus
@@ -44,6 +45,7 @@ class ResearchAgentConfig(BaseModel):
     max_evidence_per_sub_question: int = Field(default=8, ge=1)
     max_parallel_sub_questions: int = Field(default=4, ge=1)
     max_latency_ms: int = Field(default=120_000, ge=1)
+    max_total_tokens_per_pass: int = Field(default=100_000, ge=1)
     # When True, may run a secondary tool if first yields little evidence
     allow_policy_override: bool = True
 
@@ -59,6 +61,7 @@ class ResearchPassResult(BaseModel):
     tool_call_count: int = 0
     iteration_count: int = 0
     latency_ms: int = 0
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
     terminated_reason: str
     events: list[ExecutionEvent] = Field(default_factory=list)
 
@@ -74,6 +77,7 @@ class ResearchRunResult(BaseModel):
     tool_call_count: int = 0
     iteration_count: int = 0
     latency_ms: int = 0
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
     parallel: bool = False
 
 
@@ -86,6 +90,8 @@ class _SubResearchState(TypedDict, total=False):
     max_tool_calls: int
     max_iterations: int
     max_evidence: int
+    token_usage: int
+    max_total_tokens: int
     evidence: list[dict[str, Any]]
     actions: list[dict[str, Any]]
     events: list[dict[str, Any]]
@@ -154,6 +160,7 @@ class ResearchAgent:
         actions: list[ToolAction] = []
         tool_calls = 0
         iterations = 0
+        estimated_tokens = 0
         terminated = "completed"
         modes_queue = list(modes)
         seen_modes: set[str] = set()
@@ -172,6 +179,22 @@ class ResearchAgent:
                         payload={
                             "max_latency_ms": self.config.max_latency_ms,
                             "latency_ms": latency_ms,
+                        },
+                    )
+                )
+                break
+            query_tokens = estimate_text_tokens(sub_question.question)
+            if estimated_tokens + query_tokens > self.config.max_total_tokens_per_pass:
+                terminated = "token_budget_exhausted"
+                events.append(
+                    ExecutionEvent(
+                        run_id=rid,
+                        event_type=EventType.BUDGET_HIT,
+                        component="researcher",
+                        summary="max estimated research tokens reached",
+                        payload={
+                            "max_total_tokens": self.config.max_total_tokens_per_pass,
+                            "estimated_tokens": estimated_tokens,
                         },
                     )
                 )
@@ -227,6 +250,14 @@ class ResearchAgent:
                 existing=ledger,
                 max_new=min(per_tool_cap, remaining),
             )
+            estimated_tokens += query_tokens
+            candidate_count = len(new_items)
+            new_items, evidence_tokens = fit_evidence_to_token_budget(
+                new_items,
+                used_tokens=estimated_tokens,
+                max_total_tokens=self.config.max_total_tokens_per_pass,
+            )
+            estimated_tokens += evidence_tokens
             actions.append(action)
             tool_calls += 1
             events.append(
@@ -261,6 +292,7 @@ class ResearchAgent:
                         ],
                         "new_evidence_ids": [e.evidence_id for e in new_items],
                         "method": result.method,
+                        "estimated_tokens": estimated_tokens,
                     },
                 )
             )
@@ -285,6 +317,22 @@ class ResearchAgent:
                         payload={"count": len(new_items)},
                     )
                 )
+            if candidate_count > len(new_items):
+                terminated = "token_budget_exhausted"
+                events.append(
+                    ExecutionEvent(
+                        run_id=rid,
+                        event_type=EventType.BUDGET_HIT,
+                        component="researcher",
+                        summary="evidence truncated at estimated token budget",
+                        payload={
+                            "max_total_tokens": self.config.max_total_tokens_per_pass,
+                            "estimated_tokens": estimated_tokens,
+                            "dropped_evidence": candidate_count - len(new_items),
+                        },
+                    )
+                )
+                break
 
             # Adaptive override: if first tool weak, try a complementary mode once
             if (
@@ -326,6 +374,7 @@ class ResearchAgent:
                     "iteration_count": iterations,
                     "evidence_count": len(ledger.items),
                     "latency_ms": latency_ms,
+                    "estimated_tokens": estimated_tokens,
                 },
             )
         )
@@ -339,6 +388,10 @@ class ResearchAgent:
             tool_call_count=tool_calls,
             iteration_count=iterations,
             latency_ms=latency_ms,
+            token_usage=TokenUsage(
+                prompt_tokens=estimated_tokens,
+                total_tokens=estimated_tokens,
+            ),
             terminated_reason=terminated,
             events=events,
         )
@@ -392,11 +445,13 @@ class ResearchAgent:
         total_tools = 0
         total_iterations = 0
         total_latency_ms = 0
+        total_token_usage = TokenUsage()
         for p in passes:
             ledger = ledger.merge(p.evidence)
             total_tools += p.tool_call_count
             total_iterations += p.iteration_count
             total_latency_ms += p.latency_ms
+            total_token_usage = total_token_usage.add(p.token_usage)
             events.extend(p.events)
 
         events.append(
@@ -412,6 +467,7 @@ class ResearchAgent:
                     "parallel": actual_parallel,
                     "iteration_count": total_iterations,
                     "latency_ms": total_latency_ms,
+                    "estimated_tokens": total_token_usage.total_tokens,
                 },
             )
         )
@@ -424,6 +480,7 @@ class ResearchAgent:
             tool_call_count=total_tools,
             iteration_count=total_iterations,
             latency_ms=total_latency_ms,
+            token_usage=total_token_usage,
             parallel=actual_parallel,
         )
 
@@ -654,6 +711,31 @@ def hits_to_evidence(
     return out
 
 
+def estimate_text_tokens(text: str) -> int:
+    """Stable offline estimate used to enforce token budgets without a model call."""
+    if not text:
+        return 0
+    return max(1, (len(text.encode("utf-8")) + 3) // 4)
+
+
+def fit_evidence_to_token_budget(
+    items: list[EvidenceItem],
+    *,
+    used_tokens: int,
+    max_total_tokens: int,
+) -> tuple[list[EvidenceItem], int]:
+    """Keep whole evidence items while staying within an estimated token cap."""
+    selected: list[EvidenceItem] = []
+    added = 0
+    for item in items:
+        item_tokens = estimate_text_tokens(item.evidence_text)
+        if used_tokens + added + item_tokens > max_total_tokens:
+            break
+        selected.append(item)
+        added += item_tokens
+    return selected, added
+
+
 def _mode_to_policy(mode: str) -> RetrievalPolicy:
     mapping = {
         "dense": RetrievalPolicy.DENSE,
@@ -686,6 +768,8 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
         max_iterations = int(state.get("max_iterations") or 4)
         evidence = list(state.get("evidence") or [])
         max_ev = int(state.get("max_evidence") or 8)
+        token_usage = int(state.get("token_usage") or 0)
+        max_tokens = int(state.get("max_total_tokens") or agent.config.max_total_tokens_per_pass)
         queue = list(state.get("modes_queue") or [])
         if tool_calls >= max_tools:
             return {
@@ -697,6 +781,24 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
                         event_type=EventType.BUDGET_HIT,
                         component="researcher.graph",
                         summary="tool budget exhausted",
+                    ),
+                ),
+            }
+        question = str((state.get("sub_question") or {}).get("question") or "")
+        if token_usage + estimate_text_tokens(question) > max_tokens:
+            return {
+                "terminated_reason": "token_budget_exhausted",
+                "events": append_event_dicts(
+                    state,
+                    ExecutionEvent(
+                        run_id=state["run_id"],
+                        event_type=EventType.BUDGET_HIT,
+                        component="researcher.graph",
+                        summary="token budget exhausted",
+                        payload={
+                            "estimated_tokens": token_usage,
+                            "max_total_tokens": max_tokens,
+                        },
                     ),
                 ),
             }
@@ -762,6 +864,17 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
                 int(state.get("max_evidence") or 8) - len(existing.items),
             ),
         )
+        query_tokens = estimate_text_tokens(sq.question)
+        used_tokens = int(state.get("token_usage") or 0) + query_tokens
+        candidate_count = len(new_items)
+        new_items, evidence_tokens = fit_evidence_to_token_budget(
+            new_items,
+            used_tokens=used_tokens,
+            max_total_tokens=int(
+                state.get("max_total_tokens") or agent.config.max_total_tokens_per_pass
+            ),
+        )
+        used_tokens += evidence_tokens
         merged = existing.merge(new_items)
         selected_event = ExecutionEvent(
             run_id=state["run_id"],
@@ -808,13 +921,27 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
                     summary=f"added {len(new_items)} evidence items",
                 )
             )
-        return {
+        updates: dict[str, Any] = {
             "tool_call_count": int(state.get("tool_call_count") or 0) + 1,
+            "token_usage": used_tokens,
             "evidence": [e.model_dump(mode="json") for e in merged.items],
             "actions": list(state.get("actions") or []) + [action.model_dump(mode="json")],
             "last_new_count": len(new_items),
             "events": append_event_dicts(state, *new_events),
         }
+        if candidate_count > len(new_items):
+            updates["terminated_reason"] = "token_budget_exhausted"
+            updates["events"] = append_event_dicts(
+                state,
+                *new_events,
+                ExecutionEvent(
+                    run_id=state["run_id"],
+                    event_type=EventType.BUDGET_HIT,
+                    component="researcher.graph",
+                    summary="evidence truncated at token budget",
+                ),
+            )
+        return updates
 
     def route_after_decide(state: _SubResearchState) -> Literal["execute", "finish"]:
         if state.get("terminated_reason"):
@@ -832,6 +959,10 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
             return "finish"
         if len(state.get("evidence") or []) >= int(state.get("max_evidence") or 8):
             return "finish"
+        if int(state.get("token_usage") or 0) >= int(
+            state.get("max_total_tokens") or agent.config.max_total_tokens_per_pass
+        ):
+            return "finish"
         if not state.get("modes_queue"):
             return "finish"
         return "decide"
@@ -845,6 +976,10 @@ def build_research_subgraph(agent: ResearchAgent) -> Any:
                 reason = "iteration_budget_exhausted"
             elif len(state.get("evidence") or []) >= int(state.get("max_evidence") or 8):
                 reason = "evidence_budget_reached"
+            elif int(state.get("token_usage") or 0) >= int(
+                state.get("max_total_tokens") or agent.config.max_total_tokens_per_pass
+            ):
+                reason = "token_budget_exhausted"
         reason = reason or "completed"
         return {
             "terminated_reason": reason,
@@ -880,5 +1015,7 @@ __all__ = [
     "ResearchPassResult",
     "ResearchRunResult",
     "build_research_subgraph",
+    "estimate_text_tokens",
+    "fit_evidence_to_token_budget",
     "hits_to_evidence",
 ]

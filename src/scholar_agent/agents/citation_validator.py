@@ -8,12 +8,12 @@ machine-readable CitationReport plus user-facing source cards / reference list.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pymupdf
 
+from scholar_agent.agents.evidence_support import claim_is_supported
 from scholar_agent.agents.writer import render_claim_markdown
 from scholar_agent.ids import normalize_text
 from scholar_agent.logging import get_logger
@@ -29,34 +29,6 @@ from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.retrieval.chunk_store import ChunkStore
 
 logger = get_logger(__name__)
-
-_STOP_WORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "also",
-    "by",
-    "for",
-    "from",
-    "in",
-    "is",
-    "of",
-    "on",
-    "or",
-    "supported",
-    "the",
-    "to",
-    "with",
-}
-
-
-def _tokens(text: str) -> set[str]:
-    return {
-        t
-        for t in re.findall(r"[a-z0-9]+", normalize_text(text))
-        if t not in _STOP_WORDS and len(t) > 1
-    }
 
 
 def _snippet(text: str, max_chars: int = 200) -> str:
@@ -328,46 +300,14 @@ class CitationValidator:
         return count
 
     def _supports(self, claim: ClaimWithCitations, item: EvidenceItem) -> bool:
-        """Heuristic entailment: claim tokens should appear in evidence text/claim."""
-        # Meta / qualification claims about conflicts are allowed if they cite the items
-        meta_markers = (
-            "sources disagree",
-            "conflicting passages",
-            "retained for audit",
-            "limitation",
-        )
-        claim_l = claim.text.lower()
-        if any(m in claim_l for m in meta_markers):
-            return True
-
-        claim_toks = _tokens(claim.text)
-        if not claim_toks:
-            return True
+        """Apply the same deterministic entailment floor as the Verifier."""
         evidence_blob = f"{item.claim} {item.evidence_text}"
-        ev_toks = _tokens(evidence_blob)
-        if not ev_toks:
-            return False
-        claim_numbers = {token for token in claim_toks if token.isdigit()}
-        if not claim_numbers.issubset(ev_toks):
-            return False
-        polarity_roots = (
-            ("outperform", "underperform"),
-            ("increase", "decrease"),
-            ("better", "worse"),
-            ("effective", "ineffective"),
+        return claim_is_supported(
+            claim.text,
+            evidence_blob,
+            min_overlap=self.min_support_overlap,
+            allow_meta_claims=True,
         )
-        for positive, negative in polarity_roots:
-            claim_positive = any(token.startswith(positive) for token in claim_toks)
-            claim_negative = any(token.startswith(negative) for token in claim_toks)
-            evidence_positive = any(token.startswith(positive) for token in ev_toks)
-            evidence_negative = any(token.startswith(negative) for token in ev_toks)
-            if (claim_positive and evidence_negative) or (claim_negative and evidence_positive):
-                return False
-        # Also allow if claim is largely a substring of evidence (after normalize)
-        if normalize_text(claim.text)[:80] in normalize_text(evidence_blob):
-            return True
-        overlap = len(claim_toks & ev_toks) / max(1, len(claim_toks))
-        return overlap >= self.min_support_overlap
 
     def _ordered_cited_ids(
         self,

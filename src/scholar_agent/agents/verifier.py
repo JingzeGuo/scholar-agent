@@ -11,6 +11,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 
+from scholar_agent.agents.evidence_support import claim_is_supported
 from scholar_agent.ids import normalize_text
 from scholar_agent.logging import get_logger
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
@@ -97,17 +98,37 @@ class Verifier:
             # The ledger is shared: a passage retrieved for one sub-question may
             # legitimately cover another. This also preserves coverage when the
             # reducer merges a duplicate chunk that has only one owning ID.
-            relevant = [e for e in ledger.items if self._is_relevant(sq, e)]
-            if len(relevant) >= self.min_evidence_per_sub_question:
+            relevant = [
+                evidence
+                for evidence in ledger.items
+                if self._is_relevant(sq, evidence)
+                and claim_is_supported(
+                    evidence.claim,
+                    evidence.evidence_text,
+                    min_overlap=0.5,
+                )
+            ]
+            unsupported.extend(
+                evidence.claim[:120]
+                for evidence in items
+                if self._is_relevant(sq, evidence)
+                and not claim_is_supported(
+                    evidence.claim,
+                    evidence.evidence_text,
+                    min_overlap=0.5,
+                )
+            )
+            uncovered_requirements = [
+                req for req in sq.required_evidence if not self._requirement_covered(req, relevant)
+            ]
+            if len(relevant) >= self.min_evidence_per_sub_question and not uncovered_requirements:
                 covered.append(sq.id)
                 supported_evidence_ids[sq.id] = [item.evidence_id for item in relevant]
-                # Check required evidence keywords lightly
-                for req in sq.required_evidence:
-                    if not self._requirement_covered(req, relevant):
-                        missing_aspects.append(f"{sq.id}: missing aspect '{req}'")
-                        corrective.append(self._corrective_for_aspect(sq, req))
             else:
                 missing.append(sq.id)
+                for req in uncovered_requirements:
+                    missing_aspects.append(f"{sq.id}: missing aspect '{req}'")
+                    corrective.append(self._corrective_for_aspect(sq, req))
                 if not items:
                     missing_aspects.append(f"{sq.id}: no evidence retrieved")
                     corrective.append(
@@ -129,7 +150,7 @@ class Verifier:
                             missing_aspect="relevant evidence",
                         )
                     )
-                if items:
+                if items and not relevant:
                     # Mark weak claims as unsupported
                     for e in items:
                         if e not in relevant:
@@ -262,6 +283,11 @@ class Verifier:
 
     def _requirement_covered(self, req: str, items: list[EvidenceItem]) -> bool:
         req_norm = normalize_text(req)
+        if req_norm.startswith("anchor:"):
+            anchor = normalize_text(req.split(":", 1)[1]).strip()
+            if not anchor:
+                return False
+            return any(anchor in normalize_text(item.evidence_text) for item in items)
         # Soft requirements like "supporting passage" always ok if any item exists
         if req_norm in _SOFT_REQUIREMENTS:
             return bool(items)
@@ -334,11 +360,11 @@ class Verifier:
         # Only enforce multi-source diversity for comparison/synthesis
         if plan.answer_type not in {"comparison", "synthesis"}:
             return True, ""
-        if len(papers) >= min(need, 2):
+        if len(papers) >= need:
             return True, ""
         return (
             False,
-            f"source diversity too low ({len(papers)} papers; expected ≥{min(need, 2)})",
+            f"source diversity too low ({len(papers)} papers; expected ≥{need})",
         )
 
     def _detect_unanswerable(self, plan: QueryPlan) -> bool:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -10,7 +11,7 @@ from scholar_agent.config import AppConfig, load_config
 from scholar_agent.logging import get_logger
 from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.retrieval.dense import DenseIndex
-from scholar_agent.retrieval.embeddings import Embedder, create_embedder
+from scholar_agent.retrieval.embeddings import Embedder, create_embedder, embedder_backend_name
 from scholar_agent.retrieval.reranker import Reranker, create_reranker
 from scholar_agent.retrieval.sparse import BM25Index
 from scholar_agent.retrieval.tools import RetrievalToolkit
@@ -40,6 +41,11 @@ def build_indexes(
     cfg = config or load_config()
     processed = Path(processed_dir or cfg.paths.processed_dir)
     indexes = Path(indexes_dir or cfg.paths.indexes_dir)
+    if indexes_dir is None and embedding_backend == "hash" and indexes.name != "hash":
+        # Offline demos/evaluations must never replace the production BGE
+        # collection.  Evaluation configs already end in ``.../hash`` and are
+        # intentionally left unchanged.
+        indexes = indexes / "hash"
     dense_dir = indexes / "chroma"
     sparse_dir = indexes / "bm25"
 
@@ -70,15 +76,27 @@ def build_indexes(
         sparse.save(sparse_dir)
         logger.info("wrote BM25 index → %s", sparse_dir)
 
-    # Dense — when loading an existing index, use the embedder recorded in meta
-    # so query vectors match collection dimensionality (hash=64 vs BGE=384).
+    # Dense — only reuse a collection when both its corpus and the complete
+    # requested embedder identity match.  Loading the backend recorded in meta
+    # would silently ignore a caller/config change (hash vs BGE, model revision,
+    # dimension, or collection name).
     dense_meta = dense_dir / "meta.json"
     if not force and dense_meta.is_file():
         try:
+            persisted = json.loads(dense_meta.read_text(encoding="utf-8"))
+            requested = {
+                "embedder": embedder.model_name,
+                "embedder_backend": embedder_backend_name(embedder),
+                "dimension": embedder.dimension,
+                "collection_name": cfg.retrieval.dense.collection_name,
+            }
+            mismatches = [key for key, value in requested.items() if persisted.get(key) != value]
+            if mismatches:
+                raise ValueError("dense configuration changed: " + ", ".join(sorted(mismatches)))
             dense = DenseIndex.load(
                 dense_dir,
                 store,
-                embedder=None,
+                embedder=embedder,
                 verify=True,
                 collection_name=cfg.retrieval.dense.collection_name,
             )
@@ -86,7 +104,7 @@ def build_indexes(
                 "loaded existing dense index (embedder=%s)",
                 dense.embedder.model_name,
             )
-        except (ValueError, FileNotFoundError, Exception) as exc:
+        except Exception as exc:  # noqa: BLE001 - corrupt/stale index is rebuilt
             logger.info("dense reload failed (%s); rebuilding", exc)
             dense = DenseIndex.build(
                 store,
@@ -156,7 +174,14 @@ def load_toolkit(
 
     if load_graph:
         graph_path = Path(cfg.paths.processed_dir) / "knowledge_graph.json"
-        if graph_path.is_file():
+        graph_meta_path = Path(cfg.paths.processed_dir) / "graph_meta.json"
+        from scholar_agent.graph.pipeline import validate_graph_build_meta
+
+        graph_current, graph_reason = validate_graph_build_meta(
+            graph_meta_path,
+            corpus_fingerprint=built.store.fingerprint,
+        )
+        if graph_path.is_file() and graph_current:
             try:
                 from scholar_agent.graph.retrieve import GraphRetriever
                 from scholar_agent.graph.store import KnowledgeGraphStore
@@ -170,4 +195,10 @@ def load_toolkit(
                 logger.info("loaded knowledge graph (%s nodes)", kg.number_of_nodes())
             except Exception as exc:  # noqa: BLE001
                 logger.warning("failed to load knowledge graph: %s", exc)
+        elif graph_path.is_file():
+            logger.warning(
+                "knowledge graph disabled because artifacts are stale: %s; "
+                "run `scholar-agent graph build`",
+                graph_reason,
+            )
     return built.toolkit

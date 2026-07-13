@@ -60,6 +60,13 @@ def test_saved_runs_have_canonical_pdf_page_provenance() -> None:
         assert saved.provenance_verified is True
         assert saved.corpus_fingerprint == store.fingerprint
         assert validate_saved_run_provenance(saved, store) == []
+        for item in saved.session.evidence:
+            chunk = store.get_chunk(item.chunk_id)
+            assert chunk is not None
+            assert item.paper_id == chunk.paper_id
+            assert item.page_start == chunk.page_start
+            assert item.page_end == chunk.page_end
+            assert item.evidence_text == chunk.text
 
 
 def test_source_viewer_renders_real_cited_page() -> None:
@@ -152,3 +159,25 @@ def test_demo_settings_label() -> None:
     label = s.label()
     assert "no-graph" in label
     assert "static" in label
+
+
+def test_streamlit_replay_renders_end_to_end_without_network() -> None:
+    testing = pytest.importorskip("streamlit.testing.v1")
+    app_path = REPO / "src" / "scholar_agent" / "app" / "streamlit_app.py"
+    app = testing.AppTest.from_file(str(app_path)).run(timeout=30)
+    assert not app.exception
+
+    app.radio[0].set_value("replay").run(timeout=30)
+    assert app.radio[0].value == "replay"
+    assert app.selectbox[0].value == "selfrag_vs_crag"
+    app.button[0].click().run(timeout=30)
+
+    assert not app.exception
+    assert [tab.label for tab in app.tabs] == ["Answer", "Trace", "Sources", "Naive RAG"]
+    assert any("Self-RAG uses reflection" in element.value for element in app.markdown)
+    assert {metric.label for metric in app.metric} >= {
+        "Latency (ms)",
+        "Tool calls",
+        "Evidence",
+        "Corrective iters",
+    }

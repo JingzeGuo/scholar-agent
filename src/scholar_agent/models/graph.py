@@ -71,7 +71,11 @@ class Relation(BaseModel):
     evidence_span: str
     paper_id: str
     chunk_id: str
+    # ``page_number`` is retained as the backwards-compatible start page used
+    # by the Phase 4 schema.  ``page_end`` makes the provenance truthful for
+    # the small number of evidence spans that cross a physical PDF boundary.
     page_number: int = Field(ge=1)
+    page_end: int | None = Field(default=None, ge=1)
     confidence: float = Field(ge=0.0, le=1.0)
 
     @field_validator(
@@ -93,4 +97,8 @@ class Relation(BaseModel):
     def _require_evidence_span(self) -> Relation:
         if not self.evidence_span.strip():
             raise ValueError("relations without an evidence span are discarded")
+        if self.page_end is None:
+            object.__setattr__(self, "page_end", self.page_number)
+        elif self.page_end < self.page_number:
+            raise ValueError("page_end must be >= page_number")
         return self

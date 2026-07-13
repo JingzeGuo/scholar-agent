@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from scholar_agent.config import AppConfig, ChunkingConfig, load_config
@@ -14,6 +15,7 @@ from scholar_agent.ingestion.loader import PDFLoadError, file_content_hash, load
 from scholar_agent.ingestion.metadata import build_paper, resolve_pdf_path
 from scholar_agent.ingestion.quality import assess_pages
 from scholar_agent.ingestion.sections import pages_to_sections
+from scholar_agent.ingestion.tokens import require_encoding
 from scholar_agent.logging import get_logger
 from scholar_agent.models.corpus import (
     Chunk,
@@ -27,11 +29,14 @@ from scholar_agent.models.ingestion import (
     ExtractionIssue,
     ExtractionSeverity,
     PaperExtractionReport,
+    SectionPageText,
 )
 from scholar_agent.storage.jsonl import JsonlRepository
 from scholar_agent.storage.manifest import load_corpus_manifest, save_corpus_manifest
 
 logger = get_logger(__name__)
+
+INGESTION_SCHEMA = "ingestion-v3-page-exact"
 
 
 @dataclass
@@ -65,12 +70,30 @@ class IngestionPipeline:
         self.papers_dir = Path(papers_dir)
         self.processed_dir = Path(processed_dir)
         self.chunking = chunking or ChunkingConfig()
+        self.tokenizer_backend = require_encoding(
+            self.chunking.encoding_name,
+            allow_fallback=self.chunking.allow_tokenizer_fallback,
+        )
+        fingerprint_payload = {
+            "schema": INGESTION_SCHEMA,
+            "target_tokens": self.chunking.target_tokens,
+            "overlap_tokens": self.chunking.overlap_tokens,
+            "min_tokens": self.chunking.min_tokens,
+            "encoding_name": self.chunking.encoding_name,
+            "tokenizer_backend": self.tokenizer_backend,
+        }
+        self.ingestion_config_fingerprint = sha256(
+            json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         self.processed_dir.mkdir(parents=True, exist_ok=True)
         self.papers_repo: JsonlRepository[Paper] = JsonlRepository(
             self.processed_dir / "papers.jsonl", Paper
         )
         self.chunks_repo: JsonlRepository[Chunk] = JsonlRepository(
             self.processed_dir / "chunks.jsonl", Chunk
+        )
+        self.quality_repo: JsonlRepository[PaperExtractionReport] = JsonlRepository(
+            self.processed_dir / "extraction_reports.jsonl", PaperExtractionReport
         )
 
     def _existing_papers(self) -> dict[str, Paper]:
@@ -92,6 +115,9 @@ class IngestionPipeline:
                 total_chars=0,
                 total_tokens_est=0,
                 chunk_count=0,
+                tokenizer_encoding=self.chunking.encoding_name,
+                tokenizer_backend=self.tokenizer_backend,
+                ingestion_config_fingerprint=self.ingestion_config_fingerprint,
                 is_empty_paper=True,
                 issues=[
                     ExtractionIssue(
@@ -116,19 +142,13 @@ class IngestionPipeline:
             not force
             and existing is not None
             and existing.content_hash == file_hash
+            and existing.ingestion_config_fingerprint == self.ingestion_config_fingerprint
             and self._chunks_exist_for(entry.paper_id)
         ):
-            report = PaperExtractionReport(
-                paper_id=entry.paper_id,
-                pdf_path=str(pdf_path),
+            report = self._quality_report_for_skip(
+                entry.paper_id,
+                pdf_path=pdf_path,
                 page_count=existing.page_count or 0,
-                empty_page_count=0,
-                scanned_suspect_page_count=0,
-                total_chars=0,
-                total_tokens_est=0,
-                chunk_count=self._count_chunks(entry.paper_id),
-                skipped=True,
-                skip_reason="unchanged content_hash; idempotent skip",
             )
             updated = entry.model_copy(
                 update={
@@ -157,6 +177,9 @@ class IngestionPipeline:
                 total_chars=0,
                 total_tokens_est=0,
                 chunk_count=0,
+                tokenizer_encoding=self.chunking.encoding_name,
+                tokenizer_backend=self.tokenizer_backend,
+                ingestion_config_fingerprint=self.ingestion_config_fingerprint,
                 is_empty_paper=True,
                 issues=[
                     ExtractionIssue(
@@ -177,7 +200,18 @@ class IngestionPipeline:
             )
 
         cleaned = strip_headers_footers(pages)
-        quality = assess_pages(entry.paper_id, str(pdf_path), cleaned)
+        quality = assess_pages(
+            entry.paper_id,
+            str(pdf_path),
+            cleaned,
+            encoding_name=self.chunking.encoding_name,
+        ).model_copy(
+            update={
+                "tokenizer_encoding": self.chunking.encoding_name,
+                "tokenizer_backend": self.tokenizer_backend,
+                "ingestion_config_fingerprint": self.ingestion_config_fingerprint,
+            }
+        )
         if quality.is_empty_paper:
             # Never silently index empty papers
             quality = quality.model_copy(update={"chunk_count": 0})
@@ -187,7 +221,9 @@ class IngestionPipeline:
                     "content_hash": file_hash,
                 }
             )
-            paper = build_paper(entry, pdf_path, page_count=len(cleaned), content_hash=file_hash)
+            paper = build_paper(
+                entry, pdf_path, page_count=len(cleaned), content_hash=file_hash
+            ).model_copy(update={"ingestion_config_fingerprint": self.ingestion_config_fingerprint})
             return PaperIngestResult(
                 entry=updated,
                 paper=paper,
@@ -197,7 +233,7 @@ class IngestionPipeline:
                 status=IngestionStatus.FAILED,
             )
 
-        sections = pages_to_sections(cleaned)
+        sections = pages_to_sections(cleaned, encoding_name=self.chunking.encoding_name)
         if not sections:
             # Fallback: single document-wide block preserving full page range
             from scholar_agent.models.ingestion import SectionBlock
@@ -210,6 +246,10 @@ class IngestionPipeline:
                         page_start=non_empty[0].page_number,
                         page_end=non_empty[-1].page_number,
                         text="\n\n".join(p.text for p in non_empty),
+                        page_texts=[
+                            SectionPageText(page_number=p.page_number, text=p.text)
+                            for p in non_empty
+                        ],
                     )
                 ]
 
@@ -219,11 +259,15 @@ class IngestionPipeline:
             target_tokens=self.chunking.target_tokens,
             overlap_tokens=self.chunking.overlap_tokens,
             min_tokens=self.chunking.min_tokens,
+            encoding_name=self.chunking.encoding_name,
         )
         quality = quality.model_copy(update={"chunk_count": len(chunks)})
-        paper = build_paper(entry, pdf_path, page_count=len(cleaned), content_hash=file_hash)
+        paper = build_paper(
+            entry, pdf_path, page_count=len(cleaned), content_hash=file_hash
+        ).model_copy(update={"ingestion_config_fingerprint": self.ingestion_config_fingerprint})
 
         self._persist_paper(paper, chunks)
+        self._persist_quality_report(quality)
 
         updated = entry.model_copy(
             update={
@@ -247,6 +291,94 @@ class IngestionPipeline:
         if not self.chunks_repo.exists():
             return 0
         return sum(1 for c in self.chunks_repo.iter_rows() if c.paper_id == paper_id)
+
+    def _quality_report_for_skip(
+        self,
+        paper_id: str,
+        *,
+        pdf_path: Path,
+        page_count: int,
+    ) -> PaperExtractionReport:
+        stored: PaperExtractionReport | None = None
+        if self.quality_repo.exists():
+            stored = self.quality_repo.index_by("paper_id").get(paper_id)
+        if stored is None:
+            stored = self._quality_from_previous_aggregate(paper_id)
+        chunk_rows = (
+            [c for c in self.chunks_repo.iter_rows() if c.paper_id == paper_id]
+            if self.chunks_repo.exists()
+            else []
+        )
+        if stored is None:
+            # Compatibility for stores created before extraction_reports.jsonl.
+            # Chunk-derived totals are preferable to silently zeroing quality
+            # metadata, while the issue clearly records what cannot be recovered.
+            stored = PaperExtractionReport(
+                paper_id=paper_id,
+                pdf_path=str(pdf_path),
+                page_count=page_count,
+                empty_page_count=0,
+                scanned_suspect_page_count=0,
+                total_chars=sum(len(chunk.text) for chunk in chunk_rows),
+                total_tokens_est=sum(chunk.token_count for chunk in chunk_rows),
+                chunk_count=len(chunk_rows),
+                tokenizer_encoding=self.chunking.encoding_name,
+                tokenizer_backend=self.tokenizer_backend,
+                ingestion_config_fingerprint=self.ingestion_config_fingerprint,
+                issues=[
+                    ExtractionIssue(
+                        code="legacy_quality_metadata",
+                        severity=ExtractionSeverity.INFO,
+                        message=(
+                            "Exact extraction quality metadata predates durable reports; "
+                            "character and token totals were reconstructed from chunks"
+                        ),
+                    )
+                ],
+            )
+        report = stored.model_copy(
+            update={
+                "pdf_path": str(pdf_path),
+                "page_count": page_count,
+                "chunk_count": len(chunk_rows),
+                "tokenizer_encoding": self.chunking.encoding_name,
+                "tokenizer_backend": self.tokenizer_backend,
+                "ingestion_config_fingerprint": self.ingestion_config_fingerprint,
+                "skipped": True,
+                "skip_reason": "unchanged content_hash; idempotent skip",
+            }
+        )
+        self._persist_quality_report(
+            report.model_copy(update={"skipped": False, "skip_reason": None})
+        )
+        return report
+
+    def _quality_from_previous_aggregate(self, paper_id: str) -> PaperExtractionReport | None:
+        path = self.processed_dir / "ingestion_report.json"
+        if not path.is_file():
+            return None
+        try:
+            aggregate = CorpusIngestionReport.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        candidates = [report for report in aggregate.paper_reports if report.paper_id == paper_id]
+        if not candidates:
+            return None
+        report = candidates[-1]
+        # A legacy idempotent-skip row contains the very zeros we are avoiding.
+        if report.skipped and report.total_chars == 0 and report.total_tokens_est == 0:
+            return None
+        return report.model_copy(update={"skipped": False, "skip_reason": None})
+
+    def _persist_quality_report(self, report: PaperExtractionReport) -> None:
+        rows = (
+            [row for row in self.quality_repo.read_all() if row.paper_id != report.paper_id]
+            if self.quality_repo.exists()
+            else []
+        )
+        rows.append(report)
+        rows.sort(key=lambda row: row.paper_id)
+        self.quality_repo.write_all(rows)
 
     def _persist_paper(self, paper: Paper, chunks: list[Chunk]) -> None:
         """Upsert paper and replace that paper's chunks (stable IDs when content stable)."""
@@ -327,6 +459,9 @@ def ingest_corpus(
         run_id=run_id,
         manifest_path=str(path),
         processed_dir=str(pipeline.processed_dir),
+        tokenizer_encoding=pipeline.chunking.encoding_name,
+        tokenizer_backend=pipeline.tokenizer_backend,
+        ingestion_config_fingerprint=pipeline.ingestion_config_fingerprint,
         papers_attempted=len(entries),
         papers_ingested=ingested,
         papers_skipped=skipped,

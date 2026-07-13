@@ -23,6 +23,7 @@ from scholar_agent.logging import get_logger
 from scholar_agent.models.answer import SourceCard
 from scholar_agent.models.base import EventType, ExecutionEvent, utc_now_iso
 from scholar_agent.models.evidence import EvidenceItem
+from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.retrieval.index_builder import load_toolkit
 from scholar_agent.retrieval.naive_rag import NaiveRAG
 from scholar_agent.retrieval.router import classify_query_type
@@ -190,6 +191,17 @@ class DemoService:
         session = saved.session.model_copy(deep=True)
         session.offline_replay = True
         session.error = None
+        chunks_path = self.config.paths.processed_dir / "chunks.jsonl"
+        if chunks_path.is_file():
+            from scholar_agent.app.source_viewer import validate_saved_run_provenance
+
+            store = ChunkStore.from_processed_dir(self.config.paths.processed_dir)
+            provenance_issues = validate_saved_run_provenance(saved, store)
+            if provenance_issues:
+                session.error = (
+                    "Saved replay provenance is stale; regenerate demo runs. "
+                    + "; ".join(provenance_issues[:3])
+                )
         if not session.trace.corrective_steps and session.events:
             # Older committed replays remain understandable after schema upgrades.
             session.trace.corrective_steps = build_corrective_steps(session.events)
@@ -259,12 +271,14 @@ class DemoService:
         wf_cfg = WorkflowConfig(
             max_corrective_iterations=max_corr,
             max_total_tool_calls=settings.max_total_tool_calls,
+            max_total_tokens=self.config.budgets.max_total_tokens,
             max_latency_ms=self.config.budgets.max_latency_ms,
             research=ResearchAgentConfig(
                 max_tool_calls_per_pass=self.config.budgets.max_tool_calls_per_research_pass,
                 max_evidence_per_sub_question=settings.top_k,
                 max_iterations_per_pass=self.config.budgets.max_research_iterations_per_pass,
                 max_latency_ms=self.config.budgets.max_latency_ms,
+                max_total_tokens_per_pass=self.config.budgets.max_total_tokens,
                 allow_policy_override=not settings.static_routing,
             ),
             parallel_research=False,

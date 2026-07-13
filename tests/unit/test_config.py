@@ -38,6 +38,7 @@ def test_env_overrides_api_key_and_budgets(default_config_path: Path, repo_root:
         scholar_max_tool_calls=2,
         scholar_max_research_iterations=3,
         scholar_max_corrective_iterations=1,
+        scholar_max_total_tokens=1234,
         scholar_log_level="DEBUG",
     )
     updated = apply_env_overrides(cfg, env)
@@ -46,6 +47,7 @@ def test_env_overrides_api_key_and_budgets(default_config_path: Path, repo_root:
     assert updated.budgets.max_tool_calls_per_research_pass == 2
     assert updated.budgets.max_research_iterations_per_pass == 3
     assert updated.budgets.max_corrective_iterations == 1
+    assert updated.budgets.max_total_tokens == 1234
     assert updated.logging.level == "DEBUG"
     # Original config object remains unchanged
     assert cfg.llm.api_key is None

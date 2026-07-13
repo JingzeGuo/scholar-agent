@@ -35,11 +35,15 @@ def detect_repeated_edges(
             continue
         eligible += 1
         head, tail = _edge_lines(page.text)
+        page_edges: set[str] = set()
         for line in head + tail:
             if 3 <= len(line) <= max_line_len:
                 # Normalize page numbers in repeated lines
                 norm = re.sub(r"\b\d+\b", "#", line).strip().lower()
-                counter[norm] += 1
+                page_edges.add(norm)
+        # Count page prevalence, not occurrences.  Two similarly formatted
+        # edge lines on one page are not evidence of a repeated header/footer.
+        counter.update(page_edges)
     if eligible == 0:
         return set()
     threshold = max(2, int(eligible * min_fraction))

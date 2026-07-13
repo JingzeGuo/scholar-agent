@@ -50,6 +50,13 @@ def model_cache_folder() -> str:
     return str((REPO_ROOT / ".cache" / "huggingface" / "hub").resolve())
 
 
+def huggingface_offline_enabled() -> bool:
+    return any(
+        os.getenv(name, "").lower() in {"1", "true", "yes"}
+        for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    )
+
+
 class HashingEmbedder:
     """Deterministic bag-of-tokens hashing embedder for offline tests."""
 
@@ -96,10 +103,24 @@ class SentenceTransformerEmbedder:
         from sentence_transformers import SentenceTransformer
 
         self._model_name = model_name
-        self._model = SentenceTransformer(
-            model_name,
-            cache_folder=model_cache_folder(),
-        )
+        cache_folder = model_cache_folder()
+        try:
+            # Avoid an unnecessary Hugging Face HEAD request when the model is
+            # already cached (important for proxy-restricted/offline demos).
+            self._model = SentenceTransformer(
+                model_name,
+                cache_folder=cache_folder,
+                local_files_only=True,
+            )
+        except Exception as local_exc:  # noqa: BLE001 - library error types vary
+            if huggingface_offline_enabled():
+                raise RuntimeError(
+                    f"Embedding model {model_name!r} is not available in the local cache"
+                ) from local_exc
+            self._model = SentenceTransformer(
+                model_name,
+                cache_folder=cache_folder,
+            )
         # probe dimension
         probe = self._model.encode(["probe"], normalize_embeddings=True)
         self._dimension = int(probe.shape[1])
@@ -149,6 +170,16 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if na == 0.0 or nb == 0.0:
         return 0.0
     return dot / (math.sqrt(na) * math.sqrt(nb))
+
+
+def embedder_backend_name(embedder: Embedder) -> str:
+    """Return a stable implementation identity for persisted index metadata."""
+    if isinstance(embedder, HashingEmbedder):
+        return "hash"
+    if isinstance(embedder, SentenceTransformerEmbedder):
+        return "sentence-transformers"
+    cls = type(embedder)
+    return f"{cls.__module__}.{cls.__qualname__}"
 
 
 def create_embedder(

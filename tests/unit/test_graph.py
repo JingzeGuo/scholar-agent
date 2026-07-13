@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scholar_agent.graph.evidence import find_evidence_span, validate_relation_against_chunk
+from scholar_agent.graph.evidence import (
+    find_evidence_span,
+    localize_relation_to_pages,
+    locate_evidence_pages,
+    validate_relation_against_chunk,
+)
 from scholar_agent.graph.extract import extract_from_chunk
-from scholar_agent.graph.pipeline import build_knowledge_graph
+from scholar_agent.graph.pipeline import build_knowledge_graph, validate_graph_build_meta
 from scholar_agent.graph.resolver import (
     EntityResolutionJudgment,
     EntityResolver,
@@ -19,7 +24,7 @@ from scholar_agent.graph.stats import compute_graph_stats
 from scholar_agent.graph.store import KnowledgeGraphStore
 from scholar_agent.ids import content_hash, make_chunk_id, make_entity_id, make_relation_id
 from scholar_agent.llm.client import ChatResponse
-from scholar_agent.models.corpus import Chunk, Paper
+from scholar_agent.models.corpus import Chunk, Paper, PaperPage
 from scholar_agent.models.graph import Entity, EntityType, Relation, RelationType
 from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.storage.jsonl import JsonlRepository
@@ -113,6 +118,76 @@ def test_evidence_span_must_ground_in_chunk() -> None:
     assert validate_relation_against_chunk(rel, chunk) is not None
     bad_rel = rel.model_copy(update={"evidence_span": "totally fabricated evidence span xyz"})
     assert validate_relation_against_chunk(bad_rel, chunk) is None
+
+
+def test_relation_evidence_is_localized_to_physical_pages() -> None:
+    pages = [
+        PaperPage(
+            paper_id="paper_x",
+            page_number=1,
+            text="Unrelated preceding material in the same long chunk.",
+            char_count=52,
+        ),
+        PaperPage(
+            paper_id="paper_x",
+            page_number=2,
+            text="Earlier material. The method begins",
+            char_count=35,
+        ),
+        PaperPage(
+            paper_id="paper_x",
+            page_number=3,
+            text="with retrieval and then critiques output.",
+            char_count=41,
+        ),
+    ]
+    assert locate_evidence_pages(
+        "The method begins with retrieval",
+        pages,
+        page_start=1,
+        page_end=3,
+    ) == (2, 3)
+    assert locate_evidence_pages(
+        "critiques output",
+        pages,
+        page_start=2,
+        page_end=3,
+    ) == (3, 3)
+    assert (
+        locate_evidence_pages(
+            "unsupported span",
+            pages,
+            page_start=2,
+            page_end=3,
+        )
+        is None
+    )
+
+    text = "Earlier material. The method begins with retrieval and then critiques output."
+    chunk = Chunk(
+        chunk_id="chunk_pages",
+        paper_id="paper_x",
+        text=text,
+        page_start=2,
+        page_end=3,
+        token_count=12,
+        content_hash=content_hash(text),
+    )
+    relation = Relation(
+        relation_id="rel_pages",
+        subject_surface="method",
+        object_surface="retrieval",
+        relation_type=RelationType.USES,
+        evidence_span="The method begins with retrieval",
+        paper_id="paper_x",
+        chunk_id=chunk.chunk_id,
+        page_number=2,
+        page_end=3,
+        confidence=0.8,
+    )
+    localized = localize_relation_to_pages(relation, chunk, pages)
+    assert localized is not None
+    assert (localized.page_number, localized.page_end) == (2, 3)
 
 
 def test_entity_alias_fixtures_resolve(repo_root: Path) -> None:
@@ -237,6 +312,29 @@ def test_extract_and_build_graph_with_supporting_chunks(tmp_path: Path) -> None:
     # Every persisted relation must have evidence
     assert result.stats.n_relations_missing_evidence == 0
     assert all(r.evidence_span.strip() and r.chunk_id for r in result.relations)
+    meta = json.loads(result.meta_path.read_text(encoding="utf-8"))
+    assert meta["corpus_fingerprint"] == ChunkStore.from_processed_dir(processed).fingerprint
+    assert meta["graph_schema"] == "graph-v2-physical-page-ranges"
+
+    # A stale/missing build identity must never cause old graph artifacts to be
+    # reused against a new canonical chunk store or relation schema.
+    result.meta_path.write_text(
+        json.dumps({**meta, "corpus_fingerprint": "0" * 32}) + "\n",
+        encoding="utf-8",
+    )
+    current, reason = validate_graph_build_meta(
+        result.meta_path,
+        corpus_fingerprint=meta["corpus_fingerprint"],
+    )
+    assert current is False
+    assert "fingerprint" in reason
+    rebuilt = build_knowledge_graph(processed_dir=processed, force=False)
+    rebuilt_meta = json.loads(rebuilt.meta_path.read_text(encoding="utf-8"))
+    assert rebuilt_meta["corpus_fingerprint"] == meta["corpus_fingerprint"]
+    assert validate_graph_build_meta(
+        rebuilt.meta_path,
+        corpus_fingerprint=meta["corpus_fingerprint"],
+    ) == (True, "ok")
 
     # Round-trip node-link JSON
     loaded = KnowledgeGraphStore.load_node_link_json(result.graph_path)

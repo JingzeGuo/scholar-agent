@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Literal
 
 from scholar_agent.llm.client import ChatMessage, LLMClient
+from scholar_agent.llm.prompts import (
+    SYSTEM_UNTRUSTED_CONTENT_POLICY,
+    build_evidence_prompt_block,
+)
 from scholar_agent.logging import get_logger
 from scholar_agent.models.retrieval import (
     CitationRef,
@@ -119,21 +123,25 @@ class NaiveRAG:
         citations: list[CitationRef],
     ) -> str:
         assert self.llm is not None
-        blocks: list[str] = []
+        citation_guide: list[str] = []
+        evidence_items: list[tuple[str, str, str]] = []
         for cit, hit in zip(citations, hits, strict=True):
-            blocks.append(
-                f"[{cit.marker}] paper={hit.paper_id} pages={hit.page_label()} "
-                f"chunk={hit.chunk_id}\n{hit.text}"
+            citation_guide.append(
+                f"- {cit.marker}: use {cit.format_inline()} for chunk {hit.chunk_id}"
             )
-        context = "\n\n".join(blocks)
+            evidence_items.append((hit.chunk_id, hit.paper_id, hit.text))
+        context = build_evidence_prompt_block(evidence_items)
+        citation_mapping = "\n".join(citation_guide)
         system = (
             "You are a literature assistant. Answer ONLY using the provided sources. "
             "Every factual sentence must include an inline citation like "
             "[paper_id p.N] or [paper_id p.N-M] using the page fields given. "
-            "If sources are insufficient, say so. Do not invent papers or pages."
+            "If sources are insufficient, say so. Do not invent papers or pages. "
+            f"{SYSTEM_UNTRUSTED_CONTENT_POLICY}"
         )
         user = (
-            f"Question:\n{query}\n\nSources:\n{context}\n\n"
+            f"Question:\n{query}\n\nAllowed citation mapping:\n"
+            f"{citation_mapping}\n\n{context}\n\n"
             "Write a concise answer with inline page citations."
         )
         response = self.llm.chat(

@@ -28,11 +28,22 @@ metrics:
     - unsupported_claim_rate
   answer:
     - claim_overlap
+    - claim_correctness       # deterministic lexical proxy
+    - completeness            # reference-claim lexical recall proxy
     - token_f1
     - refusal_correct
     - faithfulness_proxy
     - ragas_faithfulness   # optional (--ragas)
     - ragas_answer_relevancy
+    - contradiction_handling_accuracy
+  agents_and_operations:
+    - plan_coverage
+    - tool_selection_accuracy
+    - corrective_trigger_precision
+    - improvement_after_correction
+    - input_tokens
+    - output_tokens
+    - error_rate
 
 budgets:
   max_questions: 50

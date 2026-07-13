@@ -12,6 +12,13 @@ from pydantic import BaseModel, Field
 from scholar_agent.agents.researcher import ResearchAgent, ResearchAgentConfig
 from scholar_agent.agents.workflow import ResearchWorkflow, WorkflowConfig, WorkflowResult
 from scholar_agent.evaluation.dataset import EvalQuestion
+from scholar_agent.evaluation.generation import (
+    EVALUATION_ANSWER_PROMPT_ID,
+    generate_evaluation_answer,
+    requested_generation_model,
+)
+from scholar_agent.llm.client import LLMClient
+from scholar_agent.models.base import EventType
 from scholar_agent.models.planning import SubQuestion, SubQuestionStatus
 from scholar_agent.models.retrieval import NaiveRAGAnswer, RetrievalHit, RetrievalResult
 from scholar_agent.retrieval.naive_rag import NaiveRAG
@@ -54,6 +61,8 @@ class SystemOutput(BaseModel):
     latency_ms: int = 0
     tool_call_count: int = 0
     iteration_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
     token_estimate: int = 0
     estimated_cost_usd: float = 0.0
     unanswerable_predicted: bool = False
@@ -98,8 +107,13 @@ class SystemRunner:
     max_corrective_iterations: int = 2
     research_max_tools: int = 3
     use_llm: bool = False
+    llm: LLMClient | None = None
     usd_per_1k_tokens: float = 0.0
     max_latency_ms: int = 120_000
+
+    def __post_init__(self) -> None:
+        if self.use_llm and self.llm is None:
+            raise ValueError("use_llm=True requires an explicitly configured LLM client")
 
     def run(self, system: SystemName | str, question: EvalQuestion) -> SystemOutput:
         started = perf_counter()
@@ -130,13 +144,80 @@ class SystemRunner:
                 error=str(exc),
             )
         out.system = name
-        out.latency_ms = int((perf_counter() - started) * 1000)
-        out.token_estimate = _estimate_tokens(out.answer_text) + sum(
-            _estimate_tokens(h.text) for h in out.hits[: self.top_k]
-        )
+        if self.use_llm and self.llm is not None:
+            try:
+                generation = generate_evaluation_answer(
+                    question=question.question,
+                    hits=list(out.hits[: self.top_k]),
+                    llm=self.llm,
+                    fallback_answer=out.answer_text,
+                )
+                out.answer_text = generation.answer_text
+                out.input_tokens = generation.input_tokens
+                out.output_tokens = generation.output_tokens
+                out.token_estimate = generation.total_tokens
+                if generation.used_llm:
+                    out.cited_paper_ids = list(generation.cited_paper_ids)
+                    out.citation_page_ok = generation.valid_citation_count
+                    out.citation_page_total = generation.citation_count
+                    out.citation_validity_rate = (
+                        generation.valid_citation_count / generation.citation_count
+                        if generation.citation_count
+                        else 0.0
+                    )
+                out.metadata.update(
+                    {
+                        "generation_used": generation.used_llm,
+                        "generation_model": generation.generation_model,
+                        "generation_model_requested": requested_generation_model(self.llm),
+                        "generation_prompt_id": generation.prompt_id,
+                        "generation_regime": "shared_live_llm",
+                        "generation_token_count_source": generation.token_count_source,
+                        "generation_fallback_used": generation.fallback_used,
+                        "generation_skip_reason": generation.skip_reason,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Provider exceptions may contain response bodies; persist only
+                # the exception class in evaluation artifacts.
+                out.error = f"shared generation failed: {type(exc).__name__}"
+                out.input_tokens = sum(_estimate_tokens(h.text) for h in out.hits[: self.top_k])
+                out.output_tokens = _estimate_tokens(out.answer_text)
+                out.token_estimate = out.input_tokens + out.output_tokens
+                out.metadata.update(
+                    {
+                        "generation_used": False,
+                        "generation_model": None,
+                        "generation_model_requested": requested_generation_model(self.llm),
+                        "generation_prompt_id": EVALUATION_ANSWER_PROMPT_ID,
+                        "generation_regime": "shared_live_llm",
+                        "generation_token_count_source": "estimated",
+                        "generation_fallback_used": True,
+                        "generation_skip_reason": "generation_error",
+                    }
+                )
+        else:
+            out.input_tokens = sum(_estimate_tokens(h.text) for h in out.hits[: self.top_k])
+            out.output_tokens = _estimate_tokens(out.answer_text)
+            out.token_estimate = out.input_tokens + out.output_tokens
+            out.metadata.update(
+                {
+                    "generation_used": False,
+                    "generation_model": None,
+                    "generation_model_requested": None,
+                    "generation_prompt_id": None,
+                    "generation_regime": "offline_heterogeneous",
+                    "generation_token_count_source": "estimated",
+                    "generation_fallback_used": False,
+                }
+            )
         out.estimated_cost_usd = _estimate_cost(
             out.token_estimate, usd_per_1k=self.usd_per_1k_tokens
         )
+        out.unanswerable_predicted = out.unanswerable_predicted or _looks_unanswerable(
+            out.answer_text
+        )
+        out.latency_ms = int((perf_counter() - started) * 1000)
         return out
 
     def _run_naive(
@@ -151,7 +232,9 @@ class SystemRunner:
             mode=mode,
             top_k=self.top_k,
         )
-        answer: NaiveRAGAnswer = rag.answer(question.question, use_llm=self.use_llm)
+        # Generation is deliberately applied once in ``run`` so every live
+        # system receives the same model and answer prompt.
+        answer: NaiveRAGAnswer = rag.answer(question.question, use_llm=False)
         return SystemOutput(
             system=system_name,
             question_id=question.question_id,
@@ -169,7 +252,12 @@ class SystemRunner:
             tool_call_count=1,
             iteration_count=1,
             unanswerable_predicted=_looks_unanswerable(answer.answer),
-            metadata={"mode": mode, "used_llm": answer.used_llm},
+            metadata={
+                "mode": mode,
+                "selected_tools": [mode],
+                "adaptive_routing": False,
+                "naive_rag_internal_llm_used": answer.used_llm,
+            },
         )
 
     def _run_hybrid_graph(self, question: EvalQuestion) -> SystemOutput:
@@ -201,7 +289,11 @@ class SystemRunner:
             tool_call_count=2 if graph_hits or self.toolkit.graph is not None else 1,
             iteration_count=1,
             unanswerable_predicted=_looks_unanswerable(answer),
-            metadata={"n_graph_hits": len(graph_hits)},
+            metadata={
+                "n_graph_hits": len(graph_hits),
+                "selected_tools": ["hybrid_rerank"] + (["graph"] if graph_hits else []),
+                "adaptive_routing": False,
+            },
         )
 
     def _run_workflow(self, question: EvalQuestion, *, full: bool) -> SystemOutput:
@@ -271,6 +363,7 @@ class SystemRunner:
                 )
             )
 
+        workflow_diagnostics = _workflow_diagnostics(result, top_k=self.top_k)
         return SystemOutput(
             system="full_agent" if full else "hybrid_corrective",
             question_id=question.question_id,
@@ -291,7 +384,9 @@ class SystemRunner:
             metadata={
                 "terminated_reason": result.terminated_reason,
                 "coverage": result.verification.coverage_score,
-                "corrective_triggered": result.iteration > 0,
+                "adaptive_routing": True,
+                "conflicting_evidence_ids": list(result.verification.conflicting_evidence_ids),
+                **workflow_diagnostics,
             },
         )
 
@@ -304,11 +399,13 @@ class SystemRunner:
         ]
         groups: list[list[RetrievalHit]] = []
         tools = 0
+        executed_modes: list[str] = []
         for mode in modes:
             try:
                 res = self.toolkit.search(question.question, mode=mode, k=self.top_k)
                 groups.append(list(res.hits))
                 tools += 1
+                executed_modes.append(mode)
             except Exception:  # noqa: BLE001
                 continue
         if self.toolkit.graph is not None:
@@ -316,6 +413,7 @@ class SystemRunner:
                 res = self.toolkit.search(question.question, mode="graph", k=self.top_k)
                 groups.append(list(res.hits))
                 tools += 1
+                executed_modes.append("graph")
             except Exception:  # noqa: BLE001
                 pass
         hits = _merge_hits(*groups, limit=self.top_k)
@@ -335,7 +433,11 @@ class SystemRunner:
             tool_call_count=tools,
             iteration_count=1,
             unanswerable_predicted=_looks_unanswerable(answer),
-            metadata={"modes": list(modes)},
+            metadata={
+                "modes": list(modes),
+                "selected_tools": executed_modes,
+                "adaptive_routing": False,
+            },
         )
 
     def _hit_provenance_rate(self, hits: list[RetrievalHit]) -> float:
@@ -393,6 +495,67 @@ def _looks_unanswerable(text: str) -> bool:
         "no verified evidence",
     )
     return any(c in low for c in cues)
+
+
+def _workflow_diagnostics(result: WorkflowResult, *, top_k: int) -> dict[str, Any]:
+    """Extract measurable routing/corrective facts from structured events."""
+    selected_tools: list[str] = []
+    selected_policies: list[str] = []
+    fallback_chunk_ids: set[str] = set()
+    fallback_paper_ids: set[str] = set()
+    initial_chunk_ids: list[str] = []
+    initial_paper_ids: list[str] = []
+    corrective_seen = False
+    corrective_triggered = False
+    initial_results_observed = False
+
+    for event in result.events:
+        if event.event_type == EventType.CORRECTIVE:
+            corrective_seen = True
+            corrective_triggered = True
+            continue
+        if event.event_type == EventType.TOOL_SELECTED:
+            tool = event.payload.get("tool_name")
+            policy = event.payload.get("policy")
+            if tool:
+                selected_tools.append(str(tool))
+            if policy:
+                selected_policies.append(str(policy))
+        elif event.event_type == EventType.TOOL_RESULT and not corrective_seen:
+            initial_results_observed = True
+            for hit in event.payload.get("hits") or []:
+                chunk_id = hit.get("chunk_id")
+                paper_id = hit.get("paper_id")
+                if chunk_id:
+                    fallback_chunk_ids.add(str(chunk_id))
+                if paper_id:
+                    fallback_paper_ids.add(str(paper_id))
+        elif (
+            event.event_type == EventType.ITERATION
+            and event.payload.get("iteration") == 0
+            and not initial_chunk_ids
+        ):
+            initial_chunk_ids = [
+                str(value) for value in event.payload.get("evidence_chunk_ids") or []
+            ][:top_k]
+            initial_paper_ids = [
+                str(value) for value in event.payload.get("evidence_paper_ids") or []
+            ][:top_k]
+
+    if not initial_chunk_ids:
+        # Backward-compatible fallback for saved/third-party workflow results
+        # created before ordered iteration snapshots were added.
+        initial_chunk_ids = sorted(fallback_chunk_ids)[:top_k]
+        initial_paper_ids = sorted(fallback_paper_ids)[:top_k]
+
+    return {
+        "selected_tools": selected_tools,
+        "selected_policies": selected_policies,
+        "corrective_triggered": corrective_triggered,
+        "initial_results_observed": initial_results_observed,
+        "initial_chunk_ids": initial_chunk_ids,
+        "initial_paper_ids": initial_paper_ids,
+    }
 
 
 def make_research_agent_for_question(

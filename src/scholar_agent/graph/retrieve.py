@@ -242,6 +242,7 @@ class GraphRetriever:
             "chunk_id": attrs.get("chunk_id"),
             "paper_id": attrs.get("paper_id"),
             "page_number": attrs.get("page_number"),
+            "page_end": attrs.get("page_end") or attrs.get("page_number"),
             "evidence_span": attrs.get("evidence_span"),
             "confidence": attrs.get("confidence"),
             "subject": source,

@@ -114,4 +114,12 @@ def validate_saved_run_provenance(
     *,
     repo_root: Path = REPO_ROOT,
 ) -> list[str]:
-    return validate_session_provenance(run.session, store, repo_root=repo_root)
+    issues = validate_session_provenance(run.session, store, repo_root=repo_root)
+    if run.corpus_fingerprint != store.fingerprint:
+        issues.insert(
+            0,
+            "saved replay corpus fingerprint does not match canonical chunks",
+        )
+    if not run.provenance_verified:
+        issues.insert(0, "saved replay is not marked provenance-verified")
+    return issues

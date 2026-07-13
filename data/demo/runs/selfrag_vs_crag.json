@@ -14,10 +14,10 @@
     "use_llm": false,
     "max_total_tool_calls": 12
   },
-  "created_at": "2026-07-12T09:22:35+00:00",
+  "created_at": "2026-07-13T14:11:59+00:00",
   "offline": true,
   "notes": "Shows corrective iteration when one comparison side is initially missing.",
-  "corpus_fingerprint": "c639ca3f202ab39b7d9b88cbde24b61e",
+  "corpus_fingerprint": "79d20fac73b0ced268b99b457766bd67",
   "provenance_verified": true,
   "session": {
     "run_id": "run_demo_selfrag_crag",
@@ -35,7 +35,7 @@
       "max_total_tool_calls": 12
     },
     "offline_replay": true,
-    "answer_markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1]\n",
+    "answer_markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand. [paper_arxiv_2310_11511 pp.10-11]\n- CRAG evaluates retrieved documents and triggers corrective retrieval. [paper_arxiv_2401_15884 p.1]\n",
     "claims": [
       {
         "claim_id": "claim_1",
@@ -56,12 +56,12 @@
       {
         "evidence_id": "ev_selfrag",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_44327db3f15dab2a",
-        "page_start": 1,
-        "page_end": 1,
-        "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand ret",
+        "chunk_id": "chunk_f455b1d5de22e9ef",
+        "page_start": 10,
+        "page_end": 11,
+        "snippet": "This work introduces SELF-RAG, a new framework to enhance the quality and factuality of LLMs\nthrough retrieval on demand and self-reflection. SELF-RAG trains an LM to learn to retrieve, generate,\nand critique text passages and its own generation by predicting the next tokens from its original\nvocabulary as well as newly added special tokens, called reflection tokens. SELF-RAG further enables\nthe tailoring of LM behaviors at test time by leveraging reflection tokens. Our holistic evaluations on\nsix tasks using multiple metrics demonstrate that SELF-RAG significantly outperforms LLMs with\nmore parameters or with conventional retrieval-augmented generation approaches.\n10\n\nETHICAL CONCERNS\nThis work aims to improve the factuality of LLM outputs, the lack of which continues to cause nu-\nmerous ",
         "retrieval_method": "hybrid_rerank",
-        "title": "Self-RAG",
+        "title": "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection",
         "pdf_path": "data/papers/2310.11511.pdf"
       },
       {
@@ -70,9 +70,9 @@
         "chunk_id": "chunk_80df894da22e4964",
         "page_start": 1,
         "page_end": 1,
-        "snippet": "Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval",
+        "snippet": "Large language models (LLMs) inevitably\nexhibit hallucinations since the accuracy of\ngenerated texts cannot be secured solely by\nthe parametric knowledge they encapsulate. Al-\nthough retrieval-augmented generation (RAG)\nis a practicable complement to LLMs, it relies\nheavily on the relevance of retrieved docu-\nments, raising concerns about how the model\nbehaves if retrieval goes wrong. To this end, we\npropose the Corrective Retrieval Augmented\nGeneration (CRAG) to improve the robustness\nof generation.\nSpecifically, a lightweight\nretrieval evaluator is designed to assess the\noverall quality of retrieved documents for a\nquery, returning a confidence degree based\non which different knowledge retrieval ac-\ntions can be triggered. Since retrieval from\nstatic and limited corpora can only return s",
         "retrieval_method": "hybrid_rerank",
-        "title": "CRAG",
+        "title": "Corrective Retrieval Augmented Generation",
         "pdf_path": "data/papers/2401.15884.pdf"
       }
     ],
@@ -81,11 +81,11 @@
         "evidence_id": "ev_selfrag",
         "sub_question_id": "sq_0",
         "claim": "Self-RAG uses reflection tokens to retrieve on demand.",
-        "evidence_text": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection. Reflection tokens are categorized into retrieval and critique tokens to indicate the need for retrieval and its generation quality respectively.",
+        "evidence_text": "This work introduces SELF-RAG, a new framework to enhance the quality and factuality of LLMs\nthrough retrieval on demand and self-reflection. SELF-RAG trains an LM to learn to retrieve, generate,\nand critique text passages and its own generation by predicting the next tokens from its original\nvocabulary as well as newly added special tokens, called reflection tokens. SELF-RAG further enables\nthe tailoring of LM behaviors at test time by leveraging reflection tokens. Our holistic evaluations on\nsix tasks using multiple metrics demonstrate that SELF-RAG significantly outperforms LLMs with\nmore parameters or with conventional retrieval-augmented generation approaches.\n10\n\nETHICAL CONCERNS\nThis work aims to improve the factuality of LLM outputs, the lack of which continues to cause nu-\nmerous real-world problems (e.g., spread of misinformation and provision of incorrect and dangerous\nadvice). While our method shows significant improvements in terms of performance, factuality, and\ncitation accuracy, it can still generate outputs that are not fully supported by the citations. We hope\nthat explicit self-reflection and fine-grained attribution may help users verify factual errors in the\nmodel outputs.",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_44327db3f15dab2a",
-        "page_start": 1,
-        "page_end": 1,
+        "chunk_id": "chunk_f455b1d5de22e9ef",
+        "page_start": 10,
+        "page_end": 11,
         "retrieval_method": "hybrid_rerank",
         "retrieval_score": 0.91,
         "rerank_score": null,
@@ -96,7 +96,7 @@
         "evidence_id": "ev_crag",
         "sub_question_id": "sq_1",
         "claim": "CRAG evaluates retrieved documents and triggers corrective retrieval.",
-        "evidence_text": "Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval actions can be triggered.",
+        "evidence_text": "Large language models (LLMs) inevitably\nexhibit hallucinations since the accuracy of\ngenerated texts cannot be secured solely by\nthe parametric knowledge they encapsulate. Al-\nthough retrieval-augmented generation (RAG)\nis a practicable complement to LLMs, it relies\nheavily on the relevance of retrieved docu-\nments, raising concerns about how the model\nbehaves if retrieval goes wrong. To this end, we\npropose the Corrective Retrieval Augmented\nGeneration (CRAG) to improve the robustness\nof generation.\nSpecifically, a lightweight\nretrieval evaluator is designed to assess the\noverall quality of retrieved documents for a\nquery, returning a confidence degree based\non which different knowledge retrieval ac-\ntions can be triggered. Since retrieval from\nstatic and limited corpora can only return sub-\noptimal documents, large-scale web searches\nare utilized as an extension for augmenting the\nretrieval results. Besides, a decompose-then-\nrecompose algorithm is designed for retrieved\ndocuments to selectively focus on key infor-\nmation and filter out irrelevant information in\nthem.\nCRAG is plug-and-play and can be\nseamlessly coupled with various RAG-based\napproaches.\nExperiments on four datasets\ncovering short- and long-form generation tasks\nshow that CRAG can significantly improve the\nperformance of RAG-based approaches. 1\n1",
         "paper_id": "paper_arxiv_2401_15884",
         "chunk_id": "chunk_80df894da22e4964",
         "page_start": 1,
@@ -153,7 +153,7 @@
       "rationale_summary": "Both comparison sides covered after one corrective pass."
     },
     "final_answer": {
-      "markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand [paper_arxiv_2310_11511 p.1]\n- CRAG evaluates retrieved documents and triggers corrective retrieval [paper_arxiv_2401_15884 p.1]\n",
+      "markdown": "## Answer\n\n**Question:** Compare Self-RAG versus CRAG\n\n### Claims\n\n- Self-RAG uses reflection tokens to retrieve on demand. [paper_arxiv_2310_11511 pp.10-11]\n- CRAG evaluates retrieved documents and triggers corrective retrieval. [paper_arxiv_2401_15884 p.1]\n",
       "claims": [
         {
           "claim_id": "claim_1",
@@ -171,19 +171,19 @@
         }
       ],
       "sources": [
-        "Self-RAG [paper_arxiv_2310_11511] p.1 (chunk=chunk_44327db3f15dab2a, evidence=ev_selfrag) · PDF=data/papers/2310.11511.pdf",
-        "CRAG [paper_arxiv_2401_15884] p.1 (chunk=chunk_80df894da22e4964, evidence=ev_crag) · PDF=data/papers/2401.15884.pdf"
+        "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection [paper_arxiv_2310_11511] p.10-11 (chunk=chunk_f455b1d5de22e9ef, evidence=ev_selfrag) · PDF=data/papers/2310.11511.pdf",
+        "Corrective Retrieval Augmented Generation [paper_arxiv_2401_15884] p.1 (chunk=chunk_80df894da22e4964, evidence=ev_crag) · PDF=data/papers/2401.15884.pdf"
       ],
       "source_cards": [
         {
           "evidence_id": "ev_selfrag",
           "paper_id": "paper_arxiv_2310_11511",
-          "chunk_id": "chunk_44327db3f15dab2a",
-          "page_start": 1,
-          "page_end": 1,
-          "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand ret",
+          "chunk_id": "chunk_f455b1d5de22e9ef",
+          "page_start": 10,
+          "page_end": 11,
+          "snippet": "This work introduces SELF-RAG, a new framework to enhance the quality and factuality of LLMs\nthrough retrieval on demand and self-reflection. SELF-RAG trains an LM to learn to retrieve, generate,\nand critique text passages and its own generation by predicting the next tokens from its original\nvocabulary as well as newly added special tokens, called reflection tokens. SELF-RAG further enables\nthe tailoring of LM behaviors at test time by leveraging reflection tokens. Our holistic evaluations on\nsix tasks using multiple metrics demonstrate that SELF-RAG significantly outperforms LLMs with\nmore parameters or with conventional retrieval-augmented generation approaches.\n10\n\nETHICAL CONCERNS\nThis work aims to improve the factuality of LLM outputs, the lack of which continues to cause nu-\nmerous ",
           "retrieval_method": "hybrid_rerank",
-          "title": "Self-RAG",
+          "title": "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection",
           "pdf_path": "data/papers/2310.11511.pdf"
         },
         {
@@ -192,9 +192,9 @@
           "chunk_id": "chunk_80df894da22e4964",
           "page_start": 1,
           "page_end": 1,
-          "snippet": "Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval",
+          "snippet": "Large language models (LLMs) inevitably\nexhibit hallucinations since the accuracy of\ngenerated texts cannot be secured solely by\nthe parametric knowledge they encapsulate. Al-\nthough retrieval-augmented generation (RAG)\nis a practicable complement to LLMs, it relies\nheavily on the relevance of retrieved docu-\nments, raising concerns about how the model\nbehaves if retrieval goes wrong. To this end, we\npropose the Corrective Retrieval Augmented\nGeneration (CRAG) to improve the robustness\nof generation.\nSpecifically, a lightweight\nretrieval evaluator is designed to assess the\noverall quality of retrieved documents for a\nquery, returning a confidence degree based\non which different knowledge retrieval ac-\ntions can be triggered. Since retrieval from\nstatic and limited corpora can only return s",
           "retrieval_method": "hybrid_rerank",
-          "title": "CRAG",
+          "title": "Corrective Retrieval Augmented Generation",
           "pdf_path": "data/papers/2401.15884.pdf"
         }
       ],
@@ -214,19 +214,19 @@
     },
     "events": [
       {
-        "event_id": "evt_44a2d31e1635",
+        "event_id": "evt_5a10dbffb7b0",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "plan_created",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "planner",
         "summary": "plan answer_type=comparison sub_questions=2",
         "payload": {}
       },
       {
-        "event_id": "evt_b650f762f2f0",
+        "event_id": "evt_b732491a68df",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "tool_result",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "researcher",
         "summary": "hybrid_rerank hits for Self-RAG",
         "payload": {
@@ -235,10 +235,10 @@
         }
       },
       {
-        "event_id": "evt_658087c590cd",
+        "event_id": "evt_3c392870a862",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "verification",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "verifier",
         "summary": "missing CRAG side",
         "payload": {
@@ -246,19 +246,19 @@
         }
       },
       {
-        "event_id": "evt_6fac12859248",
+        "event_id": "evt_fe4d9a214f73",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "corrective",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "workflow",
         "summary": "corrective iteration 1: 1 queries",
         "payload": {}
       },
       {
-        "event_id": "evt_724e1a7a9413",
+        "event_id": "evt_35676fa0ceac",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "tool_result",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "researcher",
         "summary": "hybrid_rerank found CRAG evidence",
         "payload": {
@@ -267,10 +267,10 @@
         }
       },
       {
-        "event_id": "evt_fd2d3f388b5c",
+        "event_id": "evt_a124ecf636fa",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "verification",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "verifier",
         "summary": "both comparison sides covered",
         "payload": {
@@ -278,10 +278,10 @@
         }
       },
       {
-        "event_id": "evt_6316dc077b4e",
+        "event_id": "evt_ad4184155132",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "citation_validated",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "citation_validator",
         "summary": "citation valid=True claims=2",
         "payload": {
@@ -289,10 +289,10 @@
         }
       },
       {
-        "event_id": "evt_bdbaaefe8dcb",
+        "event_id": "evt_60896b20d345",
         "run_id": "run_demo_selfrag_crag",
         "event_type": "run_finished",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:11:59+00:00",
         "component": "workflow",
         "summary": "workflow finished: evidence_sufficient",
         "payload": {}
@@ -342,7 +342,7 @@
           "kind": "verification",
           "component": "verifier",
           "summary": "missing CRAG side",
-          "timestamp": "2026-07-12T09:22:35+00:00",
+          "timestamp": "2026-07-13T14:11:59+00:00",
           "is_sufficient": false,
           "method": null
         },
@@ -351,7 +351,7 @@
           "kind": "corrective",
           "component": "workflow",
           "summary": "corrective iteration 1: 1 queries",
-          "timestamp": "2026-07-12T09:22:35+00:00",
+          "timestamp": "2026-07-13T14:11:59+00:00",
           "is_sufficient": null,
           "method": null
         },
@@ -360,7 +360,7 @@
           "kind": "tool_result",
           "component": "researcher",
           "summary": "hybrid_rerank found CRAG evidence",
-          "timestamp": "2026-07-12T09:22:35+00:00",
+          "timestamp": "2026-07-13T14:11:59+00:00",
           "is_sufficient": null,
           "method": "hybrid_rerank"
         },
@@ -369,7 +369,7 @@
           "kind": "verification",
           "component": "verifier",
           "summary": "both comparison sides covered",
-          "timestamp": "2026-07-12T09:22:35+00:00",
+          "timestamp": "2026-07-13T14:11:59+00:00",
           "is_sufficient": true,
           "method": null
         },
@@ -378,7 +378,7 @@
           "kind": "run_finished",
           "component": "workflow",
           "summary": "workflow finished: evidence_sufficient",
-          "timestamp": "2026-07-12T09:22:35+00:00",
+          "timestamp": "2026-07-13T14:11:59+00:00",
           "is_sufficient": null,
           "method": null
         }
@@ -402,7 +402,8 @@
     },
     "status": {
       "ok": true,
-      "offline_fixture": true
+      "offline_fixture": true,
+      "fixture_provenance": "canonical"
     },
     "error": null
   }

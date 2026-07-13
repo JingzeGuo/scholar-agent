@@ -6,7 +6,7 @@ import re
 from typing import Protocol, runtime_checkable
 
 from scholar_agent.models.retrieval import RetrievalHit
-from scholar_agent.retrieval.embeddings import model_cache_folder
+from scholar_agent.retrieval.embeddings import huggingface_offline_enabled, model_cache_folder
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.I)
 
@@ -61,10 +61,22 @@ class CrossEncoderReranker:
         from sentence_transformers import CrossEncoder
 
         self._model_name = model_name
-        self._model = CrossEncoder(
-            model_name,
-            cache_folder=model_cache_folder(),
-        )
+        cache_folder = model_cache_folder()
+        try:
+            self._model = CrossEncoder(
+                model_name,
+                cache_folder=cache_folder,
+                local_files_only=True,
+            )
+        except Exception as local_exc:  # noqa: BLE001 - library error types vary
+            if huggingface_offline_enabled():
+                raise RuntimeError(
+                    f"Reranker model {model_name!r} is not available in the local cache"
+                ) from local_exc
+            self._model = CrossEncoder(
+                model_name,
+                cache_folder=cache_folder,
+            )
 
     @property
     def model_name(self) -> str:

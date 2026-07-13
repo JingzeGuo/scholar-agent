@@ -14,10 +14,10 @@
     "use_llm": false,
     "max_total_tool_calls": 12
   },
-  "created_at": "2026-07-12T09:22:35+00:00",
+  "created_at": "2026-07-13T14:12:00+00:00",
   "offline": true,
   "notes": "Demonstrates corpus insufficiency / refusal path.",
-  "corpus_fingerprint": "c639ca3f202ab39b7d9b88cbde24b61e",
+  "corpus_fingerprint": "79d20fac73b0ced268b99b457766bd67",
   "provenance_verified": true,
   "session": {
     "run_id": "run_demo_unanswerable",
@@ -82,19 +82,19 @@
     },
     "events": [
       {
-        "event_id": "evt_83dec101672b",
+        "event_id": "evt_1dd4a341d23a",
         "run_id": "run_demo_unanswerable",
         "event_type": "verification",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:12:00+00:00",
         "component": "verifier",
         "summary": "corpus_cannot_answer",
         "payload": {}
       },
       {
-        "event_id": "evt_f9e810c52c5e",
+        "event_id": "evt_00df44bb5361",
         "run_id": "run_demo_unanswerable",
         "event_type": "run_finished",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:12:00+00:00",
         "component": "workflow",
         "summary": "workflow finished: corpus_cannot_answer",
         "payload": {}
@@ -132,7 +132,8 @@
     },
     "status": {
       "ok": true,
-      "offline_fixture": true
+      "offline_fixture": true,
+      "fixture_provenance": "canonical"
     },
     "error": null
   }

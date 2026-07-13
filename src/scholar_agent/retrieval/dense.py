@@ -10,7 +10,12 @@ from typing import Any
 from scholar_agent.models.corpus import Chunk
 from scholar_agent.models.retrieval import RetrievalFilters, RetrievalHit
 from scholar_agent.retrieval.chunk_store import ChunkStore
-from scholar_agent.retrieval.embeddings import Embedder, HashingEmbedder, create_embedder
+from scholar_agent.retrieval.embeddings import (
+    Embedder,
+    HashingEmbedder,
+    create_embedder,
+    embedder_backend_name,
+)
 from scholar_agent.retrieval.sparse import _passes_filters
 
 
@@ -94,6 +99,7 @@ class DenseIndex:
             "chunk_ids": ids,
             "n_docs": len(ids),
             "embedder": embedder.model_name,
+            "embedder_backend": embedder_backend_name(embedder),
             "dimension": embedder.dimension,
             "collection_name": collection_name,
         }
@@ -140,6 +146,18 @@ class DenseIndex:
             model_name = str(meta.get("embedder") or "hashing-embedder-v1")
             backend = "hash" if model_name.startswith("hash") else "st"
             embedder = create_embedder(model_name, backend=backend)
+        elif verify:
+            expected = {
+                "embedder": embedder.model_name,
+                "embedder_backend": embedder_backend_name(embedder),
+                "dimension": embedder.dimension,
+            }
+            mismatches = [key for key, value in expected.items() if meta.get(key) != value]
+            if mismatches:
+                fields = ", ".join(mismatches)
+                raise ValueError(
+                    f"dense index embedder metadata mismatch ({fields}); rebuild required"
+                )
         return cls(
             collection=collection,
             embedder=embedder,

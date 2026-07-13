@@ -17,12 +17,15 @@ from scholar_agent.evaluation.dataset import (
     load_eval_dataset,
     validate_dataset_against_store,
 )
+from scholar_agent.evaluation.generation import EVALUATION_ANSWER_PROMPT_ID
 from scholar_agent.evaluation.ragas_runtime import create_ragas_evaluator
 from scholar_agent.evaluation.report import (
     EvaluationReport,
     compute_config_fingerprint,
     write_report,
 )
+from scholar_agent.graph.pipeline import GraphBuildMeta
+from scholar_agent.llm.client import create_llm_client
 from scholar_agent.logging import get_logger
 from scholar_agent.retrieval.index_builder import load_toolkit
 
@@ -205,13 +208,16 @@ def run_evaluation(
             ragas_evaluator, ragas_status = create_ragas_evaluator(
                 cfg.llm,
                 toolkit.dense.embedder,
+                cache_dir=cfg.paths.evaluation_dir / ".cache",
             )
+    generation_client = create_llm_client(cfg) if use_llm else None
     runner = SystemRunner(
         toolkit,
         top_k=top_k,
         max_corrective_iterations=cfg.budgets.max_corrective_iterations,
         research_max_tools=cfg.budgets.max_tool_calls_per_research_pass,
         use_llm=use_llm,
+        llm=generation_client,
         usd_per_1k_tokens=usd_per_1k_tokens,
         max_latency_ms=max_latency_ms,
     )
@@ -228,14 +234,42 @@ def run_evaluation(
         usd_per_1k_tokens=usd_per_1k_tokens,
     )
     report, _rows = run_ablation(dataset, runner, ablation_cfg)
+    generation_models = sorted(
+        {
+            str(row.output.metadata["generation_model"])
+            for row in _rows
+            if row.output.metadata.get("generation_model")
+        }
+    )
+    graph_meta: GraphBuildMeta | None = None
+    graph_meta_path = cfg.paths.processed_dir / "graph_meta.json"
+    if graph_meta_path.is_file():
+        try:
+            graph_meta = GraphBuildMeta.model_validate_json(
+                graph_meta_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            graph_meta = None
     report.config.update(
         {
+            "canonical_corpus_fingerprint": toolkit.store.fingerprint,
             "embedding_backend_requested": embedding_backend,
             "embedding_model_actual": (
                 toolkit.dense.embedder.model_name if toolkit.dense is not None else None
             ),
             "reranker_model_actual": (
                 toolkit.reranker.model_name if toolkit.reranker is not None else None
+            ),
+            "dense_index_corpus_fingerprint": (
+                toolkit.dense.meta.get("corpus_fingerprint") if toolkit.dense is not None else None
+            ),
+            "sparse_index_corpus_fingerprint": (
+                toolkit.sparse.meta.corpus_fingerprint if toolkit.sparse is not None else None
+            ),
+            "graph_loaded": toolkit.graph is not None,
+            "graph_schema": graph_meta.graph_schema if graph_meta is not None else None,
+            "graph_corpus_fingerprint": (
+                graph_meta.corpus_fingerprint if graph_meta is not None else None
             ),
             "dataset_fingerprint": (dataset.split.fingerprint_sha256 if dataset.split else None),
             "questions_path": str(paths.questions_path),
@@ -248,8 +282,24 @@ def run_evaluation(
             "ragas_provider": ragas_status.get("provider"),
             "ragas_model": ragas_status.get("model"),
             "ragas_embedding_model": ragas_status.get("embedding_model"),
+            "ragas_cache_schema": ragas_status.get("cache_schema"),
+            "ragas_cache_hits": ragas_status.get("cache_hits"),
+            "ragas_cache_misses": ragas_status.get("cache_misses"),
+            "ragas_cache_stores": ragas_status.get("cache_stores"),
+            "ragas_cache_invalidations": ragas_status.get("cache_invalidations"),
+            "ragas_cache_corruptions": ragas_status.get("cache_corruptions"),
+            "ragas_evaluation_status": ragas_status.get("evaluation_status"),
+            "ragas_evaluation_attempts": ragas_status.get("evaluation_attempts"),
+            "ragas_cached_evaluations": ragas_status.get("cached_evaluations"),
+            "ragas_successful_metric_counts": ragas_status.get("successful_metric_counts"),
+            "ragas_metric_failure_counts": ragas_status.get("metric_failure_counts"),
+            "ragas_metric_failure_details": ragas_status.get("metric_failure_details"),
             "ragas_status_reason": ragas_status.get("reason"),
             "use_live_llm": use_llm,
+            "generation_regime": ("shared_live_llm" if use_llm else "offline_heterogeneous"),
+            "generation_prompt_id": (EVALUATION_ANSWER_PROMPT_ID if use_llm else None),
+            "generation_model_requested": (cfg.llm.fast_model if use_llm else None),
+            "generation_models_actual": generation_models,
             "random_seed": int(eval_data.get("random_seed", 0)),
             **_code_provenance(Path(__file__).resolve().parents[3]),
         }
@@ -260,6 +310,12 @@ def run_evaluation(
             "RAGAS was requested but could not be configured: "
             f"{ragas_status.get('reason', 'unknown reason')}. "
             "RAGAS fields are null rather than zero."
+        )
+    elif use_ragas and ragas_status.get("evaluation_status") in {"partial", "failed"}:
+        report.notes.append(
+            "RAGAS completed with structured metric failures: "
+            f"{ragas_status.get('metric_failure_counts')}. "
+            "Successful metric values remain available and cacheable."
         )
     out_paths = write_report(report, paths.output_dir, write_charts=write_charts)
     logger.info(

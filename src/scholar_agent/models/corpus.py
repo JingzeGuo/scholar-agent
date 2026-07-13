@@ -73,6 +73,7 @@ class Paper(BaseModel):
     content_hash: str
     topic_labels: list[str] = Field(default_factory=list)
     page_count: int | None = None
+    ingestion_config_fingerprint: str | None = None
 
     @field_validator("paper_id", "title", "pdf_path", "content_hash")
     @classmethod

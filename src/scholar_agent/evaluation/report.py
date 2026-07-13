@@ -15,6 +15,7 @@ class SystemSummary(BaseModel):
     system: str
     n_questions: int = 0
     n_errors: int = 0
+    error_rate: float = 0.0
     recall_at_k: float = 0.0
     recall_at_k_paper: float = 0.0
     mrr: float = 0.0
@@ -25,18 +26,33 @@ class SystemSummary(BaseModel):
     citation_validity_rate: float = 0.0
     page_traceability_rate: float = 0.0
     claim_overlap: float = 0.0
+    claim_correctness: float = 0.0
+    completeness: float = 0.0
     token_f1: float = 0.0
     refusal_correct: float = 0.0
     faithfulness_proxy: float = 0.0
     ragas_faithfulness: float | None = None
     ragas_answer_relevancy: float | None = None
     ragas_coverage_rate: float = 0.0
+    contradiction_handling_accuracy: float | None = None
+    contradiction_metric_coverage_rate: float = 0.0
+    plan_coverage: float | None = None
+    plan_coverage_metric_coverage_rate: float = 0.0
+    tool_selection_accuracy: float | None = None
+    tool_selection_metric_coverage_rate: float = 0.0
+    corrective_trigger_precision: float | None = None
+    corrective_trigger_metric_coverage_rate: float = 0.0
+    improvement_after_correction: float | None = None
+    correction_improvement_metric_coverage_rate: float = 0.0
     unique_useful_evidence_per_tool_call: float = 0.0
     avg_latency_ms: float = 0.0
     avg_tool_calls: float = 0.0
+    avg_iterations: float = 0.0
+    avg_input_tokens: float = 0.0
+    avg_output_tokens: float = 0.0
     avg_tokens: float = 0.0
     total_estimated_cost_usd: float = 0.0
-    by_type: dict[str, dict[str, float]] = Field(default_factory=dict)
+    by_type: dict[str, dict[str, float | None]] = Field(default_factory=dict)
 
 
 class EvaluationReport(BaseModel):
@@ -80,6 +96,7 @@ def write_report(
         "system",
         "n_questions",
         "n_errors",
+        "error_rate",
         "recall_at_k",
         "recall_at_k_paper",
         "mrr",
@@ -90,15 +107,30 @@ def write_report(
         "citation_validity_rate",
         "page_traceability_rate",
         "claim_overlap",
+        "claim_correctness",
+        "completeness",
         "token_f1",
         "refusal_correct",
         "faithfulness_proxy",
         "ragas_faithfulness",
         "ragas_answer_relevancy",
         "ragas_coverage_rate",
+        "contradiction_handling_accuracy",
+        "contradiction_metric_coverage_rate",
+        "plan_coverage",
+        "plan_coverage_metric_coverage_rate",
+        "tool_selection_accuracy",
+        "tool_selection_metric_coverage_rate",
+        "corrective_trigger_precision",
+        "corrective_trigger_metric_coverage_rate",
+        "improvement_after_correction",
+        "correction_improvement_metric_coverage_rate",
         "unique_useful_evidence_per_tool_call",
         "avg_latency_ms",
         "avg_tool_calls",
+        "avg_iterations",
+        "avg_input_tokens",
+        "avg_output_tokens",
         "avg_tokens",
         "total_estimated_cost_usd",
     ]
@@ -127,6 +159,49 @@ def write_report(
         encoding="utf-8",
     )
     paths["failures_json"] = fail_path
+
+    corrective_path = out / "corrective_before_after.json"
+    corrective_examples = [
+        {
+            key: row.get(key)
+            for key in (
+                "system",
+                "question_id",
+                "question_type",
+                "initial_chunk_ids",
+                "initial_paper_ids",
+                "final_chunk_ids",
+                "final_paper_ids",
+                "initial_recall_at_k",
+                "initial_recall_at_k_paper",
+                "correction_recall_basis",
+                "recall_at_k",
+                "recall_at_k_paper",
+                "improvement_after_correction",
+                "corrective_trigger_correct",
+            )
+        }
+        for row in report.per_question
+        if row.get("corrective_triggered") is True
+    ]
+    corrective_path.write_text(
+        json.dumps(
+            {
+                "definition": (
+                    "Before is retrieval observed prior to the first corrective event; "
+                    "after is the final evaluated evidence set. Null means the required "
+                    "structured event or gold label was unavailable."
+                ),
+                "n_examples": len(corrective_examples),
+                "examples": corrective_examples,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    paths["corrective_before_after_json"] = corrective_path
 
     # Category table markdown
     md_path = out / "report.md"
@@ -159,17 +234,19 @@ def _markdown_report(report: EvaluationReport) -> str:
         "",
         "## Aggregate metrics",
         "",
-        "| system | recall@k | mrr | cite_p | cite_r | claim_f1 | latency_ms | tools |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| system | recall@k | mrr | cite_p | claim_correct | completeness | "
+        "error_rate | latency_ms | tools |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in report.systems:
         lines.append(
             f"| {s.system} | {s.recall_at_k:.3f} | {s.mrr:.3f} | "
-            f"{s.citation_precision:.3f} | {s.citation_recall:.3f} | "
-            f"{s.token_f1:.3f} | {s.avg_latency_ms:.0f} | {s.avg_tool_calls:.2f} |"
+            f"{s.citation_precision:.3f} | {s.claim_correctness:.3f} | "
+            f"{s.completeness:.3f} | {s.error_rate:.3f} | "
+            f"{s.avg_latency_ms:.0f} | {s.avg_tool_calls:.2f} |"
         )
     lines.append("")
-    lines.append("## Per-category (paper recall)")
+    lines.append("## Per-category metrics")
     lines.append("")
     for s in report.systems:
         if not s.by_type:
@@ -177,16 +254,26 @@ def _markdown_report(report: EvaluationReport) -> str:
         lines.append(f"### {s.system}")
         lines.append("")
         lines.append(
-            "| type | n | recall_paper | mrr | claim_overlap | refusal | "
-            "latency_ms | tools | tokens | cost_usd |"
+            "| type | n | recall_paper | mrr | nDCG | cite_p | cite_r | cite_valid | "
+            "claim_correct | completeness | faithfulness | refusal | latency_ms | "
+            "tools | tokens | cost_usd |"
         )
-        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        lines.append(
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        )
         for qtype, vals in sorted(s.by_type.items()):
+            n_value = vals.get("n") or 0.0
             lines.append(
-                f"| {qtype} | {int(vals.get('n', 0))} | "
+                f"| {qtype} | {int(n_value)} | "
                 f"{vals.get('recall_at_k_paper', 0):.3f} | "
                 f"{vals.get('mrr', 0):.3f} | "
-                f"{vals.get('claim_overlap', 0):.3f} | "
+                f"{vals.get('ndcg_at_k', 0):.3f} | "
+                f"{vals.get('citation_precision', 0):.3f} | "
+                f"{vals.get('citation_recall', 0):.3f} | "
+                f"{vals.get('citation_validity_rate', 0):.3f} | "
+                f"{vals.get('claim_correctness', 0):.3f} | "
+                f"{vals.get('completeness', 0):.3f} | "
+                f"{vals.get('faithfulness_proxy', 0):.3f} | "
                 f"{vals.get('refusal_correct', 0):.3f} | "
                 f"{vals.get('avg_latency_ms', 0):.0f} | "
                 f"{vals.get('avg_tool_calls', 0):.2f} | "
@@ -310,7 +397,9 @@ def write_simple_charts(report: EvaluationReport, output_dir: Path) -> dict[str,
             [
                 (
                     summary.system,
-                    summary.by_type.get(question_type, {}).get("recall_at_k_paper", 0.0),
+                    float(
+                        summary.by_type.get(question_type, {}).get("recall_at_k_paper", 0.0) or 0.0
+                    ),
                 )
                 for summary in report.systems
             ],

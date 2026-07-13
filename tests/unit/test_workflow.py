@@ -158,6 +158,13 @@ def test_missing_evidence_triggers_corrective_retrieval() -> None:
     assert result.iteration == 1
     original_id = result.plan.sub_questions[0].id
     assert any(item.sub_question_id == original_id for item in result.evidence_ledger.items)
+    initial_iteration = next(
+        event
+        for event in result.events
+        if event.event_type.value == "iteration" and event.payload.get("iteration") == 0
+    )
+    assert initial_iteration.payload["evidence_chunk_ids"]
+    assert initial_iteration.payload["evidence_paper_ids"] == ["p_bad"]
 
 
 def test_empty_first_pass_still_triggers_targeted_retrieval() -> None:
@@ -450,3 +457,63 @@ def test_workflow_unanswerable_still_emits_answer_with_limitation() -> None:
     assert result.final_answer.corpus_insufficient or "Limitation" in result.final_answer.markdown
     assert any(e.event_type.value == "answer_drafted" for e in result.events)
     assert any(e.event_type.value == "citation_validated" for e in result.events)
+
+
+def test_global_token_budget_is_enforced_and_persisted() -> None:
+    result = ResearchWorkflow(
+        ScriptedToolkit(),  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_total_tokens=10,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=2,
+                max_total_tokens_per_pass=100,
+                allow_policy_override=False,
+            ),
+            parallel_research=False,
+        ),
+    ).run("What is Self-RAG?")
+    assert result.terminated_reason == "token_budget_exhausted"
+    assert result.token_usage.total_tokens <= 10
+    assert result.state is not None
+    assert result.state.token_usage == result.token_usage
+    assert result.state.budgets.max_total_tokens == 10
+    assert any(event.event_type.value == "budget_hit" for event in result.events)
+
+
+def test_private_named_future_fact_is_refused_after_targeted_exhaustion() -> None:
+    class GenericTrainingToolkit(ScriptedToolkit):
+        def search(
+            self, query: str, *, mode: str = "hybrid_rerank", k=None, filters=None
+        ) -> RetrievalResult:  # type: ignore[override]
+            self.calls.append(query)
+            text = (
+                "A private training cluster uses GPU accelerators and retrieval methods; "
+                "the public study reports a 2025 experiment."
+            )
+            hit = RetrievalHit(
+                chunk_id="chunk_generic_training",
+                paper_id="paper_generic_training",
+                text=text,
+                page_start=1,
+                page_end=1,
+                score=0.8,
+                retrieval_method=mode,
+            )
+            return RetrievalResult(query=query, method="hybrid_rerank", hits=[hit])
+
+    result = ResearchWorkflow(
+        GenericTrainingToolkit(),  # type: ignore[arg-type]
+        config=WorkflowConfig(
+            max_corrective_iterations=2,
+            research=ResearchAgentConfig(
+                max_tool_calls_per_pass=1,
+                allow_policy_override=False,
+            ),
+            parallel_research=False,
+        ),
+    ).run("What was AcmeAI's private 2027 GPU schedule for Model-X2?")
+    assert result.terminated_reason == "corpus_cannot_answer"
+    assert result.unanswerable
+    assert result.final_answer is not None
+    assert result.final_answer.corpus_insufficient
+    assert result.final_answer.claims == []

@@ -27,6 +27,7 @@ from scholar_agent.agents.prototype_loop import PrototypeLoopConfig, run_prototy
 from scholar_agent.config import load_config
 from scholar_agent.ingestion.pipeline import IngestOptions, ingest_corpus
 from scholar_agent.ingestion.quality import summarize_report
+from scholar_agent.ingestion.tokens import TokenizerUnavailableError
 from scholar_agent.logging import setup_logging
 from scholar_agent.storage.manifest import (
     ManifestError,
@@ -108,6 +109,11 @@ def config_cmd(
         str(cfg.budgets.max_research_iterations_per_pass),
     )
     table.add_row("chunking.target_tokens", str(cfg.chunking.target_tokens))
+    table.add_row("chunking.encoding_name", cfg.chunking.encoding_name)
+    table.add_row(
+        "chunking.allow_tokenizer_fallback",
+        str(cfg.chunking.allow_tokenizer_fallback),
+    )
     table.add_row("paths.processed_dir", str(cfg.paths.processed_dir))
     console.print(table)
 
@@ -257,6 +263,14 @@ _NO_MANIFEST_UPDATE_OPT = typer.Option(
     "--no-manifest-update",
     help="Do not write ingestion_status back to the manifest",
 )
+_ALLOW_TOKENIZER_FALLBACK_OPT = typer.Option(
+    False,
+    "--allow-tokenizer-fallback",
+    help=(
+        "Explicitly allow the deterministic non-canonical tokenizer. "
+        "This changes chunk IDs/fingerprints."
+    ),
+)
 
 
 @app.command("ingest")
@@ -267,21 +281,30 @@ def ingest_cmd(
     limit: int | None = _LIMIT_OPT,
     paper_id: list[str] | None = _PAPER_ID_OPT,
     no_manifest_update: bool = _NO_MANIFEST_UPDATE_OPT,
+    allow_tokenizer_fallback: bool = _ALLOW_TOKENIZER_FALLBACK_OPT,
 ) -> None:
     """Ingest PDFs from the corpus manifest into data/processed/."""
     cfg = load_config(config_path)
+    if allow_tokenizer_fallback:
+        cfg = cfg.model_copy(
+            update={"chunking": cfg.chunking.model_copy(update={"allow_tokenizer_fallback": True})}
+        )
     setup_logging(cfg)
     # Allow CLI papers override via config path only; papers_dir comes from config
-    report = ingest_corpus(
-        config=cfg,
-        manifest_path=manifest,
-        options=IngestOptions(
-            force=force,
-            limit=limit,
-            paper_ids=list(paper_id) if paper_id else None,
-            update_manifest=not no_manifest_update,
-        ),
-    )
+    try:
+        report = ingest_corpus(
+            config=cfg,
+            manifest_path=manifest,
+            options=IngestOptions(
+                force=force,
+                limit=limit,
+                paper_ids=list(paper_id) if paper_id else None,
+                update_manifest=not no_manifest_update,
+            ),
+        )
+    except TokenizerUnavailableError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
     console.print(summarize_report(report))
     console.print(f"report: {cfg.paths.processed_dir / 'ingestion_report.json'}")
     if report.papers_failed and report.papers_ingested == 0 and report.papers_skipped == 0:
@@ -493,6 +516,7 @@ def graph_build_cmd(
     console.print(f"  relations: {result.relations_path}")
     console.print(f"  graph:     {result.graph_path}")
     console.print(f"  stats:     {result.stats_path}")
+    console.print(f"  metadata:  {result.meta_path}")
     console.print("  node types:", stats.node_type_counts)
     console.print("  relation types:", stats.relation_type_counts)
     if stats.n_relations_missing_evidence:
@@ -507,13 +531,23 @@ def graph_inspect_cmd(
     sample: int = _GRAPH_SAMPLE_OPT,
 ) -> None:
     """Print graph statistics and sample evidence-linked edges."""
+    from scholar_agent.graph.pipeline import validate_graph_build_meta
     from scholar_agent.graph.stats import compute_graph_stats
     from scholar_agent.graph.store import KnowledgeGraphStore
+    from scholar_agent.retrieval.chunk_store import ChunkStore
 
     cfg = load_config(config_path)
     graph_path = cfg.paths.processed_dir / "knowledge_graph.json"
     if not graph_path.is_file():
         console.print(f"[red]Graph not found:[/red] {graph_path}. Run graph build first.")
+        raise typer.Exit(code=1)
+    chunk_store = ChunkStore.from_processed_dir(cfg.paths.processed_dir)
+    current, reason = validate_graph_build_meta(
+        cfg.paths.processed_dir / "graph_meta.json",
+        corpus_fingerprint=chunk_store.fingerprint,
+    )
+    if not current:
+        console.print(f"[red]Graph artifacts are stale:[/red] {reason}. Run graph build.")
         raise typer.Exit(code=1)
     store = KnowledgeGraphStore.load_node_link_json(graph_path)
     stats = compute_graph_stats(store)
@@ -530,9 +564,14 @@ def graph_inspect_cmd(
     rels = store.relations()[:sample]
     console.print(f"[bold]sample edges[/bold] ({len(rels)}):")
     for rel in rels:
+        page_label = (
+            f"p.{rel.page_number}"
+            if rel.page_end == rel.page_number
+            else f"p.{rel.page_number}-{rel.page_end}"
+        )
         console.print(
             f"  - {rel.relation_type.value}: {rel.subject_surface!r} → {rel.object_surface!r} "
-            f"[{rel.paper_id} p.{rel.page_number}] chunk={rel.chunk_id}",
+            f"[{rel.paper_id} {page_label}] chunk={rel.chunk_id}",
             markup=False,
         )
         console.print(f"    evidence: {rel.evidence_span[:160]}", markup=False)
@@ -541,13 +580,23 @@ def graph_inspect_cmd(
 @graph_app.command("stats")
 def graph_stats_cmd(config_path: Path | None = _CONFIG_PATH_OPT) -> None:
     """Emit graph statistics as JSON."""
+    from scholar_agent.graph.pipeline import validate_graph_build_meta
     from scholar_agent.graph.stats import compute_graph_stats
     from scholar_agent.graph.store import KnowledgeGraphStore
+    from scholar_agent.retrieval.chunk_store import ChunkStore
 
     cfg = load_config(config_path)
     graph_path = cfg.paths.processed_dir / "knowledge_graph.json"
     if not graph_path.is_file():
         console.print(f"[red]Graph not found:[/red] {graph_path}")
+        raise typer.Exit(code=1)
+    chunk_store = ChunkStore.from_processed_dir(cfg.paths.processed_dir)
+    current, reason = validate_graph_build_meta(
+        cfg.paths.processed_dir / "graph_meta.json",
+        corpus_fingerprint=chunk_store.fingerprint,
+    )
+    if not current:
+        console.print(f"[red]Graph artifacts are stale:[/red] {reason}. Run graph build.")
         raise typer.Exit(code=1)
     store = KnowledgeGraphStore.load_node_link_json(graph_path)
     stats = compute_graph_stats(store)
@@ -608,6 +657,7 @@ def research_cmd(
         max_evidence_per_sub_question=max_evidence or cfg.budgets.max_evidence_per_sub_question,
         max_iterations_per_pass=max_iterations or cfg.budgets.max_research_iterations_per_pass,
         max_latency_ms=cfg.budgets.max_latency_ms,
+        max_total_tokens_per_pass=cfg.budgets.max_total_tokens,
     )
     agent = ResearchAgent(toolkit, config=agent_cfg)
 
@@ -655,6 +705,7 @@ def research_cmd(
     console.print(
         f"[bold]tools[/bold]: {result.tool_call_count}  "
         f"iterations={result.iteration_count}  "
+        f"estimated_tokens={result.token_usage.total_tokens}  "
         f"evidence={len(result.evidence_ledger.items)}  "
         f"parallel={result.parallel}"
     )
@@ -712,11 +763,13 @@ def ask_cmd(
             max_iterations if max_iterations is not None else cfg.budgets.max_corrective_iterations
         ),
         max_latency_ms=cfg.budgets.max_latency_ms,
+        max_total_tokens=cfg.budgets.max_total_tokens,
         research=ResearchAgentConfig(
             max_tool_calls_per_pass=max_tools or cfg.budgets.max_tool_calls_per_research_pass,
             max_iterations_per_pass=cfg.budgets.max_research_iterations_per_pass,
             max_evidence_per_sub_question=cfg.budgets.max_evidence_per_sub_question,
             max_latency_ms=cfg.budgets.max_latency_ms,
+            max_total_tokens_per_pass=cfg.budgets.max_total_tokens,
         ),
         parallel_research=not no_parallel,
     )
@@ -754,6 +807,7 @@ def ask_cmd(
     console.print(
         f"[bold]stats[/bold]: iteration={result.iteration} "
         f"tools={result.tool_call_count} evidence={len(result.evidence_ledger.items)} "
+        f"estimated_tokens={result.token_usage.total_tokens} "
         f"latency_ms={result.latency_ms} unanswerable={result.unanswerable}"
     )
     if result.final_answer is not None:
@@ -817,10 +871,15 @@ _EVAL_RAGAS_OPT = typer.Option(
 _EVAL_LLM_OPT = typer.Option(
     False,
     "--llm",
-    help="Use live LLM for Naive RAG generation (default: extractive)",
+    help="Use one shared live LLM prompt for every applicable ablation system",
 )
 _EVAL_TOP_K_OPT = typer.Option(8, "--k", help="Top-k for retrieval metrics")
 _EVAL_NO_CHARTS_OPT = typer.Option(False, "--no-charts", help="Skip SVG chart generation")
+_EVAL_ALL_OPT = typer.Option(
+    False,
+    "--all",
+    help="Run every configured ablation system (the default when --system is omitted)",
+)
 
 
 @app.command("evaluate")
@@ -915,9 +974,12 @@ def ablate_cmd(
     use_ragas: bool = _EVAL_RAGAS_OPT,
     use_llm: bool = _EVAL_LLM_OPT,
     no_charts: bool = _EVAL_NO_CHARTS_OPT,
+    all_systems: bool = _EVAL_ALL_OPT,
     json_output: bool = _JSON_OPT,
 ) -> None:
     """Run all ablation systems on the frozen split (alias of ``evaluate``)."""
+    if all_systems:
+        system = None
     evaluate_cmd(
         config_path=config_path,
         eval_config=eval_config,

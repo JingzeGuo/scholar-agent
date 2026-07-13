@@ -420,6 +420,7 @@ def _make_partial_relation(
         paper_id=chunk.paper_id,
         chunk_id=chunk.chunk_id,
         page_number=chunk.page_start,
+        page_end=chunk.page_end,
         confidence=confidence,
     )
 

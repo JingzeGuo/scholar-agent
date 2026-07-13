@@ -6,10 +6,10 @@ sync:
 install: sync
 
 test:
-	uv run pytest
+	uv run pytest -m "not live"
 
 test-unit:
-	uv run pytest tests/unit
+	uv run pytest -m "not live" tests/unit
 
 test-live:
 	uv run pytest -m live

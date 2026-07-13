@@ -14,10 +14,10 @@
     "use_llm": false,
     "max_total_tool_calls": 12
   },
-  "created_at": "2026-07-12T09:22:35+00:00",
+  "created_at": "2026-07-13T14:12:00+00:00",
   "offline": true,
   "notes": "Simple single-paper factual path with page-traceable source card.",
-  "corpus_fingerprint": "c639ca3f202ab39b7d9b88cbde24b61e",
+  "corpus_fingerprint": "79d20fac73b0ced268b99b457766bd67",
   "provenance_verified": true,
   "session": {
     "run_id": "run_demo_what_is_selfrag",
@@ -35,7 +35,7 @@
       "max_total_tool_calls": 12
     },
     "offline_replay": true,
-    "answer_markdown": "## Answer\n\n**Question:** What is Self-RAG?\n\n### Claims\n\n- Self-RAG retrieves on demand and critiques with reflection tokens [paper_arxiv_2310_11511 p.1]\n",
+    "answer_markdown": "## Answer\n\n**Question:** What is Self-RAG?\n\n### Claims\n\n- Self-RAG retrieves on demand and critiques with reflection tokens [paper_arxiv_2310_11511 pp.10-11]\n",
     "claims": [
       {
         "claim_id": "claim_1",
@@ -49,12 +49,12 @@
       {
         "evidence_id": "ev_def",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_44327db3f15dab2a",
-        "page_start": 1,
-        "page_end": 1,
-        "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection.",
+        "chunk_id": "chunk_f455b1d5de22e9ef",
+        "page_start": 10,
+        "page_end": 11,
+        "snippet": "This work introduces SELF-RAG, a new framework to enhance the quality and factuality of LLMs\nthrough retrieval on demand and self-reflection. SELF-RAG trains an LM to learn to retrieve, generate,\nand critique text passages and its own generation by predicting the next tokens from its original\nvocabulary as well as newly added special tokens, called reflection tokens. SELF-RAG further enables\nthe tailoring of LM behaviors at test time by leveraging reflection tokens. Our holistic evaluations on\nsix tasks using multiple metrics demonstrate that SELF-RAG significantly outperforms LLMs with\nmore parameters or with conventional retrieval-augmented generation approaches.\n10\n\nETHICAL CONCERNS\nThis work aims to improve the factuality of LLM outputs, the lack of which continues to cause nu-\nmerous ",
         "retrieval_method": "hybrid_rerank",
-        "title": "Self-RAG",
+        "title": "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection",
         "pdf_path": "data/papers/2310.11511.pdf"
       }
     ],
@@ -63,11 +63,11 @@
         "evidence_id": "ev_def",
         "sub_question_id": "sq_0",
         "claim": "Self-RAG retrieves on demand and critiques with reflection tokens.",
-        "evidence_text": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection.",
+        "evidence_text": "This work introduces SELF-RAG, a new framework to enhance the quality and factuality of LLMs\nthrough retrieval on demand and self-reflection. SELF-RAG trains an LM to learn to retrieve, generate,\nand critique text passages and its own generation by predicting the next tokens from its original\nvocabulary as well as newly added special tokens, called reflection tokens. SELF-RAG further enables\nthe tailoring of LM behaviors at test time by leveraging reflection tokens. Our holistic evaluations on\nsix tasks using multiple metrics demonstrate that SELF-RAG significantly outperforms LLMs with\nmore parameters or with conventional retrieval-augmented generation approaches.\n10\n\nETHICAL CONCERNS\nThis work aims to improve the factuality of LLM outputs, the lack of which continues to cause nu-\nmerous real-world problems (e.g., spread of misinformation and provision of incorrect and dangerous\nadvice). While our method shows significant improvements in terms of performance, factuality, and\ncitation accuracy, it can still generate outputs that are not fully supported by the citations. We hope\nthat explicit self-reflection and fine-grained attribution may help users verify factual errors in the\nmodel outputs.",
         "paper_id": "paper_arxiv_2310_11511",
-        "chunk_id": "chunk_44327db3f15dab2a",
-        "page_start": 1,
-        "page_end": 1,
+        "chunk_id": "chunk_f455b1d5de22e9ef",
+        "page_start": 10,
+        "page_end": 11,
         "retrieval_method": "hybrid_rerank",
         "retrieval_score": null,
         "rerank_score": null,
@@ -106,7 +106,7 @@
       "rationale_summary": "Definition evidence found."
     },
     "final_answer": {
-      "markdown": "## Answer\n\n**Question:** What is Self-RAG?\n\n### Claims\n\n- Self-RAG retrieves on demand and critiques with reflection tokens [paper_arxiv_2310_11511 p.1]\n",
+      "markdown": "## Answer\n\n**Question:** What is Self-RAG?\n\n### Claims\n\n- Self-RAG retrieves on demand and critiques with reflection tokens [paper_arxiv_2310_11511 pp.10-11]\n",
       "claims": [
         {
           "claim_id": "claim_1",
@@ -117,18 +117,18 @@
         }
       ],
       "sources": [
-        "Self-RAG [paper_arxiv_2310_11511] p.1 (chunk=chunk_44327db3f15dab2a, evidence=ev_def) · PDF=data/papers/2310.11511.pdf"
+        "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection [paper_arxiv_2310_11511] p.10-11 (chunk=chunk_f455b1d5de22e9ef, evidence=ev_def) · PDF=data/papers/2310.11511.pdf"
       ],
       "source_cards": [
         {
           "evidence_id": "ev_def",
           "paper_id": "paper_arxiv_2310_11511",
-          "chunk_id": "chunk_44327db3f15dab2a",
-          "page_start": 1,
-          "page_end": 1,
-          "snippet": "This work introduces Self-Reflective Retrieval-augmented Generation (SELF-RAG) to improve an LLM's generation quality, including its factual accuracy without hurting its versatility, via on-demand retrieval and self-reflection.",
+          "chunk_id": "chunk_f455b1d5de22e9ef",
+          "page_start": 10,
+          "page_end": 11,
+          "snippet": "This work introduces SELF-RAG, a new framework to enhance the quality and factuality of LLMs\nthrough retrieval on demand and self-reflection. SELF-RAG trains an LM to learn to retrieve, generate,\nand critique text passages and its own generation by predicting the next tokens from its original\nvocabulary as well as newly added special tokens, called reflection tokens. SELF-RAG further enables\nthe tailoring of LM behaviors at test time by leveraging reflection tokens. Our holistic evaluations on\nsix tasks using multiple metrics demonstrate that SELF-RAG significantly outperforms LLMs with\nmore parameters or with conventional retrieval-augmented generation approaches.\n10\n\nETHICAL CONCERNS\nThis work aims to improve the factuality of LLM outputs, the lack of which continues to cause nu-\nmerous ",
           "retrieval_method": "hybrid_rerank",
-          "title": "Self-RAG",
+          "title": "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection",
           "pdf_path": "data/papers/2310.11511.pdf"
         }
       ],
@@ -146,10 +146,10 @@
     },
     "events": [
       {
-        "event_id": "evt_5324511d275e",
+        "event_id": "evt_0acb70a1452d",
         "run_id": "run_demo_what_is_selfrag",
         "event_type": "run_finished",
-        "timestamp": "2026-07-12T09:22:35+00:00",
+        "timestamp": "2026-07-13T14:12:00+00:00",
         "component": "workflow",
         "summary": "workflow finished: evidence_sufficient",
         "payload": {}
@@ -196,7 +196,8 @@
     },
     "status": {
       "ok": true,
-      "offline_fixture": true
+      "offline_fixture": true,
+      "fixture_provenance": "canonical"
     },
     "error": null
   }

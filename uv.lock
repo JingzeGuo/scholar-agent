@@ -3763,6 +3763,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -3782,6 +3783,7 @@ ui = [
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "pillow" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -3802,6 +3804,7 @@ requires-dist = [
     { name = "networkx", specifier = ">=3.3" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "openai", specifier = ">=1.40" },
+    { name = "pillow", marker = "extra == 'dev'", specifier = ">=10" },
     { name = "pillow", marker = "extra == 'eval'", specifier = ">=10" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
@@ -3827,6 +3830,7 @@ provides-extras = ["dev", "ui", "eval"]
 [package.metadata.requires-dev]
 dev = [
     { name = "mypy", specifier = ">=1.10" },
+    { name = "pillow", specifier = ">=10" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.5" },

@@ -11,6 +11,8 @@ Writes JSON under data/demo/runs/.
 from __future__ import annotations
 
 import argparse
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from scholar_agent.app.demo_models import (
@@ -24,6 +26,7 @@ from scholar_agent.app.demo_runs import save_demo_run
 from scholar_agent.app.demo_service import DemoService, build_corrective_steps
 from scholar_agent.app.status import collect_system_status
 from scholar_agent.config import load_config
+from scholar_agent.ids import make_chunk_id
 from scholar_agent.logging import setup_logging
 from scholar_agent.models.answer import (
     CitationReport,
@@ -32,6 +35,7 @@ from scholar_agent.models.answer import (
     SourceCard,
 )
 from scholar_agent.models.base import EventType, ExecutionEvent, QueryType, utc_now_iso
+from scholar_agent.models.corpus import Chunk
 from scholar_agent.models.evidence import EvidenceItem
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
 from scholar_agent.models.workflow import VerificationResult
@@ -40,20 +44,218 @@ from scholar_agent.retrieval.chunk_store import ChunkStore
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "data" / "demo" / "runs"
 
-SELF_RAG_CHUNK_ID = "chunk_44327db3f15dab2a"
-CRAG_CHUNK_ID = "chunk_80df894da22e4964"
+
+@dataclass(frozen=True)
+class FixtureSource:
+    """A passage used by a replay fixture, with an explicit trust level."""
+
+    paper_id: str
+    title: str
+    pdf_path: str
+    chunk_id: str
+    text: str
+    page_start: int
+    page_end: int
+    canonical: bool
 
 
-def _fixture_provenance() -> tuple[str | None, bool]:
+def _searchable(value: str) -> str:
+    """Normalize PDF line wrapping while keeping phrase matching deterministic."""
+    dehyphenated = re.sub(r"-\s*\n\s*", "", value)
+    return " ".join(re.findall(r"[a-z0-9]+", dehyphenated.casefold()))
+
+
+def _claim_terms(value: str) -> set[str]:
+    stop = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "for",
+        "in",
+        "is",
+        "of",
+        "on",
+        "the",
+        "to",
+        "uses",
+        "with",
+    }
+    return {token for token in _searchable(value).split() if len(token) > 2 and token not in stop}
+
+
+def _select_supporting_chunk(
+    store: ChunkStore,
+    *,
+    paper_id: str,
+    keywords: tuple[str, ...],
+    claim: str,
+) -> Chunk:
+    """Select a canonical chunk from one paper that supports a fixture claim.
+
+    Every keyword phrase must be present after de-hyphenating PDF line wraps. Among
+    qualifying chunks, claim-token coverage wins, with stable chunk ID tie-breaking.
+    This intentionally does not accept a remembered chunk ID: rechunking the corpus
+    must cause fixtures to follow the new canonical store.
+    """
+    phrases = tuple(_searchable(keyword) for keyword in keywords if _searchable(keyword))
+    if not phrases:
+        raise ValueError("at least one non-empty support keyword is required")
+    claim_terms = _claim_terms(claim)
+    candidates = []
+    for chunk in store.chunks:
+        if chunk.paper_id != paper_id:
+            continue
+        searchable = _searchable(chunk.text)
+        if not all(phrase in searchable for phrase in phrases):
+            continue
+        chunk_terms = set(searchable.split())
+        coverage = len(claim_terms & chunk_terms) / len(claim_terms) if claim_terms else 0.0
+        if claim_terms and coverage < 0.5:
+            continue
+        candidates.append((coverage, -chunk.token_count, chunk.chunk_id, chunk))
+    if not candidates:
+        raise ValueError(f"no canonical support chunk for {paper_id} matching {list(keywords)!r}")
+    return max(candidates, key=lambda item: item[:3])[3]
+
+
+def _portable_pdf_path(value: str) -> str:
+    path = Path(value).expanduser()
+    resolved = path.resolve() if path.is_absolute() else (REPO / path).resolve()
     try:
-        store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
+        return resolved.relative_to(REPO.resolve()).as_posix()
+    except ValueError:
+        # Do not bake a developer-specific absolute path into a committed replay.
+        return f"data/papers/{path.name}"
+
+
+def _load_canonical_store() -> ChunkStore | None:
+    try:
+        return ChunkStore.from_processed_dir(REPO / "data" / "processed")
     except (FileNotFoundError, ValueError):
-        return None, False
-    return store.fingerprint, True
+        return None
+
+
+def _canonical_source(
+    store: ChunkStore,
+    *,
+    paper_id: str,
+    keywords: tuple[str, ...],
+    claim: str,
+) -> FixtureSource:
+    chunk = _select_supporting_chunk(
+        store,
+        paper_id=paper_id,
+        keywords=keywords,
+        claim=claim,
+    )
+    paper = store.get_paper(paper_id)
+    if paper is None:
+        raise ValueError(f"canonical paper metadata missing: {paper_id}")
+    return FixtureSource(
+        paper_id=paper_id,
+        title=paper.title,
+        pdf_path=_portable_pdf_path(paper.pdf_path),
+        chunk_id=chunk.chunk_id,
+        text=chunk.text,
+        page_start=chunk.page_start,
+        page_end=chunk.page_end,
+        canonical=True,
+    )
+
+
+def _unverified_fallback_source(
+    *,
+    paper_id: str,
+    title: str,
+    pdf_filename: str,
+    text: str,
+) -> FixtureSource:
+    """Build an explicitly unverified fallback for source-less installations."""
+    return FixtureSource(
+        paper_id=paper_id,
+        title=title,
+        pdf_path=f"data/papers/{pdf_filename}",
+        chunk_id=make_chunk_id(
+            paper_id,
+            page_start=1,
+            page_end=1,
+            text=text,
+            section="unverified demo fallback",
+        ),
+        text=text,
+        page_start=1,
+        page_end=1,
+        canonical=False,
+    )
+
+
+SELF_RAG_CLAIM = "Self-RAG uses reflection tokens to retrieve on demand."
+CRAG_CLAIM = "CRAG evaluates retrieved documents and triggers corrective retrieval."
+
+
+def _fixture_sources() -> tuple[FixtureSource, FixtureSource, str | None, bool]:
+    store = _load_canonical_store()
+    if store is not None:
+        self_rag = _canonical_source(
+            store,
+            paper_id="paper_arxiv_2310_11511",
+            keywords=("SELF-RAG", "reflection tokens", "on-demand"),
+            claim=SELF_RAG_CLAIM,
+        )
+        crag = _canonical_source(
+            store,
+            paper_id="paper_arxiv_2401_15884",
+            keywords=("retrieval evaluator", "confidence degree", "retrieval actions"),
+            claim=CRAG_CLAIM,
+        )
+        return self_rag, crag, store.fingerprint, True
+
+    # These are published abstract excerpts, not canonical corpus claims. They
+    # keep a source-less clone replayable, while provenance_verified stays false.
+    self_rag_text = (
+        "We introduce a new framework called Self-Reflective Retrieval-Augmented "
+        "Generation (SELF-RAG) that enhances an LM's quality and factuality through "
+        "retrieval and self-reflection. Our framework trains a single arbitrary LM "
+        "that adaptively retrieves passages on-demand, and generates and reflects on "
+        "retrieved passages and its own generations using special tokens, called "
+        "reflection tokens."
+    )
+    crag_text = (
+        "Specifically, a lightweight retrieval evaluator is designed to assess the overall quality "
+        "of retrieved documents for a query, returning a confidence degree based on "
+        "which different knowledge retrieval actions can be triggered."
+    )
+    return (
+        _unverified_fallback_source(
+            paper_id="paper_arxiv_2310_11511",
+            title="Self-RAG",
+            pdf_filename="2310.11511.pdf",
+            text=self_rag_text,
+        ),
+        _unverified_fallback_source(
+            paper_id="paper_arxiv_2401_15884",
+            title="CRAG",
+            pdf_filename="2401.15884.pdf",
+            text=crag_text,
+        ),
+        None,
+        False,
+    )
+
+
+def _citation(source: FixtureSource) -> str:
+    page = (
+        f"p.{source.page_start}"
+        if source.page_start == source.page_end
+        else f"pp.{source.page_start}-{source.page_end}"
+    )
+    return f"[{source.paper_id} {page}]"
 
 
 def _fixture_compare() -> SavedDemoRun:
     run_id = "run_demo_selfrag_crag"
+    self_rag, crag, fingerprint, verified = _fixture_sources()
     settings = DemoSettings(
         compare_naive_rag=True,
         enable_graph=True,
@@ -66,54 +268,45 @@ def _fixture_compare() -> SavedDemoRun:
         EvidenceItem(
             evidence_id="ev_selfrag",
             sub_question_id="sq_0",
-            claim="Self-RAG uses reflection tokens to retrieve on demand.",
-            evidence_text=(
-                "This work introduces Self-Reflective Retrieval-augmented Generation "
-                "(SELF-RAG) to improve an LLM's generation quality, including its factual "
-                "accuracy without hurting its versatility, via on-demand retrieval and "
-                "self-reflection. Reflection tokens are categorized into retrieval and "
-                "critique tokens to indicate the need for retrieval and its generation "
-                "quality respectively."
-            ),
-            paper_id="paper_arxiv_2310_11511",
-            chunk_id=SELF_RAG_CHUNK_ID,
-            page_start=1,
-            page_end=1,
+            claim=SELF_RAG_CLAIM,
+            evidence_text=self_rag.text,
+            paper_id=self_rag.paper_id,
+            chunk_id=self_rag.chunk_id,
+            page_start=self_rag.page_start,
+            page_end=self_rag.page_end,
             retrieval_method="hybrid_rerank",
             retrieval_score=0.91,
         ),
         EvidenceItem(
             evidence_id="ev_crag",
             sub_question_id="sq_1",
-            claim="CRAG evaluates retrieved documents and triggers corrective retrieval.",
-            evidence_text=(
-                "Specifically, a lightweight retrieval evaluator is designed to assess "
-                "the overall quality of retrieved documents for a query, returning a "
-                "confidence degree based on which different knowledge retrieval actions "
-                "can be triggered."
-            ),
-            paper_id="paper_arxiv_2401_15884",
-            chunk_id=CRAG_CHUNK_ID,
-            page_start=1,
-            page_end=1,
+            claim=CRAG_CLAIM,
+            evidence_text=crag.text,
+            paper_id=crag.paper_id,
+            chunk_id=crag.chunk_id,
+            page_start=crag.page_start,
+            page_end=crag.page_end,
             retrieval_method="hybrid_rerank",
             retrieval_score=0.88,
         ),
     ]
-    cards = [
-        SourceCard(
-            evidence_id=e.evidence_id,
-            paper_id=e.paper_id,
-            chunk_id=e.chunk_id,
-            page_start=e.page_start,
-            page_end=e.page_end,
-            snippet=e.evidence_text[:200],
-            retrieval_method=e.retrieval_method,
-            title="Self-RAG" if "2310" in e.paper_id else "CRAG",
-            pdf_path=f"data/papers/{'2310.11511' if '2310' in e.paper_id else '2401.15884'}.pdf",
+    source_by_paper = {source.paper_id: source for source in (self_rag, crag)}
+    cards = []
+    for item in evidence:
+        source = source_by_paper[item.paper_id]
+        cards.append(
+            SourceCard(
+                evidence_id=item.evidence_id,
+                paper_id=item.paper_id,
+                chunk_id=item.chunk_id,
+                page_start=item.page_start,
+                page_end=item.page_end,
+                snippet=item.evidence_text[:800],
+                retrieval_method=item.retrieval_method,
+                title=source.title,
+                pdf_path=source.pdf_path,
+            )
         )
-        for e in evidence
-    ]
     plan = QueryPlan(
         original_query="Compare Self-RAG versus CRAG",
         answer_type="comparison",
@@ -147,20 +340,18 @@ def _fixture_compare() -> SavedDemoRun:
             "## Answer\n\n"
             "**Question:** Compare Self-RAG versus CRAG\n\n"
             "### Claims\n\n"
-            "- Self-RAG uses reflection tokens to retrieve on demand "
-            "[paper_arxiv_2310_11511 p.1]\n"
-            "- CRAG evaluates retrieved documents and triggers corrective retrieval "
-            "[paper_arxiv_2401_15884 p.1]\n"
+            f"- {SELF_RAG_CLAIM} {_citation(self_rag)}\n"
+            f"- {CRAG_CLAIM} {_citation(crag)}\n"
         ),
         claims=[
             ClaimWithCitations(
                 claim_id="claim_1",
-                text="Self-RAG uses reflection tokens to retrieve on demand.",
+                text=SELF_RAG_CLAIM,
                 evidence_ids=["ev_selfrag"],
             ),
             ClaimWithCitations(
                 claim_id="claim_2",
-                text="CRAG evaluates retrieved documents and triggers corrective retrieval.",
+                text=CRAG_CLAIM,
                 evidence_ids=["ev_crag"],
             ),
         ],
@@ -170,8 +361,8 @@ def _fixture_compare() -> SavedDemoRun:
             is_valid=True,
             cited_evidence_ids=["ev_selfrag", "ev_crag"],
             cited_paper_ids=[
-                "paper_arxiv_2310_11511",
-                "paper_arxiv_2401_15884",
+                self_rag.paper_id,
+                crag.paper_id,
             ],
         ),
     )
@@ -294,9 +485,12 @@ def _fixture_compare() -> SavedDemoRun:
             latency_ms=55,
             used_llm=False,
         ),
-        status={"ok": True, "offline_fixture": True},
+        status={
+            "ok": True,
+            "offline_fixture": True,
+            "fixture_provenance": "canonical" if verified else "unverified_fallback",
+        },
     )
-    fingerprint, verified = _fixture_provenance()
     return SavedDemoRun(
         demo_id="selfrag_vs_crag",
         title="Self-RAG vs CRAG (corrective loop)",
@@ -313,29 +507,25 @@ def _fixture_compare() -> SavedDemoRun:
 
 def _fixture_factual() -> SavedDemoRun:
     run_id = "run_demo_what_is_selfrag"
+    self_rag, _crag, fingerprint, verified = _fixture_sources()
     settings = DemoSettings(compare_naive_rag=True, enable_graph=False, enable_corrective=False)
     card = SourceCard(
         evidence_id="ev_def",
-        paper_id="paper_arxiv_2310_11511",
-        chunk_id=SELF_RAG_CHUNK_ID,
-        page_start=1,
-        page_end=1,
-        snippet=(
-            "This work introduces Self-Reflective Retrieval-augmented Generation "
-            "(SELF-RAG) to improve an LLM's generation quality, including its factual "
-            "accuracy without hurting its versatility, via on-demand retrieval and "
-            "self-reflection."
-        ),
+        paper_id=self_rag.paper_id,
+        chunk_id=self_rag.chunk_id,
+        page_start=self_rag.page_start,
+        page_end=self_rag.page_end,
+        snippet=self_rag.text[:800],
         retrieval_method="hybrid_rerank",
-        title="Self-RAG",
-        pdf_path="data/papers/2310.11511.pdf",
+        title=self_rag.title,
+        pdf_path=self_rag.pdf_path,
     )
     final = FinalAnswer(
         markdown=(
             "## Answer\n\n**Question:** What is Self-RAG?\n\n"
             "### Claims\n\n"
             "- Self-RAG retrieves on demand and critiques with reflection tokens "
-            "[paper_arxiv_2310_11511 p.1]\n"
+            f"{_citation(self_rag)}\n"
         ),
         claims=[
             ClaimWithCitations(
@@ -349,7 +539,7 @@ def _fixture_factual() -> SavedDemoRun:
         citation_report=CitationReport(
             is_valid=True,
             cited_evidence_ids=["ev_def"],
-            cited_paper_ids=["paper_arxiv_2310_11511"],
+            cited_paper_ids=[self_rag.paper_id],
         ),
     )
     session = DemoSessionResult(
@@ -365,11 +555,11 @@ def _fixture_factual() -> SavedDemoRun:
                 evidence_id="ev_def",
                 sub_question_id="sq_0",
                 claim="Self-RAG retrieves on demand and critiques with reflection tokens.",
-                evidence_text=card.snippet,
+                evidence_text=self_rag.text,
                 paper_id=card.paper_id,
                 chunk_id=card.chunk_id,
-                page_start=1,
-                page_end=1,
+                page_start=self_rag.page_start,
+                page_end=self_rag.page_end,
                 retrieval_method="hybrid_rerank",
             )
         ],
@@ -429,9 +619,12 @@ def _fixture_factual() -> SavedDemoRun:
             hit_count=3,
             latency_ms=40,
         ),
-        status={"ok": True, "offline_fixture": True},
+        status={
+            "ok": True,
+            "offline_fixture": True,
+            "fixture_provenance": "canonical" if verified else "unverified_fallback",
+        },
     )
-    fingerprint, verified = _fixture_provenance()
     return SavedDemoRun(
         demo_id="what_is_selfrag",
         title="What is Self-RAG? (factual)",
@@ -448,6 +641,9 @@ def _fixture_factual() -> SavedDemoRun:
 
 def _fixture_unanswerable() -> SavedDemoRun:
     run_id = "run_demo_unanswerable"
+    store = _load_canonical_store()
+    fingerprint = store.fingerprint if store is not None else None
+    verified = store is not None
     settings = DemoSettings(compare_naive_rag=True, enable_corrective=True)
     final = FinalAnswer(
         markdown=(
@@ -521,9 +717,12 @@ def _fixture_unanswerable() -> SavedDemoRun:
             hit_count=0,
             latency_ms=30,
         ),
-        status={"ok": True, "offline_fixture": True},
+        status={
+            "ok": True,
+            "offline_fixture": True,
+            "fixture_provenance": "canonical" if verified else "unverified_fallback",
+        },
     )
-    fingerprint, verified = _fixture_provenance()
     return SavedDemoRun(
         demo_id="unanswerable_market",
         title="Unanswerable market question",

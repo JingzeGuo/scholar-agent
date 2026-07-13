@@ -54,6 +54,7 @@ class KnowledgeGraphStore:
                 paper_id=rel.paper_id,
                 chunk_id=rel.chunk_id,
                 page_number=rel.page_number,
+                page_end=rel.page_end,
                 confidence=rel.confidence,
             )
         return cls(g)
@@ -115,6 +116,7 @@ class KnowledgeGraphStore:
                     paper_id=str(attrs.get("paper_id") or ""),
                     chunk_id=str(attrs.get("chunk_id") or ""),
                     page_number=int(attrs.get("page_number") or 1),
+                    page_end=int(attrs.get("page_end") or attrs.get("page_number") or 1),
                     confidence=float(attrs.get("confidence") or 0.0),
                 )
             )
@@ -195,6 +197,7 @@ class KnowledgeGraphStore:
                         "chunk_id": attrs.get("chunk_id"),
                         "paper_id": attrs.get("paper_id"),
                         "page_number": attrs.get("page_number"),
+                        "page_end": attrs.get("page_end") or attrs.get("page_number"),
                         "evidence_span": attrs.get("evidence_span"),
                         "confidence": attrs.get("confidence"),
                         "subject": node,
@@ -214,6 +217,7 @@ class KnowledgeGraphStore:
                         "chunk_id": attrs.get("chunk_id"),
                         "paper_id": attrs.get("paper_id"),
                         "page_number": attrs.get("page_number"),
+                        "page_end": attrs.get("page_end") or attrs.get("page_number"),
                         "evidence_span": attrs.get("evidence_span"),
                         "confidence": attrs.get("confidence"),
                         "subject": pred,

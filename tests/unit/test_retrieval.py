@@ -4,17 +4,27 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
+import sentence_transformers
 
+from scholar_agent.config import AppConfig, DenseRetrievalConfig, PathsConfig, RetrievalConfig
+from scholar_agent.graph.extract import EXTRACTION_CACHE_SCHEMA
+from scholar_agent.graph.pipeline import GRAPH_BUILD_SCHEMA
 from scholar_agent.ids import content_hash, make_chunk_id
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.retrieval import RetrievalFilters
 from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.retrieval.dense import DenseIndex
-from scholar_agent.retrieval.embeddings import HashingEmbedder, model_cache_folder
+from scholar_agent.retrieval.embeddings import (
+    HashingEmbedder,
+    SentenceTransformerEmbedder,
+    model_cache_folder,
+)
 from scholar_agent.retrieval.fusion import ranks_map, reciprocal_rank_fusion
+from scholar_agent.retrieval.index_builder import build_indexes, load_toolkit
 from scholar_agent.retrieval.naive_rag import NaiveRAG
-from scholar_agent.retrieval.reranker import LexicalReranker
+from scholar_agent.retrieval.reranker import CrossEncoderReranker, LexicalReranker
 from scholar_agent.retrieval.sparse import BM25Index, tokenize
 from scholar_agent.retrieval.tools import RetrievalToolkit
 from scholar_agent.storage.jsonl import JsonlRepository
@@ -78,6 +88,49 @@ def _fixture_store() -> ChunkStore:
         for pid in {c.paper_id for c in chunks}
     ]
     return ChunkStore(chunks, papers)
+
+
+class _FakeSentenceEmbedder:
+    def __init__(self, model_name: str, dimension: int = 12) -> None:
+        self._model_name = model_name
+        self._dimension = dimension
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed_query(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        vector = [0.0] * self.dimension
+        vector[len(text) % self.dimension] = 1.0
+        return vector
+
+
+def _index_config(tmp_path: Path, store: ChunkStore, *, model_name: str) -> AppConfig:
+    processed = tmp_path / "processed"
+    processed.mkdir(exist_ok=True)
+    JsonlRepository(processed / "chunks.jsonl", Chunk).write_all(store.chunks)
+    JsonlRepository(processed / "papers.jsonl", Paper).write_all(store.papers)
+    return AppConfig(
+        paths=PathsConfig(
+            data_dir=tmp_path,
+            papers_dir=tmp_path / "papers",
+            processed_dir=processed,
+            indexes_dir=tmp_path / "indexes",
+            evaluation_dir=tmp_path / "evaluation",
+            corpus_manifest=tmp_path / "manifest.jsonl",
+        ),
+        retrieval=RetrievalConfig(
+            dense=DenseRetrievalConfig(model_name=model_name, collection_name="test_config")
+        ),
+        repo_root=tmp_path,
+    )
 
 
 def test_rrf_prefers_shared_top_docs() -> None:
@@ -148,6 +201,84 @@ def test_dense_index_stable_ids(tmp_path: Path) -> None:
     assert hits
     assert hits[0].chunk_id in store.by_chunk_id
     assert hits[0].retrieval_method == "dense"
+
+
+def test_index_builder_rebuilds_when_requested_embedder_changes(tmp_path: Path) -> None:
+    store = _fixture_store()
+    cfg = _index_config(tmp_path, store, model_name="fake-a")
+    shared = tmp_path / "shared-index"
+    first = build_indexes(
+        config=cfg,
+        indexes_dir=shared,
+        embedder=_FakeSentenceEmbedder("fake-a", dimension=12),
+    )
+    assert first.dense.meta["embedder"] == "fake-a"
+
+    second = build_indexes(
+        config=cfg,
+        indexes_dir=shared,
+        embedder=_FakeSentenceEmbedder("fake-b", dimension=16),
+    )
+    assert second.dense.meta["embedder"] == "fake-b"
+    assert second.dense.meta["dimension"] == 16
+
+
+def test_index_builder_honors_changed_config_model_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    store = _fixture_store()
+    cfg_a = _index_config(tmp_path, store, model_name="config-model-a")
+
+    def fake_factory(model_name: str, *, backend: str):
+        assert backend == "st"
+        return _FakeSentenceEmbedder(model_name)
+
+    monkeypatch.setattr("scholar_agent.retrieval.index_builder.create_embedder", fake_factory)
+    first = build_indexes(config=cfg_a, embedding_backend="st")
+    assert first.dense.meta["embedder"] == "config-model-a"
+
+    cfg_b = cfg_a.model_copy(
+        update={
+            "retrieval": cfg_a.retrieval.model_copy(
+                update={
+                    "dense": cfg_a.retrieval.dense.model_copy(
+                        update={"model_name": "config-model-b"}
+                    )
+                }
+            )
+        }
+    )
+    second = build_indexes(config=cfg_b, embedding_backend="st")
+    assert second.dense.meta["embedder"] == "config-model-b"
+
+
+def test_hash_backend_uses_isolated_default_index_directory(tmp_path: Path) -> None:
+    store = _fixture_store()
+    cfg = _index_config(tmp_path, store, model_name="production-model")
+    built = build_indexes(config=cfg, embedding_backend="hash")
+    assert built.dense_dir == tmp_path / "indexes" / "hash" / "chroma"
+    assert built.sparse_dir == tmp_path / "indexes" / "hash" / "bm25"
+    assert not (tmp_path / "indexes" / "chroma" / "meta.json").exists()
+
+
+def test_load_toolkit_disables_graph_with_stale_corpus_identity(tmp_path: Path) -> None:
+    store = _fixture_store()
+    cfg = _index_config(tmp_path, store, model_name="production-model")
+    processed = Path(cfg.paths.processed_dir)
+    (processed / "knowledge_graph.json").write_text("{}\n", encoding="utf-8")
+    (processed / "graph_meta.json").write_text(
+        f'{{"graph_schema":"{GRAPH_BUILD_SCHEMA}",'
+        '"corpus_fingerprint":"stale",'
+        f'"extraction_schema":"{EXTRACTION_CACHE_SCHEMA}",'
+        '"limit_chunks":null,"use_llm_resolution":false,'
+        '"max_llm_resolutions":0}\n',
+        encoding="utf-8",
+    )
+
+    toolkit = load_toolkit(config=cfg, embedding_backend="hash", load_graph=True)
+
+    assert toolkit.graph is None
 
 
 def test_hybrid_rrf_and_rerank_debug() -> None:
@@ -242,3 +373,31 @@ def test_model_cache_honors_hf_home(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     monkeypatch.delenv("SCHOLAR_MODEL_CACHE", raising=False)
     monkeypatch.setenv("HF_HOME", str(tmp_path))
     assert Path(model_cache_folder()) == tmp_path / "hub"
+
+
+def test_production_models_try_local_cache_before_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeSentenceTransformer:
+        def __init__(self, _name: str, **kwargs: object) -> None:
+            calls.append(("embedding", bool(kwargs.get("local_files_only"))))
+
+        def encode(self, _texts: list[str], **_kwargs: object) -> np.ndarray:
+            return np.asarray([[1.0, 0.0]], dtype=np.float32)
+
+    class FakeCrossEncoder:
+        def __init__(self, _name: str, **kwargs: object) -> None:
+            calls.append(("reranker", bool(kwargs.get("local_files_only"))))
+
+    monkeypatch.setattr(
+        sentence_transformers,
+        "SentenceTransformer",
+        FakeSentenceTransformer,
+    )
+    monkeypatch.setattr(sentence_transformers, "CrossEncoder", FakeCrossEncoder)
+
+    SentenceTransformerEmbedder("fixture-embedder")
+    CrossEncoderReranker("fixture-reranker")
+    assert calls == [("embedding", True), ("reranker", True)]

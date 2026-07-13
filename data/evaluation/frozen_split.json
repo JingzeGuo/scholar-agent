@@ -1,6 +1,6 @@
 {
   "name": "scholaragent_eval_v1",
-  "created_at": "2026-07-12T08:09:51+00:00",
+  "created_at": "2026-07-13T13:36:04+00:00",
   "n_questions": 50,
   "type_counts": {
     "factual": 10,
@@ -61,7 +61,7 @@
     "q_u04",
     "q_u05"
   ],
-  "fingerprint_sha256": "9382ed8119ad4072c3ef45fd6cc5b64b20d0ea91c09271ace302e6105c175d8e",
+  "fingerprint_sha256": "c15f16c1cf086b81d90f7c53869cc1943cbca26d616b254761b924969e6bb059",
   "frozen": true,
   "notes": "Frozen before final system tuning. Keep out of development prompts/fixtures. Gold chunk IDs resolved from data/processed at freeze time."
 }

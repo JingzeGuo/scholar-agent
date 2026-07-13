@@ -18,6 +18,7 @@ def assess_pages(
     pages: list[PaperPage],
     *,
     chunk_count: int = 0,
+    encoding_name: str = "cl100k_base",
 ) -> PaperExtractionReport:
     empty = sum(1 for p in pages if p.is_empty)
     scanned = sum(1 for p in pages if p.is_scanned_suspect)
@@ -76,7 +77,7 @@ def assess_pages(
         empty_page_count=empty,
         scanned_suspect_page_count=scanned,
         total_chars=total_chars,
-        total_tokens_est=count_tokens(full_text),
+        total_tokens_est=count_tokens(full_text, encoding_name=encoding_name),
         chunk_count=chunk_count,
         is_empty_paper=is_empty_paper,
         is_scanned_suspect=is_scanned,
@@ -90,6 +91,7 @@ def summarize_report(report: CorpusIngestionReport) -> str:
         f"  attempted={report.papers_attempted} ingested={report.papers_ingested} "
         f"skipped={report.papers_skipped} failed={report.papers_failed}",
         f"  pages={report.total_pages} chunks={report.total_chunks}",
+        f"  tokenizer={report.tokenizer_backend} encoding={report.tokenizer_encoding}",
     ]
     if report.empty_papers:
         lines.append(f"  empty_papers={len(report.empty_papers)}")

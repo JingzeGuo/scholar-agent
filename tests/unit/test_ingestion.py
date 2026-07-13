@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import fitz
+import pytest
 
 from scholar_agent.config import ChunkingConfig
 from scholar_agent.ids import content_hash
@@ -14,7 +15,14 @@ from scholar_agent.ingestion.loader import load_pages
 from scholar_agent.ingestion.pipeline import IngestionPipeline
 from scholar_agent.ingestion.quality import assess_pages
 from scholar_agent.ingestion.sections import is_section_heading, pages_to_sections
-from scholar_agent.ingestion.tokens import count_tokens
+from scholar_agent.ingestion.tokens import (
+    TokenizerUnavailableError,
+    clear_encoding_cache,
+    count_tokens,
+    decode_tokens,
+    encode_tokens,
+    require_encoding,
+)
 from scholar_agent.models.corpus import (
     Chunk,
     CorpusManifestEntry,
@@ -71,6 +79,41 @@ def test_token_count_is_not_char_count() -> None:
     assert tokens < len(text)  # tokenizer merges subwords
 
 
+def test_default_tokenizer_never_downloads_when_cache_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tmp_path / "missing-cache"))
+    monkeypatch.delenv("SCHOLAR_ALLOW_TOKENIZER_DOWNLOAD", raising=False)
+    clear_encoding_cache()
+
+    def forbidden_download(_name: str):
+        raise AssertionError("tiktoken.get_encoding would perform a network fetch")
+
+    monkeypatch.setattr("tiktoken.get_encoding", forbidden_download)
+    text = "Self-RAG retrieves evidence — 离线 tokenizer.\nSecond line."
+    first = encode_tokens(text)
+    second = encode_tokens(text)
+    assert first == second
+    assert decode_tokens(first) == text
+    assert count_tokens(text) == len(first) > 0
+    clear_encoding_cache()
+
+
+def test_canonical_tokenizer_preflight_fails_instead_of_silently_drifting(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tmp_path / "missing-cache"))
+    monkeypatch.delenv("SCHOLAR_ALLOW_TOKENIZER_DOWNLOAD", raising=False)
+    monkeypatch.delenv("SCHOLAR_ALLOW_TOKENIZER_FALLBACK", raising=False)
+    clear_encoding_cache()
+    with pytest.raises(TokenizerUnavailableError, match="Tokenizer asset"):
+        require_encoding("cl100k_base")
+    assert require_encoding("cl100k_base", allow_fallback=True) == "local-reversible-v1"
+    clear_encoding_cache()
+
+
 def test_section_heading_detection() -> None:
     assert is_section_heading("1. Introduction")
     assert is_section_heading("Abstract")
@@ -120,6 +163,26 @@ def test_header_footer_stripping(tmp_path: Path) -> None:
     assert header_hits <= 1
 
 
+def test_header_detection_counts_distinct_pages_not_lines() -> None:
+    pages = [
+        PaperPage(
+            paper_id="p",
+            page_number=page,
+            text=(
+                "Shared paper header\n"
+                f"UNIQUEPAGE{page} result 1\n"
+                "Body evidence remains.\n"
+                f"UNIQUEPAGE{page} result 2"
+            ),
+            char_count=100,
+        )
+        for page in range(1, 4)
+    ]
+    cleaned = strip_headers_footers(pages)
+    assert all("Shared paper header" not in page.text for page in cleaned)
+    assert all(f"UNIQUEPAGE{page.page_number}" in page.text for page in cleaned)
+
+
 def test_chunker_token_aware_and_stable_ids() -> None:
     long_text = " ".join(["retrieval"] * 400)
     sections = [
@@ -145,6 +208,61 @@ def test_chunker_token_aware_and_stable_ids() -> None:
     assert all(c.paper_id == "paper_x" for c in chunks_a)
     assert all(c.page_start >= 1 for c in chunks_a)
     assert chunks_a[-1].section == "2. Method"
+
+
+def test_real_pdf_chunks_keep_exact_page_to_text_provenance(tmp_path: Path) -> None:
+    pdf = tmp_path / "exact-pages.pdf"
+    _write_text_pdf(
+        pdf,
+        [
+            "1. Method\n"
+            + "\n".join(
+                [f"ALPHAPAGEretrieval ALPHAPAGEevidence ALPHAPAGEitem{i:02x}" for i in range(45)]
+            ),
+            "\n".join(
+                [f"BETAPAGEcorrective BETAPAGEevidence BETAPAGEitem{i:02x}" for i in range(45)]
+            ),
+            "\n".join(
+                [f"GAMMAPAGEgraph GAMMAPAGEevidence GAMMAPAGEitem{i:02x}" for i in range(45)]
+            ),
+        ],
+    )
+    pages, _ = load_pages("paper_exact", pdf)
+    sections = pages_to_sections(strip_headers_footers(pages))
+    spanning = next(section for section in sections if section.page_end == 3)
+    assert [item.page_number for item in spanning.page_texts] == [1, 2, 3]
+
+    chunks = chunk_sections(
+        "paper_exact",
+        [spanning],
+        target_tokens=50,
+        overlap_tokens=10,
+        min_tokens=10,
+    )
+    assert len(chunks) >= 3
+    marker_pages = {"ALPHAPAGE": 1, "BETAPAGE": 2, "GAMMAPAGE": 3}
+    for chunk in chunks:
+        actual_pages = [page for marker, page in marker_pages.items() if marker in chunk.text]
+        assert actual_pages, chunk.text
+        assert (chunk.page_start, chunk.page_end) == (min(actual_pages), max(actual_pages))
+
+
+def test_legacy_section_without_page_map_uses_conservative_full_range() -> None:
+    section = SectionBlock(
+        title="Method",
+        page_start=4,
+        page_end=7,
+        text=" ".join(["retrieval"] * 180),
+    )
+    chunks = chunk_sections(
+        "paper_legacy",
+        [section],
+        target_tokens=50,
+        overlap_tokens=10,
+        min_tokens=10,
+    )
+    assert len(chunks) > 1
+    assert {(chunk.page_start, chunk.page_end) for chunk in chunks} == {(4, 7)}
 
 
 def test_empty_pdf_flagged(tmp_path: Path) -> None:
@@ -199,17 +317,31 @@ def test_pipeline_idempotent(tmp_path: Path, repo_root: Path) -> None:
     pipeline = IngestionPipeline(
         papers_dir=papers_dir,
         processed_dir=processed,
-        chunking=ChunkingConfig(target_tokens=120, overlap_tokens=20, min_tokens=20),
+        chunking=ChunkingConfig(
+            target_tokens=120,
+            overlap_tokens=20,
+            min_tokens=20,
+            allow_tokenizer_fallback=True,
+        ),
     )
     first = pipeline.ingest_entry(entry, force=False)
     assert first.status == IngestionStatus.INGESTED
     assert first.chunks
     assert first.paper is not None
+    assert first.report.tokenizer_backend in {
+        "local-reversible-v1",
+        "tiktoken:cl100k_base",
+    }
+    assert first.paper.ingestion_config_fingerprint == pipeline.ingestion_config_fingerprint
     chunk_ids_1 = [c.chunk_id for c in first.chunks]
 
     second = pipeline.ingest_entry(first.entry, force=False)
     assert second.status == IngestionStatus.SKIPPED
     assert second.report.skipped is True
+    assert second.report.total_chars == first.report.total_chars > 0
+    assert second.report.total_tokens_est == first.report.total_tokens_est > 0
+    assert second.report.empty_page_count == first.report.empty_page_count
+    assert (processed / "extraction_reports.jsonl").is_file()
 
     # Force re-ingest yields same chunk IDs (stable content addressing)
     third = pipeline.ingest_entry(first.entry, force=True)
@@ -222,6 +354,20 @@ def test_pipeline_idempotent(tmp_path: Path, repo_root: Path) -> None:
     assert len(papers) == 1
     assert len(chunks) == len(chunk_ids_1)
     assert all(c.page_start <= c.page_end for c in chunks)
+
+    changed_pipeline = IngestionPipeline(
+        papers_dir=papers_dir,
+        processed_dir=processed,
+        chunking=ChunkingConfig(
+            target_tokens=140,
+            overlap_tokens=20,
+            min_tokens=20,
+            allow_tokenizer_fallback=True,
+        ),
+    )
+    changed = changed_pipeline.ingest_entry(first.entry, force=False)
+    assert changed.status == IngestionStatus.INGESTED
+    assert changed_pipeline.ingestion_config_fingerprint != pipeline.ingestion_config_fingerprint
 
 
 def test_empty_paper_not_indexed(tmp_path: Path) -> None:
@@ -237,7 +383,11 @@ def test_empty_paper_not_indexed(tmp_path: Path) -> None:
         pdf_filename="blank.pdf",
         content_hash="0" * 16,
     )
-    pipeline = IngestionPipeline(papers_dir=papers_dir, processed_dir=processed)
+    pipeline = IngestionPipeline(
+        papers_dir=papers_dir,
+        processed_dir=processed,
+        chunking=ChunkingConfig(allow_tokenizer_fallback=True),
+    )
     result = pipeline.ingest_entry(entry)
     assert result.status == IngestionStatus.FAILED
     assert result.chunks == []

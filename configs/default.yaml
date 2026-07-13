@@ -53,6 +53,9 @@ chunking:
   target_tokens: 600
   overlap_tokens: 80
   min_tokens: 80
+  encoding_name: cl100k_base
+  # Canonical ingestion fails fast if this tokenizer asset is unavailable.
+  allow_tokenizer_fallback: false
 
 logging:
   level: INFO

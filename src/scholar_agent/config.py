@@ -107,6 +107,16 @@ class ChunkingConfig(BaseModel):
     target_tokens: int = Field(default=600, ge=50)
     overlap_tokens: int = Field(default=80, ge=0)
     min_tokens: int = Field(default=80, ge=1)
+    encoding_name: str = "cl100k_base"
+    allow_tokenizer_fallback: bool = False
+
+    @field_validator("encoding_name")
+    @classmethod
+    def _non_empty_encoding(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("encoding_name must be non-empty")
+        return cleaned
 
     @model_validator(mode="after")
     def _validate_overlap(self) -> ChunkingConfig:
@@ -157,6 +167,7 @@ class EnvSettings(BaseSettings):
     scholar_max_tool_calls: int | None = None
     scholar_max_research_iterations: int | None = None
     scholar_max_corrective_iterations: int | None = None
+    scholar_max_total_tokens: int | None = None
     scholar_request_timeout_s: float | None = None
     scholar_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None
 
@@ -210,6 +221,8 @@ def apply_env_overrides(config: AppConfig, env: EnvSettings | None = None) -> Ap
         budgets.max_research_iterations_per_pass = env.scholar_max_research_iterations
     if env.scholar_max_corrective_iterations is not None:
         budgets.max_corrective_iterations = env.scholar_max_corrective_iterations
+    if env.scholar_max_total_tokens is not None:
+        budgets.max_total_tokens = env.scholar_max_total_tokens
 
     if env.scholar_log_level is not None:
         logging_cfg.level = env.scholar_log_level

@@ -6,8 +6,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from scholar_agent.config import AppConfig, load_config
-from scholar_agent.graph.evidence import validate_relations
+from scholar_agent.graph.evidence import localize_relation_to_pages, validate_relations
 from scholar_agent.graph.extract import (
     EXTRACTION_CACHE_SCHEMA,
     extract_from_chunk,
@@ -17,15 +19,54 @@ from scholar_agent.graph.resolver import EntityResolver, LLMEntityDisambiguator
 from scholar_agent.graph.stats import GraphStats, compute_graph_stats
 from scholar_agent.graph.store import KnowledgeGraphStore
 from scholar_agent.ids import make_relation_id
+from scholar_agent.ingestion.headers import strip_headers_footers
+from scholar_agent.ingestion.loader import load_pages
 from scholar_agent.llm.client import create_llm_client
 from scholar_agent.logging import get_logger
-from scholar_agent.models.corpus import Chunk, Paper
+from scholar_agent.models.corpus import Chunk, Paper, PaperPage
 from scholar_agent.models.graph import Entity, EntityType, Relation
 from scholar_agent.retrieval.chunk_store import ChunkStore
 from scholar_agent.storage.cache import DiskCache
 from scholar_agent.storage.jsonl import JsonlRepository
 
 logger = get_logger(__name__)
+
+GRAPH_BUILD_SCHEMA = "graph-v2-physical-page-ranges"
+
+
+class GraphBuildMeta(BaseModel):
+    """Rebuild identity for graph artifacts derived from canonical chunks."""
+
+    graph_schema: str = GRAPH_BUILD_SCHEMA
+    corpus_fingerprint: str
+    extraction_schema: str
+    limit_chunks: int | None
+    use_llm_resolution: bool
+    max_llm_resolutions: int
+
+
+def validate_graph_build_meta(
+    meta_path: Path | str,
+    *,
+    corpus_fingerprint: str,
+) -> tuple[bool, str]:
+    """Verify that a runtime graph is full-corpus and matches canonical chunks."""
+    path = Path(meta_path)
+    if not path.is_file():
+        return False, "graph metadata is missing"
+    try:
+        meta = GraphBuildMeta.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, "graph metadata is invalid"
+    if meta.graph_schema != GRAPH_BUILD_SCHEMA:
+        return False, "graph schema changed"
+    if meta.extraction_schema != EXTRACTION_CACHE_SCHEMA:
+        return False, "graph extraction schema changed"
+    if meta.corpus_fingerprint != corpus_fingerprint:
+        return False, "graph corpus fingerprint does not match canonical chunks"
+    if meta.limit_chunks is not None:
+        return False, "graph was built from a partial chunk limit"
+    return True, "ok"
 
 
 @dataclass
@@ -38,6 +79,7 @@ class GraphBuildResult:
     relations_path: Path
     graph_path: Path
     stats_path: Path
+    meta_path: Path
 
 
 def build_knowledge_graph(
@@ -59,26 +101,47 @@ def build_knowledge_graph(
     relations_path = processed / "relations.jsonl"
     graph_path = processed / "knowledge_graph.json"
     stats_path = processed / "graph_stats.json"
+    meta_path = processed / "graph_meta.json"
 
-    if not force and entities_path.is_file() and relations_path.is_file() and graph_path.is_file():
-        logger.info("loading existing knowledge graph from %s", graph_path)
-        store = KnowledgeGraphStore.load_node_link_json(graph_path)
-        entities = JsonlRepository(entities_path, Entity).read_all()
-        relations = JsonlRepository(relations_path, Relation).read_all()
-        stats = compute_graph_stats(store)
-        stats_path.write_text(
-            json.dumps(stats.model_dump(mode="json"), indent=2) + "\n", encoding="utf-8"
-        )
-        return GraphBuildResult(
-            store=store,
-            entities=entities,
-            relations=relations,
-            stats=stats,
-            entities_path=entities_path,
-            relations_path=relations_path,
-            graph_path=graph_path,
-            stats_path=stats_path,
-        )
+    requested_meta = GraphBuildMeta(
+        corpus_fingerprint=chunk_store.fingerprint,
+        extraction_schema=EXTRACTION_CACHE_SCHEMA,
+        limit_chunks=limit_chunks,
+        use_llm_resolution=use_llm_resolution,
+        max_llm_resolutions=max_llm_resolutions,
+    )
+
+    artifacts_exist = entities_path.is_file() and relations_path.is_file() and graph_path.is_file()
+    if not force and artifacts_exist and meta_path.is_file():
+        try:
+            persisted_meta = GraphBuildMeta.model_validate_json(
+                meta_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            persisted_meta = None
+        if persisted_meta == requested_meta:
+            logger.info("loading existing knowledge graph from %s", graph_path)
+            store = KnowledgeGraphStore.load_node_link_json(graph_path)
+            entities = JsonlRepository(entities_path, Entity).read_all()
+            relations = JsonlRepository(relations_path, Relation).read_all()
+            stats = compute_graph_stats(store)
+            stats_path.write_text(
+                json.dumps(stats.model_dump(mode="json"), indent=2) + "\n", encoding="utf-8"
+            )
+            return GraphBuildResult(
+                store=store,
+                entities=entities,
+                relations=relations,
+                stats=stats,
+                entities_path=entities_path,
+                relations_path=relations_path,
+                graph_path=graph_path,
+                stats_path=stats_path,
+                meta_path=meta_path,
+            )
+        logger.info("graph metadata changed; rebuilding derived graph artifacts")
+    elif not force and artifacts_exist:
+        logger.info("graph metadata missing; rebuilding derived graph artifacts")
 
     chunks = chunk_store.chunks
     if limit_chunks is not None:
@@ -135,6 +198,60 @@ def build_knowledge_graph(
     grounded = validate_relations(raw_relations, chunk_store.by_chunk_id)
     logger.info("relations with grounded evidence: %s", len(grounded))
 
+    # Resolve relation spans to their actual physical PDF page(s).  A chunk may
+    # cross a page boundary, so blindly assigning ``chunk.page_start`` makes a
+    # structurally valid graph edge point at the wrong page.  Missing PDFs are
+    # tolerated for tiny synthetic fixtures; full-corpus builds localize every
+    # relation and discard spans that cannot be found on their declared pages.
+    pages_by_paper: dict[str, list[PaperPage]] = {}
+    unavailable_papers: set[str] = set()
+    for paper_id in chunks_by_paper:
+        paper = papers_by_id.get(paper_id)
+        if paper is None:
+            unavailable_papers.add(paper_id)
+            continue
+        pdf_path = Path(paper.pdf_path)
+        if not pdf_path.is_file():
+            unavailable_papers.add(paper_id)
+            continue
+        try:
+            raw_pages, _image_counts = load_pages(paper_id, pdf_path)
+            pages_by_paper[paper_id] = strip_headers_footers(raw_pages)
+        except (OSError, RuntimeError, ValueError) as exc:
+            unavailable_papers.add(paper_id)
+            logger.warning("graph page localization unavailable paper=%s: %s", paper_id, exc)
+
+    localized: list[Relation] = []
+    dropped_unlocalized = 0
+    cross_page = 0
+    for relation in grounded:
+        pages = pages_by_paper.get(relation.paper_id)
+        if pages is None:
+            # Fixture/degraded mode: retain the truthful canonical chunk range.
+            chunk = chunk_store.by_chunk_id[relation.chunk_id]
+            localized.append(
+                relation.model_copy(
+                    update={"page_number": chunk.page_start, "page_end": chunk.page_end}
+                )
+            )
+            continue
+        chunk = chunk_store.by_chunk_id[relation.chunk_id]
+        located = localize_relation_to_pages(relation, chunk, pages)
+        if located is None:
+            dropped_unlocalized += 1
+            continue
+        if located.page_end != located.page_number:
+            cross_page += 1
+        localized.append(located)
+    grounded = localized
+    logger.info(
+        "relation page provenance localized=%s cross_page=%s dropped=%s papers_without_pdf=%s",
+        len(grounded) - sum(r.paper_id in unavailable_papers for r in grounded),
+        cross_page,
+        dropped_unlocalized,
+        len(unavailable_papers),
+    )
+
     # Resolve entities on grounded relations
     final_relations: list[Relation] = []
     for rel in grounded:
@@ -180,6 +297,10 @@ def build_knowledge_graph(
     stats_path.write_text(
         json.dumps(stats.model_dump(mode="json"), indent=2) + "\n", encoding="utf-8"
     )
+    meta_path.write_text(
+        json.dumps(requested_meta.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     # Optional: resolution decisions for audit
     decisions_path = processed / "entity_resolution_decisions.jsonl"
@@ -216,4 +337,5 @@ def build_knowledge_graph(
         relations_path=relations_path,
         graph_path=graph_path,
         stats_path=stats_path,
+        meta_path=meta_path,
     )

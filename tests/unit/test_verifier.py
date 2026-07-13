@@ -223,3 +223,74 @@ def test_partial_coverage_emits_corrective_queries() -> None:
     assert result.corrective_queries
     assert all(action.target_sub_question_id == "sq_b" for action in result.corrective_actions)
     assert any("CRAG" in q or "crag" in q.lower() for q in result.corrective_queries)
+
+
+def test_named_anchor_must_appear_in_evidence() -> None:
+    plan = Planner().plan("What changed in AcmeAI's private 2027 Model-X2 run?")
+    sq_id = plan.sub_questions[0].id
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                run_id="r_anchor",
+                sq=sq_id,
+                paper="paper_training",
+                chunk="chunk_training",
+                text=(
+                    "A private training run changed its retrieval model and used "
+                    "more accelerator capacity in 2025."
+                ),
+            )
+        ]
+    )
+    result = Verifier().verify(query=plan.original_query, plan=plan, ledger=ledger)
+    assert not result.is_sufficient
+    assert sq_id in result.missing_sub_questions
+    assert any("anchor:AcmeAI" in aspect for aspect in result.missing_aspects)
+
+
+def test_verifier_rejects_claim_not_entailed_by_its_passage() -> None:
+    plan = Planner().plan("What improves retrieval accuracy?")
+    sq_id = plan.sub_questions[0].id
+    item = _item(
+        run_id="r_support",
+        sq=sq_id,
+        paper="paper_a",
+        chunk="chunk_a",
+        claim="The method improves retrieval accuracy by 42 percent.",
+        text="The method improves retrieval accuracy by 7 percent on this benchmark.",
+    )
+    result = Verifier().verify(
+        query=plan.original_query,
+        plan=plan,
+        ledger=EvidenceLedger(items=[item]),
+    )
+    assert not result.is_sufficient
+    assert item.claim[:120] in result.unsupported_claims
+    assert item.evidence_id not in {
+        evidence_id
+        for evidence_ids in result.supported_evidence_ids.values()
+        for evidence_id in evidence_ids
+    }
+
+
+def test_synthesis_enforces_all_three_requested_sources() -> None:
+    plan = Planner().plan("Summarize main trends across agentic retrieval papers")
+    sq_id = plan.sub_questions[0].id
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                run_id="r_diversity",
+                sq=sq_id,
+                paper=f"paper_{index}",
+                chunk=f"chunk_{index}",
+                text=(
+                    "Agentic retrieval papers discuss main trends, representative methods, "
+                    "systems, limitations, and open problems."
+                ),
+            )
+            for index in range(2)
+        ]
+    )
+    result = Verifier().verify(query=plan.original_query, plan=plan, ledger=ledger)
+    assert not result.is_sufficient
+    assert any("expected ≥3" in aspect for aspect in result.missing_aspects)

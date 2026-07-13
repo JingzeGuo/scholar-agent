@@ -235,8 +235,8 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "keyword",
         "What is LightRAG?",
         ["2410.05779"],
-        [["lightrag", "graph", "retrieval-augmented"]],
-        ["LightRAG is a simple and fast graph-empowered retrieval-augmented generation system."],
+        [["lightrag", "graph-based text indexing", "dual-level retrieval"]],
+        ["LightRAG integrates graph-based text indexing with efficient dual-level retrieval."],
         False,
         "Exact system name LightRAG.",
     ),
@@ -297,10 +297,13 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "comparison",
         "How does GraphRAG (From Local to Global) differ from standard vector RAG?",
         ["2404.16130", "2005.11401"],
-        [["graph rag", "community", "global"], ["retrieval-augmented", "parametric"]],
         [
-            "GraphRAG builds a knowledge graph and uses community summaries for global questions.",
-            "Classic RAG retrieves text chunks via dense/sparse retrieval without an explicit corpus graph.",
+            ["graph index", "community summaries", "global questions"],
+            ["dense vector index", "non-parametric memory"],
+        ],
+        [
+            "GraphRAG builds a graph index and uses community summaries to answer global questions.",
+            "Classic RAG uses a dense vector index as non-parametric memory for generation.",
         ],
         True,
         "GraphRAG vs classic RAG.",
@@ -310,10 +313,10 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "comparison",
         "Compare Toolformer and ReAct for tool use in language models.",
         ["2302.04761", "2210.03629"],
-        [["toolformer", "api"], ["react", "acting"]],
+        [["toolformer", "api"], ["react", "interleaved", "verbal reasoning traces"]],
         [
             "Toolformer self-supervises API call insertion during LM training.",
-            "ReAct prompts models to interleave reasoning and acting with tools at inference time.",
+            "ReAct prompts models to generate verbal reasoning traces and actions in an interleaved manner.",
         ],
         False,
         "Toolformer vs ReAct.",
@@ -362,9 +365,12 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "comparison",
         "Compare FiD and classic RAG generation patterns for using multiple passages.",
         ["2007.01282", "2005.11401"],
-        [["fusion-in-decoder", "fusion"], ["retrieval-augmented", "generation"]],
         [
-            "FiD encodes passages separately and fuses in the decoder.",
+            ["processed independently", "fusion in the decoder", "retrieved passages"],
+            ["retrieval-augmented", "non-parametric memory", "generated sequence"],
+        ],
+        [
+            "FiD processes passages independently in the encoder and fuses their representations in the decoder.",
             "RAG-style models condition generation on retrieved documents as non-parametric memory.",
         ],
         False,
@@ -375,10 +381,13 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "comparison",
         "How does LightRAG relate to GraphRAG-style graph-empowered RAG?",
         ["2410.05779", "2404.16130"],
-        [["lightrag", "graph"], ["graph rag", "community"]],
         [
-            "LightRAG emphasizes simple/fast graph-empowered RAG.",
-            "From Local to Global GraphRAG emphasizes hierarchical community summaries for global sensemaking.",
+            ["lightrag", "graph-based text indexing", "dual-level retrieval"],
+            ["graph index", "community summaries", "global questions"],
+        ],
+        [
+            "LightRAG integrates graph-based text indexing with efficient dual-level retrieval.",
+            "GraphRAG builds a graph index and uses community summaries for global answers.",
         ],
         True,
         "LightRAG vs GraphRAG.",
@@ -427,9 +436,12 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "comparison",
         "How do HuggingGPT and Toolformer differ in orchestrating tools/models?",
         ["2303.17580", "2302.04761"],
-        [["hugginggpt", "chatgpt"], ["toolformer", "tools"]],
         [
-            "HuggingGPT uses ChatGPT as a controller to plan and call specialist models.",
+            ["hugginggpt", "task planning", "select models", "execute each subtask"],
+            ["toolformer", "self-supervised", "apis to call"],
+        ],
+        [
+            "HuggingGPT uses ChatGPT to plan tasks, select specialist models, and execute each subtask.",
             "Toolformer teaches a single LM to call APIs via self-supervised training.",
         ],
         False,
@@ -440,9 +452,12 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "comparison",
         "Compare RETRO and Atlas as retrieval-augmented language models.",
         ["2112.04426", "2208.03299"],
-        [["retro", "retriev"], ["atlas", "few-shot"]],
         [
-            "RETRO improves LMs by retrieving from trillions of tokens at scale.",
+            ["retro", "retrieval database", "trillions of tokens"],
+            ["atlas", "few-shot", "retrieval-augmented language model"],
+        ],
+        [
+            "RETRO scales retrieval-enhanced language modeling to a database of trillions of tokens.",
             "Atlas focuses on few-shot learning with retrieval-augmented LMs.",
         ],
         False,
@@ -467,9 +482,12 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "relational",
         "How does ReAct's reasoning-acting loop connect to multi-agent conversation systems like AutoGen?",
         ["2210.03629", "2308.08155"],
-        [["react", "acting"], ["autogen", "multi-agent"]],
         [
-            "ReAct shows single-agent reasoning+acting with tools.",
+            ["react", "interleaved", "verbal reasoning traces"],
+            ["autogen", "multi-agent conversation", "applications"],
+        ],
+        [
+            "ReAct interleaves one model's verbal reasoning traces with actions in an external environment.",
             "AutoGen extends collaboration to multi-agent conversations for applications.",
         ],
         True,
@@ -480,10 +498,13 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "relational",
         "How does classic RAG (Lewis et al.) underpin later GraphRAG global query answering?",
         ["2005.11401", "2404.16130"],
-        [["retrieval-augmented generation"], ["graph rag", "global"]],
+        [
+            ["retrieval-augmented generation", "parametric", "non-parametric"],
+            ["graph index", "community summaries", "global questions"],
+        ],
         [
             "Lewis et al. establish RAG with parametric + non-parametric memory.",
-            "GraphRAG builds on retrieval-augmented generation with graph communities for global questions.",
+            "GraphRAG builds a graph index and uses community summaries to answer global questions.",
         ],
         True,
         "RAG foundation → GraphRAG.",
@@ -493,10 +514,13 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "relational",
         "What retrieval challenge does 'lost in the middle' imply for long retrieved contexts in RAG pipelines?",
         ["2307.03172", "2005.11401"],
-        [["lost in the middle", "middle"], ["retrieval-augmented"]],
         [
-            "Models underuse evidence placed in the middle of long contexts.",
-            "RAG systems that concatenate many retrieved passages can suffer from this position bias.",
+            ["beginning or end", "middle", "long contexts"],
+            ["dense vector index", "retrieved passages"],
+        ],
+        [
+            "Models use relevant information at the beginning or end of long contexts better than information in the middle.",
+            "Classic RAG conditions generation on passages retrieved from a dense vector index.",
         ],
         False,
         "Lost-in-middle implications for RAG.",
@@ -519,9 +543,12 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "relational",
         "How does Toolformer's API-calling ability relate to HuggingGPT's model orchestration?",
         ["2302.04761", "2303.17580"],
-        [["toolformer", "api"], ["hugginggpt", "tasks"]],
         [
-            "Toolformer learns when/how to call APIs from a single LM.",
+            ["toolformer", "trained to decide", "apis to call", "self-supervised"],
+            ["hugginggpt", "llm as controller", "expert models"],
+        ],
+        [
+            "Toolformer trains one language model to decide which APIs to call, when, and with what arguments.",
             "HuggingGPT uses an LLM controller to dispatch tasks to many expert models.",
         ],
         True,
@@ -545,10 +572,13 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "relational",
         "How does active retrieval (FLARE) address limitations of one-shot retrieve-then-read RAG?",
         ["2305.06983", "2005.11401"],
-        [["active retrieval", "flare"], ["retrieval-augmented"]],
         [
-            "FLARE retrieves adaptively during generation when more information is needed.",
-            "Classic RAG often retrieves once before generation.",
+            ["retrieve information once", "active retrieval", "throughout generation"],
+            ["dense vector index", "retrieved passages"],
+        ],
+        [
+            "FLARE contrasts one-time input-based retrieval with adaptive retrieval during generation.",
+            "Classic RAG conditions generation on passages retrieved from a dense vector index.",
         ],
         False,
         "FLARE vs one-shot RAG.",
@@ -558,9 +588,12 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "relational",
         "How do hallucination surveys motivate automated RAG evaluation metrics like those in RAGAs?",
         ["2311.05232", "2309.15217"],
-        [["hallucination"], ["ragas", "faithfulness"]],
         [
-            "Hallucination surveys document LLM fabrication risks.",
+            ["hallucination", "plausible yet nonfactual", "reliability"],
+            ["ragas", "faithfulness", "retrieved context"],
+        ],
+        [
+            "Hallucination surveys describe LLMs generating plausible but nonfactual content and the resulting reliability risks.",
             "RAGAs automates faithfulness-style checks for RAG answers grounded in retrieved context.",
         ],
         False,
@@ -605,8 +638,10 @@ RAW: list[tuple[str, str, str, list[str], list[list[str]], list[str], bool, str]
         "unanswerable",
         "What is the recommended dosage of amoxicillin for pediatric RAG-induced fever according to Self-RAG?",
         ["2310.11511"],
-        [["self-rag"]],
-        ["Self-RAG is an NLP method paper; it does not provide medical dosing guidance."],
+        [["self-rag", "language model", "retrieval", "self-reflection"]],
+        [
+            "Self-RAG is a language-model retrieval and self-reflection method, not a source of medical dosing guidance."
+        ],
         False,
         "Medical question not supported by NLP paper.",
     ),
@@ -651,20 +686,124 @@ def load_chunks() -> dict[str, list[dict]]:
     return by_pid
 
 
-def pick_chunk(chunks: list[dict], keywords: list[str]) -> dict | None:
+_STOPWORDS = {
+    "about",
+    "after",
+    "also",
+    "and",
+    "are",
+    "been",
+    "being",
+    "does",
+    "for",
+    "from",
+    "have",
+    "into",
+    "its",
+    "more",
+    "over",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "they",
+    "this",
+    "through",
+    "uses",
+    "using",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+}
+
+
+def _normalize_for_match(value: str) -> str:
+    """Normalize PDF text without erasing meaningful method-name boundaries."""
+    value = value.lower().replace("\u00ad", "")
+    # Join words split by PDF line wrapping (for example, ``retriev-\nal``).
+    value = re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", value)
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+def _content_terms(value: str) -> set[str]:
+    return {
+        token
+        for token in _normalize_for_match(value).split()
+        if len(token) >= 3 and token not in _STOPWORDS
+    }
+
+
+def _chunk_support_score(
+    chunk: dict,
+    *,
+    normalized_keywords: list[str],
+    keyword_terms: set[str],
+    claim_terms: set[str],
+) -> float:
+    raw_text = str(chunk.get("text", ""))
+    text = _normalize_for_match(raw_text)
+    text_terms = set(text.split())
+    phrase_coverage = sum(1 for phrase in normalized_keywords if phrase and phrase in text) / max(
+        1, len(normalized_keywords)
+    )
+    keyword_coverage = len(keyword_terms & text_terms) / max(1, len(keyword_terms))
+    claim_coverage = len(claim_terms & text_terms) / max(1, len(claim_terms))
+    substantive = min(1.0, len(text) / 900.0)
+    page_start = int(chunk.get("page_start", 99))
+    section = str(chunk.get("section") or "").casefold()
+    title_like = len(text) < 500 and substantive < 0.56
+    section_bonus = 12.0 if "abstract" in section else 0.0
+    if "conclusion" in section:
+        section_bonus += 2.0
+    if "reference" in section:
+        section_bonus -= 35.0
+    return (
+        claim_coverage * 100.0
+        + phrase_coverage * 60.0
+        + keyword_coverage * 25.0
+        + substantive * 8.0
+        + section_bonus
+        - (22.0 if title_like else 0.0)
+        - min(page_start, 20) * 0.15
+    )
+
+
+def pick_chunk(
+    chunks: list[dict],
+    keywords: list[str],
+    reference_claim: str = "",
+) -> dict | None:
+    """Pick a substantive chunk that supports the claim, not merely its title.
+
+    The previous keyword-count heuristic regularly selected short title/author
+    chunks.  This scorer is still deterministic and provider-free, but considers
+    both phrase matches and content-word coverage from the reference claim.  A
+    short, low-information title receives a penalty whenever the paper contains
+    substantive text.
+    """
     if not chunks:
         return None
-    kws = [k.lower() for k in keywords]
-    scored: list[tuple[int, dict]] = []
+    normalized_keywords = [_normalize_for_match(keyword) for keyword in keywords]
+    keyword_terms = _content_terms(" ".join(keywords))
+    claim_terms = _content_terms(reference_claim)
+    scored: list[tuple[float, int, str, dict]] = []
     for c in chunks:
-        text = c.get("text", "").lower()
-        score = sum(1 for k in kws if k in text)
-        # Prefer early pages slightly
-        score = score * 10 - int(c.get("page_start", 99))
-        scored.append((score, c))
-    scored.sort(key=lambda x: -x[0])
-    best_score, best = scored[0]
-    if best_score <= -50 and kws:
+        page_start = int(c.get("page_start", 99))
+        score = _chunk_support_score(
+            c,
+            normalized_keywords=normalized_keywords,
+            keyword_terms=keyword_terms,
+            claim_terms=claim_terms,
+        )
+        # Stable tie-breaks: earlier page, then canonical chunk ID.
+        scored.append((score, -page_start, str(c.get("chunk_id", "")), c))
+    scored.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    best_score, _, _, best = scored[0]
+    if best_score < 0 and normalized_keywords:
         # fallback: first substantial early chunk
         early = sorted(chunks, key=lambda c: (c["page_start"], -len(c.get("text", ""))))
         return early[0]
@@ -700,7 +839,8 @@ def main() -> None:
             pid = p["paper_id"]
             required_papers.append(pid)
             kws = kw_lists[i] if i < len(kw_lists) else []
-            ch = pick_chunk(chunks.get(pid, []), kws)
+            claim = claims[i] if i < len(claims) else " ".join(claims)
+            ch = pick_chunk(chunks.get(pid, []), kws, claim)
             if ch is None:
                 raise SystemExit(f"no chunks for {pid} ({qid})")
             gold_items.append(
