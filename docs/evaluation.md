@@ -151,12 +151,16 @@ Committed numeric snapshots (for README / interviews without regenerating
 gitignored `outputs/`):
 
 - [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md)
+  (deterministic offline extractive)
+- [`docs/results/live_llm_ragas_50x7_summary.md`](results/live_llm_ragas_50x7_summary.md)
+  (**full 50×7** shared DeepSeek generation + RAGAS, `run_a23467bb0aa84115`)
 - [`docs/results/live_shared_llm_eval_summary.md`](results/live_shared_llm_eval_summary.md)
-  (optional DeepSeek shared-generation regime)
+  (earlier generation-only live run without full RAGAS)
 
 Local full artifacts (when present):
 
 - `outputs/evaluation/phase8-final-clean-c741887/`
+- `outputs/evaluation/phase8-full-llm-ragas-50x7/`
 - `outputs/evaluation/phase8-final-live-79d20/`
 
 Dataset review: AI-assisted independent review of all 50 questions

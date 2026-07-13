@@ -1,6 +1,11 @@
 # Live shared-LLM evaluation summary
 
 **Status:** measured optional run with DeepSeek shared generation.  
+**Superseded for “full live + RAGAS” claims by**
+[`live_llm_ragas_50x7_summary.md`](live_llm_ragas_50x7_summary.md)
+(`run_a23467bb0aa84115`). This file remains as the earlier generation-only
+regime without full RAGAS scoring.
+
 **Not** a substitute for the offline deterministic suite.
 
 | Field | Value |

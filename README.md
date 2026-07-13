@@ -153,14 +153,23 @@ Full table: [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_h
 **0.57**; relational **0.40**. Full agent unanswerable refusals: **5/5**.
 Corrective loops trigger safely but `improvement_after_correction = 0.0` offline.
 
-**Optional live shared-LLM run** (`run_20de25c647c1433f`, DeepSeek flash):
-[`docs/results/live_shared_llm_eval_summary.md`](docs/results/live_shared_llm_eval_summary.md).
-Retrieval paper R@8 matches the offline hash table; citation precision rises under
-shared generation (e.g. hybrid_rerank cite P **0.588**).
+**Full live shared-LLM + RAGAS 50×7** (`run_a23467bb0aa84115`, DeepSeek flash,
+hash retrieval):
+[`docs/results/live_llm_ragas_50x7_summary.md`](docs/results/live_llm_ragas_50x7_summary.md).
+
+| system | paper R@8 | cite P | RAGAS faith. | RAGAS relev. |
+|---|---:|---:|---:|---:|
+| hybrid_rerank | 0.61 | 0.603 | 0.922 | 0.549 |
+| hybrid_graph | **0.67** | **0.620** | **0.959** | **0.583** |
+| full_agent | 0.54 | 0.491 | 0.877 | 0.492 |
+
+RAGAS coverage **0.90** because 5 unanswerable questions × 7 systems correctly
+refuse (empty answer → no RAGAS score). Generation used on **350/350** rows;
+**0** system errors.
 
 **Not run / unavailable:** full frozen-split eval with production BGE +
-cross-encoder end-to-end (weights can be local; full 50×7 ST re-measure not
-claimed here); RAGAS on the full 50×7 split (smoke verified separately).
+cross-encoder end-to-end (weights may be local; full 50×7 ST re-measure not
+claimed here).
 
 **Fixture-only:** unit/E2E tests under `tests/` (not full-corpus metrics).
 
