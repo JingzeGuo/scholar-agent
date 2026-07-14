@@ -289,6 +289,7 @@ so the interview path does not require a provider or browser session.
 - Design ADRs: [`docs/design_decisions.md`](docs/design_decisions.md)
 - Caching policy: [`docs/caching.md`](docs/caching.md)
 - Interview guide: [`docs/interview_guide.md`](docs/interview_guide.md)
+- 中文项目状态与面试要点: [`docs/interview_project_summary_zh.md`](docs/interview_project_summary_zh.md)
 - Evaluation ops: [`docs/evaluation.md`](docs/evaluation.md)
 - Phase acceptance evidence: [`docs/phase_acceptance.md`](docs/phase_acceptance.md)
 
