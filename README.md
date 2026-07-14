@@ -12,7 +12,8 @@ graph retrieval tools under budgets, a **Verifier** checks evidence coverage and
 may request corrective retrieval, and a **Writer** answers only from verified
 evidence—with ablations to measure what actually helps.
 
-**Status:** Phases 0–10 implemented. Full design:
+**Status:** Phases 0–10 implemented. The objective acceptance matrix is in
+[`docs/phase_acceptance.md`](docs/phase_acceptance.md); full design:
 [`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
 
 > Language note: this is a **portfolio research prototype**, not a production
@@ -30,8 +31,8 @@ evidence—with ablations to measure what actually helps.
 | No stop condition | Agents thrash on tools | Corrective budgets, no-new-evidence stop |
 | Graph as oracle | Triples treated as facts | Provenance-backed edges only |
 
-**Measured (offline hash embeddings, frozen 50-Q split, clean run `run_5bb1f439f19842cb`):**
-dense-only paper Recall@8 **0.13** vs hybrid_rerank **0.61**. Source:
+**Measured (offline hash embeddings, frozen 50-Q split, clean run `run_1f4dc371453d4a1f`):**
+dense-only paper Recall@8 **0.16** vs hybrid_rerank **0.61**. Source:
 [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
 
 ---
@@ -139,15 +140,15 @@ Artifacts: `data/evaluation/{questions,reference_evidence,frozen_split}.jsonl|js
 ### Quantitative results (measured offline)
 
 **Configuration:** hashing embedder + lexical rerank · graph loaded · no live LLM ·
-cost $0.00 · clean run `run_5bb1f439f19842cb` · corpus fingerprint `79d20fac…`.
+cost $0.00 · clean run `run_1f4dc371453d4a1f` · corpus fingerprint `79d20fac…`.
 Full table: [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
 
 | system | paper R@8 | cite P | latency ms |
 |---|---:|---:|---:|
-| naive_dense | 0.13 | 0.033 | 4.4 |
-| hybrid_rerank | 0.61 | 0.169 | 11.6 |
-| hybrid_graph | **0.67** | 0.212 | 301.5 |
-| full_agent | 0.54 | **0.288** | 587.2 |
+| naive_dense | 0.16 | 0.038 | 3.6 |
+| hybrid_rerank | 0.61 | 0.166 | 10.7 |
+| hybrid_graph | **0.67** | 0.212 | 289.9 |
+| full_agent | 0.54 | **0.288** | 572.2 |
 
 **Per-category (paper R@8):** hybrid_rerank factual/keyword **0.90**; comparison
 **0.57**; relational **0.40**. Full agent unanswerable refusals: **5/5**.
@@ -174,7 +175,7 @@ refuse (empty answer → no RAGAS score). Generation used on **350/350** rows;
 | Offline extractive | `run_a4770534afb84db2` | static_all_tools **0.73** (dense alone **0.70**) | [`docs/results/bge_ce_offline_50x7_summary.md`](docs/results/bge_ce_offline_50x7_summary.md) |
 | Live LLM + RAGAS | `run_6270c2cf8cd94186` | static_all_tools **0.73** | CE lifts MRR; hybrid_rerank cite P **0.660**, full_agent RAGAS faith. **0.965** — [`docs/results/bge_ce_llm_ragas_50x7_summary.md`](docs/results/bge_ce_llm_ragas_50x7_summary.md) |
 
-Vs hash offline, dense-only paper R@8 jumps **0.13 → 0.70**.
+Vs hash offline, dense-only paper R@8 jumps **0.16 → 0.70**.
 
 **Fixture-only:** unit/E2E tests under `tests/` (not full-corpus metrics).
 
@@ -289,6 +290,7 @@ so the interview path does not require a provider or browser session.
 - Caching policy: [`docs/caching.md`](docs/caching.md)
 - Interview guide: [`docs/interview_guide.md`](docs/interview_guide.md)
 - Evaluation ops: [`docs/evaluation.md`](docs/evaluation.md)
+- Phase acceptance evidence: [`docs/phase_acceptance.md`](docs/phase_acceptance.md)
 
 Hardening highlights (Phase 10): config validation, structured LLM parse/retry,
 provider backoff with jitter, workflow budgets, graceful index degradation,
@@ -304,11 +306,11 @@ disk cache with corruption handling, untrusted-content delimiters, secret-safe l
 3. Graph improves paper recall but multiplies latency (~30× in that run).
 4. PDFs, indexes, and raw eval outputs are local (gitignored).
 5. Single-user CLI/Streamlit prototype — not multi-tenant production.
-6. No committed demo video; the demo **script** is the deliverable.
+6. The committed demo GIF is a deterministic saved-run replay, not a live video.
 
 ## Future work
 
-- Production embedder/reranker evaluation on the frozen split
+- Larger and out-of-domain evaluation for BGE/cross-encoder retrieval
 - Stronger entailment/refusal checks on a development set
 - Score-calibrated hybrid+graph fusion
 - Multi-user API, auth, quotas, managed vector DB

@@ -1,7 +1,7 @@
 # Interview guide
 
 Concise answers for a junior Agent/RAG engineering interview. Numbers below are
-from the **offline hash-embedding** clean run `run_5bb1f439f19842cb` unless noted.
+from the **offline hash-embedding** clean run `run_1f4dc371453d4a1f` unless noted.
 They are **not** production BGE claims. Full table:
 [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md).
 
@@ -12,7 +12,7 @@ They are **not** production BGE claims. Full table:
 **Problem.** Literature Q&A needs answers grounded in PDF pages, not fluent but
 untraceable chat.
 
-**Baseline failure.** Naive dense retrieval alone reaches only **0.13** paper
+**Baseline failure.** Naive dense retrieval alone reaches only **0.16** paper
 Recall@8 on the frozen 50-question split with hashing embeddings; exact names
 and acronyms are easy to miss.
 
@@ -28,9 +28,9 @@ fixed retrieve→generate chain. (3) Separate Verifier and corrective budgets so
 loops terminate measurably.
 
 **Strongest measured result (this config).** Hybrid retrieval lifts paper
-Recall@8 from **0.13** (dense) to **0.61**; adding graph reaches **0.67**.
+Recall@8 from **0.16** (dense) to **0.61**; adding graph reaches **0.67**.
 
-**Main limitation.** Graph multiplies latency (~12 ms → ~301 ms). Corrective
+**Main limitation.** Graph multiplies latency (~11 ms → ~290 ms). Corrective
 loops trigger safely but show **0.0** gold-recall improvement offline. The 50-Q
 labels are AI-assisted reviewed, not human-signed.
 
@@ -83,7 +83,7 @@ new (unverified) text.
 ### 4. When does BM25 outperform dense retrieval?
 
 Exact terminology, dataset names, acronyms, and rare identifiers. On this offline
-run, hybrid (dense+BM25) paper Recall@8 is **0.61** vs dense **0.13**. Failure
+run, hybrid (dense+BM25) paper Recall@8 is **0.61** vs dense **0.16**. Failure
 case `q_k08` (RAGAs) shows dense 0.0 vs hybrid 1.0 paper recall for that item.
 
 ### 5. How does Reciprocal Rank Fusion work?
@@ -144,8 +144,8 @@ token support. Unsupported claims are removed or flagged; invented IDs fail.
 
 ### 14. Which ablation helped the most, and for which category?
 
-Largest jump: **dense → hybrid** on aggregate paper recall (**0.13 → 0.61**),
-especially factual/keyword (**0.10/0.20 → 0.90/0.90**). Graph adds a further lift
+Largest jump: **dense → hybrid** on aggregate paper recall (**0.16 → 0.61**),
+especially factual/keyword (**0.20/0.20 → 0.90/0.90**). Graph adds a further lift
 on comparison (**0.57 → 0.67** paper R@8). Full agent citation precision is best
 (**0.288**) but not best recall.
 
@@ -162,8 +162,8 @@ on comparison (**0.57 → 0.67** paper R@8). Full agent citation precision is be
 AuthN/Z and per-user quotas; multi-tenant index isolation; durable job queue for
 ingestion; production vector DB; secret management; request tracing (no CoT
 leakage); horizontal Streamlit/API servers; stronger refusal/entailment models;
-cache isolation; rate-limit budgets; evaluation on production embedders, not only
-hash.
+cache isolation; rate-limit budgets; and larger out-of-domain evaluation beyond
+the measured hash and BGE/cross-encoder frozen-split runs.
 
 ---
 
@@ -173,8 +173,8 @@ Use the full write-ups in [`docs/failure_analysis.md`](failure_analysis.md):
 
 1. **Dense misses exact product name** (`q_k08`) → hybrid recovers.
 2. **Graph helps recall but costs latency** (`q_r09`) → selective routing.
-3. **Agent over-answers unanswerable questions** (`q_u01` / `q_u03`) → separate
-   scope vs answer evidence remains open work.
+3. **Corrective loop triggers without recall gain** → termination is correct,
+   but gap-to-query quality remains open work.
 
 ---
 
@@ -193,7 +193,8 @@ Use the full write-ups in [`docs/failure_analysis.md`](failure_analysis.md):
 ## Project limitations
 
 - Offline hash metrics ≠ BGE/cross-encoder production numbers.
-- Unanswerable detection is weak for the agent path.
+- Static baselines have weak refusal behavior; the full agent refused all 5/5
+  unanswerable items in the measured offline run.
 - Graph ontology is constrained and heuristic extraction is imperfect.
 - PDFs and indexes are local artifacts (not committed).
 - Streamlit is a single-user demo, not a multi-tenant product.

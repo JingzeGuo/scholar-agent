@@ -45,7 +45,7 @@ naive/hybrid baselines **0/5** in this extractive offline path.
 
 | metric | hash `naive_dense` | BGE `naive_dense` | hash `hybrid_rerank` | BGE `hybrid_rerank` |
 |---|---:|---:|---:|---:|
-| paper R@8 | 0.13 | **0.70** | 0.61 | **0.69** |
+| paper R@8 | 0.16 | **0.70** | 0.61 | **0.69** |
 | chunk R@8 | 0.04 | 0.15 | 0.24 | **0.36** |
 
 Interpretation: under BGE, dense-only is no longer the weak link; hybrid/RRF gains

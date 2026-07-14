@@ -139,9 +139,9 @@ collection. The report stores both requested and actual embedding/reranker names
 
 ## Measured offline audit
 
-The complete 50×7 clean audit run `run_5bb1f439f19842cb` (commit `c741887`,
+The complete 50×7 clean audit run `run_1f4dc371453d4a1f` (commit `eff976a`,
 corpus fingerprint `79d20fac…`) used hashing embeddings, lexical reranking, and
-a loaded provenance-backed graph. Paper Recall@8 ranged from 0.13
+a loaded provenance-backed graph. Paper Recall@8 ranged from 0.16
 (`naive_dense`) to 0.67 (`hybrid_graph`); the full agent reached 0.54 paper
 recall, 0.288 citation precision, and **5/5** unanswerable refusals. Corrective
 loops triggered with precision 1.0 but `improvement_after_correction = 0.0`.
@@ -165,7 +165,7 @@ Local full artifacts (when present):
 
 - `outputs/evaluation/phase8-bge-ce-offline-50x7/`
 - `outputs/evaluation/phase8-bge-ce-llm-ragas-50x7/`
-- `outputs/evaluation/phase8-final-clean-c741887/`
+- `outputs/evaluation/phase8-final-hash-exact-eff976a/`
 - `outputs/evaluation/phase8-full-llm-ragas-50x7/`
 - `outputs/evaluation/phase8-final-live-79d20/`
 

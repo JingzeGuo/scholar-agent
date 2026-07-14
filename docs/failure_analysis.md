@@ -1,13 +1,13 @@
 # Failure analysis
 
-Evidence source: complete offline clean run **`run_5bb1f439f19842cb`**
+Evidence source: complete offline clean run **`run_1f4dc371453d4a1f`**
 (50 frozen questions × 7 systems).
 
 | Field | Value |
 |---|---|
 | Dataset fingerprint | `c15f16c1cf086b81d90f7c53869cc1943cbca26d616b254761b924969e6bb059` |
 | Corpus fingerprint | `79d20fac73b0ced268b99b457766bd67` |
-| Local artifact | `outputs/evaluation/phase8-final-clean-c741887/` (gitignored) |
+| Local artifact | `outputs/evaluation/phase8-final-hash-exact-eff976a/` (gitignored) |
 | Summary snapshot | [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md) |
 | Config | `hashing-embedder-v1`, lexical rerank, graph loaded, no live LLM/RAGAS, cost $0.00 |
 
@@ -27,11 +27,11 @@ human-signed annotation audit.
 | **Scenario** | Keyword question about an exact framework/product name (RAGAs). |
 | **Observable symptom** | Dense-only paper recall stays low on keyword items (aggregate keyword paper R@8 **0.20**); hybrid_rerank keyword paper R@8 **0.90**. |
 | **Affected component** | Dense retrieval / hashing embedder |
-| **Reproduction** | Offline eval `run_5bb1f439f19842cb` keyword slice in `aggregate_metrics.csv` / per-question CSV. |
+| **Reproduction** | Offline eval `run_1f4dc371453d4a1f` keyword slice in `aggregate_metrics.csv` / per-question CSV. |
 | **Root cause** | Hash embedding is weak for exact product/framework names; BM25 supplies the exact-token signal. |
 | **Fix** | Keep hybrid (dense+BM25 RRF) as the default keyword/hybrid route; do not present dense-only as production quality. |
 | **Verification after fix** | Hybrid systems recover keyword paper recall to **0.90**. |
-| **Remaining limitation** | Production BGE quality is **not measured** in this offline run. |
+| **Remaining limitation** | BGE quality is measured in a separate 50×7 run; this case isolates the deterministic hash configuration. |
 | **Interview lesson** | Sparse retrieval is not obsolete; hybrid fusion is a measured necessity for exact terms. |
 
 ---
@@ -41,9 +41,9 @@ human-signed annotation audit.
 | Field | Detail |
 |---|---|
 | **Scenario** | Multi-hop / relational and some comparison questions. |
-| **Observable symptom** | Aggregate paper R@8: hybrid_rerank **0.61** → hybrid_graph **0.67**. Latency **~11.6 ms → ~301.5 ms**. |
+| **Observable symptom** | Aggregate paper R@8: hybrid_rerank **0.61** → hybrid_graph **0.67**. Latency **~10.7 ms → ~289.9 ms**. |
 | **Affected component** | Graph retrieval / path ranking |
-| **Reproduction** | System aggregates in `run_5bb1f439f19842cb`. |
+| **Reproduction** | System aggregates in `run_1f4dc371453d4a1f`. |
 | **Root cause** | Graph paths recover gold papers outside hybrid top-k; traversal dominates CPU under this index. |
 | **Fix** | Route graph only for relational/multi-hop policies; keep hybrid-only for simple factual. |
 | **Verification after fix** | Selective router policies retained; graph still optional. |
@@ -91,7 +91,7 @@ human-signed annotation audit.
 | **Scenario** | Verifier-driven corrective re-retrieval on insufficient evidence. |
 | **Observable symptom** | `corrective_trigger_precision = 1.0` but `improvement_after_correction = 0.0` for both `hybrid_corrective` and `full_agent`. |
 | **Affected component** | Corrective research merge / query targeting |
-| **Reproduction** | Aggregate agent metrics in `run_5bb1f439f19842cb`. |
+| **Reproduction** | Aggregate agent metrics in `run_1f4dc371453d4a1f`. |
 | **Root cause** | Corrective passes fire and terminate safely, but additional evidence does not increase gold paper recall on the scored subset (hash retrieval ceiling + targeting limits). |
 | **Fix (partial)** | Loop termination, budgets, and merge behavior are tested; quality of corrective queries remains limited offline. |
 | **Verification after fix** | Termination tests pass; metric remains **0.0** improvement — **open quality gap**. |
@@ -110,7 +110,7 @@ human-signed annotation audit.
 | **Reproduction** | Pre-fix clean re-runs of hash evaluation; unit test now forces exact path. |
 | **Root cause** | HNSW does not guarantee stable order among equal similarities. |
 | **Fix** | Hash embedder searches use exact cosine over persisted embeddings with `chunk_id` tie-break (`DenseIndex._search_hash_exact`). Production ST/BGE path keeps ANN. |
-| **Verification after fix** | `tests/unit/test_retrieval.py::test_hash_dense_search_is_exact_and_stably_tie_broken`. |
+| **Verification after fix** | `tests/unit/test_retrieval.py::test_hash_dense_search_is_exact_and_stably_tie_broken` plus clean run `run_1f4dc371453d4a1f`. |
 | **Remaining limitation** | Exact search is for hash offline eval scale; not a production ANN redesign. |
 | **Interview lesson** | Reproducibility is a first-class eval property, not a footnote. |
 
@@ -118,7 +118,7 @@ human-signed annotation audit.
 
 ## Aggregate interpretation
 
-- Best paper Recall@8: **`hybrid_graph` 0.67** (latency **301.5 ms**).
+- Best paper Recall@8: **`hybrid_graph` 0.67** (latency **289.9 ms**).
 - Best citation precision (offline): **`full_agent` 0.288**.
 - Full agent unanswerable refusals: **5/5** in this offline run.
 - Corrective improvement metric: **0.0** (triggers without measured gold-recall gain).

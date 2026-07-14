@@ -36,7 +36,7 @@ In the UI, open **Replay** and select `selfrag_vs_crag`.
 | Time | What to show | Talking point |
 |---:|---|---|
 | 0:00–0:30 | Project problem | Literature answers need **page-level evidence**, not chatty summaries. |
-| 0:30–1:00 | Naive RAG baseline failure | Dense-only often misses exact names/acronyms; hybrid + agent tools recover (measured paper R@8 0.13 → 0.61 on the offline hash eval). |
+| 0:30–1:00 | Naive RAG baseline failure | Dense-only often misses exact names/acronyms; hybrid + agent tools recover (measured paper R@8 0.16 → 0.61 on the offline hash eval). |
 | 1:00–1:30 | Complex query | Replay query: **“Compare Self-RAG versus CRAG”**. |
 | 1:30–2:00 | Planner decomposition | Trace: two comparison sub-questions (Self-RAG side / CRAG side). |
 | 2:00–2:40 | Adaptive tool selection | Trace: hybrid_rerank (and graph if enabled) chosen by the rule-based router, not a fixed pipeline. |
@@ -45,7 +45,7 @@ In the UI, open **Replay** and select `selfrag_vs_crag`.
 | 3:50–4:30 | Verifier gap + corrective | Replay notes: first pass may miss one comparison side; corrective iteration pulls the missing paper. |
 | 4:30–5:20 | Final page-level citations | Answer claims with `[paper … p.N]`; Sources tab maps claim → chunk → PDF page. |
 | 5:20–6:00 | Ablation comparison | Mention offline results: hybrid_graph best paper recall (0.67); full_agent best cite precision (0.288); unanswerable refusals **5/5**. |
-| 6:00–6:30 | One limitation | Offline hash run: corrective improvement metric **0.0**; graph adds latency (~12→301 ms). |
+| 6:00–6:30 | One limitation | Offline hash run: corrective improvement metric **0.0**; graph adds latency (~11→290 ms). |
 
 ### Stable sample questions
 
