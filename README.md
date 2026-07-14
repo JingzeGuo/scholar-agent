@@ -167,9 +167,14 @@ RAGAS coverage **0.90** because 5 unanswerable questions × 7 systems correctly
 refuse (empty answer → no RAGAS score). Generation used on **350/350** rows;
 **0** system errors.
 
-**Not run / unavailable:** full frozen-split eval with production BGE +
-cross-encoder end-to-end (weights may be local; full 50×7 ST re-measure not
-claimed here).
+**BGE + cross-encoder full 50×7 (measured):**
+
+| regime | run | best paper R@8 | notes |
+|---|---|---:|---|
+| Offline extractive | `run_a4770534afb84db2` | static_all_tools **0.73** (dense alone **0.70**) | [`docs/results/bge_ce_offline_50x7_summary.md`](docs/results/bge_ce_offline_50x7_summary.md) |
+| Live LLM + RAGAS | `run_6270c2cf8cd94186` | static_all_tools **0.73** | CE lifts MRR; hybrid_rerank cite P **0.660**, full_agent RAGAS faith. **0.965** — [`docs/results/bge_ce_llm_ragas_50x7_summary.md`](docs/results/bge_ce_llm_ragas_50x7_summary.md) |
+
+Vs hash offline, dense-only paper R@8 jumps **0.13 → 0.70**.
 
 **Fixture-only:** unit/E2E tests under `tests/` (not full-corpus metrics).
 

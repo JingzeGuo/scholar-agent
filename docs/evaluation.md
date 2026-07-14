@@ -151,14 +151,20 @@ Committed numeric snapshots (for README / interviews without regenerating
 gitignored `outputs/`):
 
 - [`docs/results/offline_hash_eval_summary.md`](results/offline_hash_eval_summary.md)
-  (deterministic offline extractive)
+  (deterministic offline extractive, hash embedder)
+- [`docs/results/bge_ce_offline_50x7_summary.md`](results/bge_ce_offline_50x7_summary.md)
+  (offline extractive, **BGE + cross-encoder**, `run_a4770534afb84db2`)
+- [`docs/results/bge_ce_llm_ragas_50x7_summary.md`](results/bge_ce_llm_ragas_50x7_summary.md)
+  (**BGE + CE + live DeepSeek + RAGAS**, `run_6270c2cf8cd94186`)
 - [`docs/results/live_llm_ragas_50x7_summary.md`](results/live_llm_ragas_50x7_summary.md)
-  (**full 50×7** shared DeepSeek generation + RAGAS, `run_a23467bb0aa84115`)
+  (hash retrieval + live DeepSeek + RAGAS, `run_a23467bb0aa84115`)
 - [`docs/results/live_shared_llm_eval_summary.md`](results/live_shared_llm_eval_summary.md)
-  (earlier generation-only live run without full RAGAS)
+  (earlier generation-only live run)
 
 Local full artifacts (when present):
 
+- `outputs/evaluation/phase8-bge-ce-offline-50x7/`
+- `outputs/evaluation/phase8-bge-ce-llm-ragas-50x7/`
 - `outputs/evaluation/phase8-final-clean-c741887/`
 - `outputs/evaluation/phase8-full-llm-ragas-50x7/`
 - `outputs/evaluation/phase8-final-live-79d20/`
