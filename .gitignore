@@ -40,6 +40,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Local learning notes
+plan.md
+
 # Project data artifacts (keep fixtures, ignore large generated assets)
 data/papers/**
 !data/papers/.gitkeep
