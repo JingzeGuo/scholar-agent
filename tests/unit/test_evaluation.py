@@ -83,12 +83,12 @@ def test_fingerprint_matches_frozen_split(frozen_dataset) -> None:
     assert fp == frozen_dataset.split.fingerprint_sha256
 
 
-def test_frozen_gold_maps_to_canonical_store(frozen_dataset) -> None:
-    processed = REPO / "data" / "processed" / "chunks.jsonl"
-    if not processed.is_file():
-        pytest.skip("local processed chunk store not present (run ingest)")
-    store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
-    assert validate_dataset_against_store(frozen_dataset, store) == []
+@pytest.mark.full_corpus
+def test_frozen_gold_maps_to_canonical_store(
+    frozen_dataset,
+    full_corpus_store: ChunkStore,
+) -> None:
+    assert validate_dataset_against_store(frozen_dataset, full_corpus_store) == []
 
 
 def test_tampered_dataset_fails_validation(tmp_path: Path, frozen_dataset) -> None:

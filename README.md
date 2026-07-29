@@ -249,8 +249,11 @@ uv run scholar-agent evaluate --help
 ## Tests
 
 ```bash
-# Core offline suite (default CI)
+# Fresh-clone-safe offline suite
 uv run pytest -m "not live" -q
+
+# Optional checks against local gitignored corpus artifacts
+uv run pytest -m full_corpus -q
 
 # Optional live provider tests (requires API key; never default)
 uv run pytest -m live
@@ -263,6 +266,12 @@ uv run pytest tests/unit/test_e2e_fixture.py tests/unit/test_hardening.py -q
 
 Live tests are marked `live`, skip without credentials, and must not log secrets
 or provider reasoning fields.
+
+Full-corpus tests are marked `full_corpus`. They run when local PDFs and
+`data/processed/chunks.jsonl` are available and skip cleanly in a fresh clone.
+The current fresh-clone result is **252 passed, 6 skipped, 2 live deselected**;
+with the local full corpus and UI extra installed it is **258 passed, 2 live
+deselected**. The repository does not currently define a hosted CI workflow.
 
 ---
 

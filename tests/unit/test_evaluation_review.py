@@ -37,11 +37,13 @@ def _review():
     )
 
 
-def test_real_manual_review_covers_frozen_split_and_canonical_store() -> None:
-    store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
+@pytest.mark.full_corpus
+def test_real_manual_review_covers_frozen_split_and_canonical_store(
+    full_corpus_store: ChunkStore,
+) -> None:
     review = _review()
 
-    assert validate_manual_review(review, _dataset(), store=store) == []
+    assert validate_manual_review(review, _dataset(), store=full_corpus_store) == []
     assert len(review.rows) == 50
     assert review.manifest.reviewer_type == "ai_assisted_independent_manual"
     assert review.manifest.all_verified is True
@@ -73,16 +75,17 @@ def test_missing_question_review_is_rejected() -> None:
         validate_manual_review(incomplete, _dataset())
 
 
-def test_recorded_unanswerable_search_is_recomputed_from_corpus() -> None:
+@pytest.mark.full_corpus
+def test_recorded_unanswerable_search_is_recomputed_from_corpus(
+    full_corpus_store: ChunkStore,
+) -> None:
     review = _review()
     row = review.rows[-1]
     bad_probe = row.search_probes[0].model_copy(update={"matched_chunk_ids": ["chunk_not_real"]})
     bad_row = row.model_copy(update={"search_probes": [bad_probe, *row.search_probes[1:]]})
     bad_review = review.model_copy(update={"rows": [*review.rows[:-1], bad_row]})
-    store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
-
     with pytest.raises(ValueError, match="corpus-search result mismatch"):
-        validate_manual_review(bad_review, _dataset(), store=store)
+        validate_manual_review(bad_review, _dataset(), store=full_corpus_store)
 
 
 def test_gold_picker_prefers_claim_support_over_short_title() -> None:

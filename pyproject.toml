@@ -77,6 +77,7 @@ minversion = "8.0"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
+    "full_corpus: tests that require local gitignored corpus artifacts",
     "live: tests that call paid/live providers (opt-in)",
     "slow: slower integration tests",
 ]

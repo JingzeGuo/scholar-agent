@@ -89,7 +89,8 @@ used. RAGAS 0.3.1 metrics run independently through explicit LangChain
 adapters, so one parser/provider failure cannot discard a valid peer metric.
 Unavailable or non-finite scores remain `null`, never silently become zero;
 per-question rows and run config contain secret-free status, failure code, and
-exception class fields. Default CI stays deterministic without paid calls.
+exception class fields. The default test suite stays deterministic without paid
+calls.
 
 Paid RAGAS calls use a versioned disk cache under
 `data/evaluation/.cache/ragas_metrics/`. Cache records contain only validated

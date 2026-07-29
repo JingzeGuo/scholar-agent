@@ -14,7 +14,7 @@ sentence-transformers, PyMuPDF, NetworkX, Streamlit, RAGAS) are declared as
 optional extras (`retrieval`, `ui`, `eval`) and installed when later phases need
 them.
 
-**Rationale:** Keeps the compatibility spike and CI fast; avoids downloading
+**Rationale:** Keeps the compatibility spike and local checks fast; avoids downloading
 embedding models and PDF stacks before ingestion exists.
 
 **Deviation:** The plan lists all technologies in one table; it does not require
@@ -172,7 +172,7 @@ canonical store.
 
 **Decision:** Hybrid fusion is hand-written Reciprocal Rank Fusion
 (`retrieval/fusion.py`). Embeddings default to sentence-transformers BGE, but
-tests and offline CI use `HashingEmbedder` + `LexicalReranker` via
+tests and default offline checks use `HashingEmbedder` + `LexicalReranker` via
 `--embedding-backend hash`.
 
 **Rationale:** Keeps fusion auditable; avoids paid/model downloads in unit tests
@@ -195,7 +195,7 @@ the location. The production path was validated on all 5,858 canonical chunks wi
 
 **Rationale:** A deterministic project-local cache makes the production retrieval path reusable
 across CLI commands without manual `HF_HOME` configuration, while keeping model weights out of
-Git. Offline CI continues to use the lightweight hash/lexical backends.
+Git. Default offline checks continue to use the lightweight hash/lexical backends.
 
 ---
 
@@ -365,7 +365,7 @@ available, configured, attempted, cached, and actually-scored rows; unavailable
 or non-finite values remain null. Its versioned cache stores only allowlisted
 validated numeric scores under hashed inputs—never prompts or provider payloads.
 
-**Rationale:** Core tests and CI must stay free of live provider calls.
+**Rationale:** Core tests and default automated checks must stay free of live provider calls.
 
 ### ADR-032: Shared SystemRunner for all ablations
 

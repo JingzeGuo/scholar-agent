@@ -38,4 +38,4 @@ regime without full RAGAS scoring.
 
 - Proves `--llm` is a real shared generation path, not a no-op switch.
 - Retrieval scores remain hash-embedder bounded; do not read these as BGE quality.
-- Default CI never runs this path (`pytest -m "not live"`).
+- The default test command never runs this path (`pytest -m "not live"`).

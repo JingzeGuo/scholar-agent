@@ -51,17 +51,16 @@ def test_saved_demo_runs_exist_and_load() -> None:
     assert card.chunk_id
 
 
-def test_saved_runs_have_canonical_pdf_page_provenance() -> None:
-    processed = REPO / "data" / "processed" / "chunks.jsonl"
-    if not processed.is_file():
-        pytest.skip("local processed chunk store not present (run ingest)")
-    store = ChunkStore.from_processed_dir(REPO / "data" / "processed")
+@pytest.mark.full_corpus
+def test_saved_runs_have_canonical_pdf_page_provenance(
+    full_corpus_store: ChunkStore,
+) -> None:
     for saved in list_saved_runs(DEMO_RUNS):
         assert saved.provenance_verified is True
-        assert saved.corpus_fingerprint == store.fingerprint
-        assert validate_saved_run_provenance(saved, store) == []
+        assert saved.corpus_fingerprint == full_corpus_store.fingerprint
+        assert validate_saved_run_provenance(saved, full_corpus_store) == []
         for item in saved.session.evidence:
-            chunk = store.get_chunk(item.chunk_id)
+            chunk = full_corpus_store.get_chunk(item.chunk_id)
             assert chunk is not None
             assert item.paper_id == chunk.paper_id
             assert item.page_start == chunk.page_start
@@ -69,6 +68,7 @@ def test_saved_runs_have_canonical_pdf_page_provenance() -> None:
             assert item.evidence_text == chunk.text
 
 
+@pytest.mark.full_corpus
 def test_source_viewer_renders_real_cited_page() -> None:
     saved = load_saved_run(DEMO_RUNS / "what_is_selfrag.json")
     card = saved.session.source_cards[0]

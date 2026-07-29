@@ -96,8 +96,8 @@ Implementation: `scholar_agent.retrieval.fusion.reciprocal_rank_fusion`.
 
 Bi-encoders retrieve cheaply; a cross-encoder (or lexical stand-in offline)
 re-scores a small top-k with full query–passage interaction. Production uses
-`cross-encoder/ms-marco-MiniLM-L-6-v2`; hash eval uses lexical overlap so CI stays
-offline.
+`cross-encoder/ms-marco-MiniLM-L-6-v2`; hash eval uses lexical overlap so the
+default test suite stays provider-free.
 
 ### 7. When is GraphRAG useful, and when does it hurt?
 
@@ -186,7 +186,7 @@ Use the full write-ups in [`docs/failure_analysis.md`](failure_analysis.md):
 | Graph expansion | Higher paper recall | ~30× latency in measured run |
 | Separate Verifier | Safer loops | Extra pass / complexity |
 | Evidence-only Writer | Fewer hallucinations | May under-answer |
-| Fake-model unit tests | Free CI | Live LLM behavior is opt-in |
+| Deterministic offline tests | Provider-free default suite | Live LLM behavior is opt-in |
 
 ---
 

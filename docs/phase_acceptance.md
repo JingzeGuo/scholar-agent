@@ -22,9 +22,14 @@ part of core completion.
 
 ## Final gates
 
-- `make quality`: Ruff and Mypy pass; **258 passed, 2 live tests deselected**.
+- `make quality`: Ruff and Mypy pass.
+- Fresh clone/default dependencies: **252 passed, 6 optional tests skipped,
+  2 live tests deselected**.
+- Local full corpus + UI extra: **258 passed, 2 live tests deselected**.
 - `UV_CACHE_DIR=/tmp/scholar-agent-uv-cache uv lock --check`: passes.
 - Default tests make no paid provider calls; provider tests use the `live` marker.
+- Tests that need gitignored corpus artifacts use the `full_corpus` marker and
+  skip when `data/processed/chunks.jsonl` is unavailable.
 - Tracked-artifact audit contains no `.env`, API key, generated index, model
   cache, PDF corpus, or raw evaluation output. Only `.gitkeep` files retain the
   local artifact directories.

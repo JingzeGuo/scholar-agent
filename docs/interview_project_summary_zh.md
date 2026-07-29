@@ -30,7 +30,7 @@ Agent 决策 → 证据验证 → 引用生成 → 消融评测 → 离线演示
 | 评测 | 冻结 50 题，7 个系统，共 350 个 system-question 组合 |
 | 模型实测 | Hash、BGE、Cross-Encoder、DeepSeek、RAGAS 路径均实际运行过 |
 | 演示 | Streamlit + 无 API 的 Saved Replay + 可重复生成的 GIF |
-| 工程质量 | Ruff、Mypy、261 个离线测试通过；live 测试默认隔离 |
+| 工程质量 | Ruff、Mypy 通过；fresh clone 252 通过/6 跳过，本地全量 258 通过 |
 | 当前限制 | 单机研究原型；纠错检索未带来召回提升；50 题不是人工签字标注 |
 
 ## 一分钟项目介绍
@@ -177,8 +177,9 @@ Full Agent 的引用精度和拒答更好，但总召回并不是最高。
   并验证引用对应的物理页码。
 - 设计冻结 50 题 × 7 系统的消融评测；Hash 实验中将 paper Recall@8 从 0.16
   提升到 0.67，并完成 BGE、Cross-Encoder、DeepSeek 和 RAGAS 实测。
-- 建立 261 个离线测试、live/provider 测试隔离、结构化无密钥日志、缓存、重试和
-  Saved Replay，使核心 CI 与面试 Demo 不依赖付费 API。
+- 建立 258 个离线测试、live/provider 测试隔离、结构化无密钥日志、缓存、重试和
+  Saved Replay；fresh clone 中 252 个通过、6 个可选资产测试跳过，默认测试与
+  面试 Demo 均不依赖付费 API。
 
 ## 必须如实说明的边界
 
