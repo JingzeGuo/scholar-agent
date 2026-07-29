@@ -1,4 +1,4 @@
-"""Runtime events, budgets, and Phase 0 prototype models."""
+"""Runtime events, budgets, and shared compatibility models."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class EventType(StrEnum):
     CITATION_VALIDATED = "citation_validated"
     BUDGET_HIT = "budget_hit"
     ERROR = "error"
-    # Prototype-loop events
+    # Agent-loop lifecycle events
     ITERATION = "iteration"
     DECISION = "decision"
     TERMINATED = "terminated"
@@ -145,29 +145,9 @@ class BudgetStatus(BaseModel):
         )
 
 
-class PrototypeDecision(BaseModel):
-    """Deterministic decision surface for the Phase 0 LangGraph spike."""
+class CompatibilityDecision(BaseModel):
+    """Small structured-output schema used by provider compatibility checks."""
 
     action: Literal["retrieve", "verify", "finish"]
     reason: str
     need_more_evidence: bool = False
-
-
-class PrototypeObservation(BaseModel):
-    tool_name: str
-    content: str
-    score: float | None = None
-    is_useful: bool = True
-
-
-class PrototypeResult(BaseModel):
-    """Final result of the Phase 0 prototype loop."""
-
-    run_id: str
-    query: str
-    answer: str
-    iterations: int
-    tool_call_count: int
-    events: list[ExecutionEvent]
-    terminated_reason: str
-    success: bool

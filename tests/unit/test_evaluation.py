@@ -7,9 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from typer.testing import CliRunner
 
-from scholar_agent.cli import app
 from scholar_agent.evaluation.ablation import (
     AblationConfig,
     build_report,
@@ -45,12 +43,6 @@ from scholar_agent.retrieval.tools import RetrievalToolkit
 
 REPO = Path(__file__).resolve().parents[2]
 EVAL_DIR = REPO / "data" / "evaluation"
-
-
-def test_ablate_all_cli_alias_is_available() -> None:
-    result = CliRunner().invoke(app, ["ablate", "--help"])
-    assert result.exit_code == 0
-    assert "--all" in result.output
 
 
 @pytest.fixture(scope="module")

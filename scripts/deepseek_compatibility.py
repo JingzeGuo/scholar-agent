@@ -41,7 +41,7 @@ from scholar_agent.config import load_config  # noqa: E402
 from scholar_agent.llm.client import ChatMessage, LLMClient, create_llm_client  # noqa: E402
 from scholar_agent.llm.retry import call_with_retry  # noqa: E402
 from scholar_agent.llm.structured import request_structured_json_with_retry  # noqa: E402
-from scholar_agent.models import PrototypeDecision  # noqa: E402
+from scholar_agent.models import CompatibilityDecision  # noqa: E402
 
 
 @dataclass
@@ -162,7 +162,11 @@ def check_structured_json(client: LLMClient, model: str) -> CheckResult:
             )
             return response.content or ""
 
-        decision = request_structured_json_with_retry(request, PrototypeDecision, max_attempts=2)
+        decision = request_structured_json_with_retry(
+            request,
+            CompatibilityDecision,
+            max_attempts=2,
+        )
         return f"action={decision.action}; need_more={decision.need_more_evidence}"
 
     try:
@@ -380,7 +384,7 @@ def check_retry_behavior(_client: LLMClient, _model: str) -> CheckResult:
 
         decision = request_structured_json_with_retry(
             malformed_then_valid,
-            PrototypeDecision,
+            CompatibilityDecision,
             max_attempts=2,
         )
 
@@ -430,7 +434,7 @@ def main() -> int:
         print(
             "No DEEPSEEK_API_KEY (or OPENAI_API_KEY) set.\n"
             "Copy .env.example to .env and add your key, then re-run.\n"
-            "Offline unit tests cover structured parsing and the prototype loop."
+            "Offline unit tests cover structured parsing and workflow control."
         )
         report.add(
             CheckResult(

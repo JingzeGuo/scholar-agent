@@ -62,8 +62,8 @@ labels are AI-assisted reviewed, not human-signed.
 
 A chain is retrieve→generate once. We need **conditional edges**: plan → research
 → verify → either correct or write → finish. LangGraph makes budgets, iteration
-state, and termination reasons first-class. The Phase 0 prototype already proves
-a decide/retrieve/verify loop with a fake model offline.
+state, and termination reasons first-class. The full workflow is exercised
+offline with deterministic retrieval and fixed evidence fixtures.
 
 ### 2. What makes this system agentic?
 

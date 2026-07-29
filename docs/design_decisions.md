@@ -32,16 +32,6 @@ calling, streaming, and reasoning-field handling. Provider-specific fields are
 easier to inspect and sanitize with a thin wrapper than through a full LangChain
 abstraction stack.
 
-### ADR-003: Prototype loop uses a deterministic fake model
-
-**Decision:** The Phase 0 LangGraph conditional loop (`agents/prototype_loop.py`)
-uses `FakeResearchModel` instead of live DeepSeek calls.
-
-**Rationale:** Acceptance requires “one conditional loop runs with a
-deterministic fake model.” Offline CI must not depend on paid APIs. Live
-provider verification is isolated in `scripts/deepseek_compatibility.py` and
-optional `pytest -m live` tests.
-
 ### ADR-004: Thinking mode default off for structured tasks
 
 **Decision:** Default `llm.thinking_enabled: false`. The client sends a soft
@@ -66,16 +56,6 @@ never live in committed YAML.
 JSON-serializable payload. Private chain-of-thought is never stored.
 
 **Rationale:** Plan requires auditable traces without exposing CoT.
-
-### ADR-007: Prototype loop merges events explicitly
-
-**Decision:** The Phase 0 LangGraph prototype appends `events` inside each node
-via `_append_events` rather than relying on `Annotated[..., reducer]` in the
-prototype state TypedDict. Reducer helpers still live in `agents/state.py` for
-later workflow state.
-
-**Rationale:** Keeps the spike easy to type-check under current LangGraph stubs
-while still demonstrating append semantics and budget-aware termination.
 
 ### ADR-008: Explicit, testable provider retries
 

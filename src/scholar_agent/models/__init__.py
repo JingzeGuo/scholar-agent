@@ -1,7 +1,7 @@
 """Core Pydantic models shared across module boundaries.
 
-Phase 0 runtime/event models and Phase 1 domain models live here. Prefer these
-typed objects over untyped dicts at package boundaries.
+Shared runtime/event and domain models live here. Prefer these typed objects
+over untyped dicts at package boundaries.
 """
 
 from __future__ import annotations
@@ -17,12 +17,10 @@ from scholar_agent.models.answer import (
 )
 from scholar_agent.models.base import (
     BudgetStatus,
+    CompatibilityDecision,
     ErrorCategory,
     EventType,
     ExecutionEvent,
-    PrototypeDecision,
-    PrototypeObservation,
-    PrototypeResult,
     QueryType,
     StructuredError,
     TokenUsage,
@@ -72,6 +70,7 @@ __all__ = [
     "CitationRef",
     "CitationReport",
     "ClaimWithCitations",
+    "CompatibilityDecision",
     "CorrectiveQuery",
     "CorpusIngestionReport",
     "CorpusManifestEntry",
@@ -92,9 +91,6 @@ __all__ = [
     "PaperExtractionReport",
     "PaperPage",
     "SectionBlock",
-    "PrototypeDecision",
-    "PrototypeObservation",
-    "PrototypeResult",
     "QueryPlan",
     "QueryType",
     "RankTrace",

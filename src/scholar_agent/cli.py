@@ -1,6 +1,6 @@
 """Typer CLI entrypoint for ScholarAgent.
 
-Phase 0: version, config, prototype loop.
+Phase 0: version, config, and provider compatibility.
 Phase 1: corpus validate / summary against the manifest.
 Phase 2: PDF ingestion into canonical paper/chunk stores.
 Phase 3: index build, retrieve, Naive RAG baseline.
@@ -23,7 +23,6 @@ from rich.console import Console
 from rich.table import Table
 
 from scholar_agent import __version__
-from scholar_agent.agents.prototype_loop import PrototypeLoopConfig, run_prototype_loop
 from scholar_agent.config import load_config
 from scholar_agent.ingestion.pipeline import IngestOptions, ingest_corpus
 from scholar_agent.ingestion.quality import summarize_report
@@ -62,10 +61,6 @@ _SHOW_SECRETS_OPT = typer.Option(
     "--show-secrets",
     help="Include API key presence only (never prints the key).",
 )
-_MAX_TOOL_CALLS_OPT = typer.Option(4, help="Max tool calls")
-_MAX_ITERATIONS_OPT = typer.Option(3, help="Max decide iterations")
-_REQUIRED_EVIDENCE_OPT = typer.Option(2, help="Useful observations required")
-_JSON_OUTPUT_OPT = typer.Option(False, "--json", help="Emit machine-readable JSON")
 
 
 @app.command("version")
@@ -116,51 +111,6 @@ def config_cmd(
     )
     table.add_row("paths.processed_dir", str(cfg.paths.processed_dir))
     console.print(table)
-
-
-@app.command("prototype")
-def prototype_cmd(
-    query: str = typer.Argument(..., help="Research question for the fake-model loop"),
-    max_tool_calls: int = _MAX_TOOL_CALLS_OPT,
-    max_iterations: int = _MAX_ITERATIONS_OPT,
-    required_evidence: int = _REQUIRED_EVIDENCE_OPT,
-    json_output: bool = _JSON_OUTPUT_OPT,
-) -> None:
-    """Run the Phase 0 LangGraph prototype loop (deterministic fake model)."""
-    result = run_prototype_loop(
-        query,
-        config=PrototypeLoopConfig(
-            max_tool_calls=max_tool_calls,
-            max_iterations=max_iterations,
-            required_evidence=required_evidence,
-        ),
-    )
-    if json_output:
-        console.print_json(
-            json.dumps(
-                {
-                    "run_id": result.run_id,
-                    "query": result.query,
-                    "success": result.success,
-                    "answer": result.answer,
-                    "iterations": result.iterations,
-                    "tool_call_count": result.tool_call_count,
-                    "terminated_reason": result.terminated_reason,
-                    "events": [e.model_dump(mode="json") for e in result.events],
-                }
-            )
-        )
-        return
-
-    console.print(f"[bold]run_id[/bold]: {result.run_id}")
-    console.print(f"[bold]success[/bold]: {result.success}")
-    console.print(f"[bold]terminated[/bold]: {result.terminated_reason}")
-    console.print(f"[bold]iterations[/bold]: {result.iterations}")
-    console.print(f"[bold]tool_calls[/bold]: {result.tool_call_count}")
-    console.print(f"[bold]answer[/bold]: {result.answer}")
-    console.print("[bold]events[/bold]:")
-    for event in result.events:
-        console.print(f"  - {event.event_type.value}: {event.summary}")
 
 
 _MANIFEST_OPT = typer.Option(
@@ -222,7 +172,7 @@ def corpus_validate_cmd(
         console.print(f"  {status}: {count}")
 
 
-@corpus_app.command("summary")
+@corpus_app.command("summary", hidden=True)
 def corpus_summary_cmd(
     config_path: Path | None = _CONFIG_PATH_OPT,
     manifest: Path | None = _MANIFEST_OPT,
@@ -577,7 +527,7 @@ def graph_inspect_cmd(
         console.print(f"    evidence: {rel.evidence_span[:160]}", markup=False)
 
 
-@graph_app.command("stats")
+@graph_app.command("stats", hidden=True)
 def graph_stats_cmd(config_path: Path | None = _CONFIG_PATH_OPT) -> None:
     """Emit graph statistics as JSON."""
     from scholar_agent.graph.pipeline import validate_graph_build_meta
@@ -625,7 +575,7 @@ _NO_PARALLEL_OPT = typer.Option(
 )
 
 
-@app.command("research")
+@app.command("research", hidden=True)
 def research_cmd(
     query: str = typer.Argument(..., help="Research question for the Research Agent"),
     config_path: Path | None = _CONFIG_PATH_OPT,
@@ -875,13 +825,6 @@ _EVAL_LLM_OPT = typer.Option(
 )
 _EVAL_TOP_K_OPT = typer.Option(8, "--k", help="Top-k for retrieval metrics")
 _EVAL_NO_CHARTS_OPT = typer.Option(False, "--no-charts", help="Skip SVG chart generation")
-_EVAL_ALL_OPT = typer.Option(
-    False,
-    "--all",
-    help="Run every configured ablation system (the default when --system is omitted)",
-)
-
-
 @app.command("evaluate")
 def evaluate_cmd(
     config_path: Path | None = _CONFIG_PATH_OPT,
@@ -960,39 +903,6 @@ def evaluate_cmd(
             f"[yellow]failures logged[/yellow]: {len(result.report.failures)} "
             f"→ {result.output_paths.get('failures_json')}"
         )
-
-
-@app.command("ablate")
-def ablate_cmd(
-    config_path: Path | None = _CONFIG_PATH_OPT,
-    eval_config: Path | None = _EVAL_CONFIG_OPT,
-    system: list[str] | None = _EVAL_SYSTEMS_OPT,
-    max_questions: int | None = _EVAL_MAX_Q_OPT,
-    output_dir: Path | None = _EVAL_OUT_OPT,
-    embedding_backend: str = _EMBED_BACKEND_OPT,
-    top_k: int = _EVAL_TOP_K_OPT,
-    use_ragas: bool = _EVAL_RAGAS_OPT,
-    use_llm: bool = _EVAL_LLM_OPT,
-    no_charts: bool = _EVAL_NO_CHARTS_OPT,
-    all_systems: bool = _EVAL_ALL_OPT,
-    json_output: bool = _JSON_OPT,
-) -> None:
-    """Run all ablation systems on the frozen split (alias of ``evaluate``)."""
-    if all_systems:
-        system = None
-    evaluate_cmd(
-        config_path=config_path,
-        eval_config=eval_config,
-        system=system,
-        max_questions=max_questions,
-        output_dir=output_dir,
-        embedding_backend=embedding_backend,
-        top_k=top_k,
-        use_ragas=use_ragas,
-        use_llm=use_llm,
-        no_charts=no_charts,
-        json_output=json_output,
-    )
 
 
 _DEMO_PORT_OPT = typer.Option(8501, "--port", help="Streamlit server port")

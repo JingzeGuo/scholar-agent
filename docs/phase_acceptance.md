@@ -1,6 +1,6 @@
 # Implementation-plan acceptance audit
 
-Audit date: **2026-07-14**. Scope: core Phases 0–10 and the Definition of Done
+Audit date: **2026-07-29**. Scope: core Phases 0–10 and the Definition of Done
 in `CODEX_IMPLEMENTATION_PLAN.md`. Section 21 is explicitly optional and is not
 part of core completion.
 
@@ -8,7 +8,7 @@ part of core completion.
 
 | Phase | Status | Objective acceptance evidence |
 |---|---|---|
-| 0 — compatibility spike | Complete | Live `outputs/deepseek_compatibility.json`: `deepseek-v4-flash`, 8/8 checks pass (chat, streaming, structured JSON, tool calling, multi-turn tool use, reasoning/thinking fields, retry behavior). The deterministic conditional loop is covered by `tests/unit/test_prototype_loop.py`; `uv.lock` is present and checked. |
+| 0 — compatibility spike | Complete | Live `outputs/deepseek_compatibility.json`: `deepseek-v4-flash`, 8/8 checks pass (chat, streaming, structured JSON, tool calling, multi-turn tool use, reasoning/thinking fields, retry behavior). Offline structured parsing, retry, and report behavior are covered by `test_structured.py`, `test_retry.py`, and `test_compatibility_script.py`; `uv.lock` is present and checked. |
 | 1 — models/storage | Complete | Pydantic round trips and invalid-schema rejection in `test_domain_models.py`; stable IDs in `test_ids.py`; JSONL/manifest validation in `test_storage.py`. |
 | 2 — ingestion | Complete | Page-preserving, token-aware, empty/scanned, and idempotency tests in `test_ingestion.py`. Full-corpus provenance audit passes: **120/120 PDFs**, **5858/5858 chunks**, zero missing papers/chunks. |
 | 3 — retrieval | Complete | Dense/BM25 stable-ID, RRF, exact deterministic hash search, debug, filtering, and page-reference tests in `test_retrieval.py`. Production BGE + cross-encoder was also exercised on all 50×7 rows (`run_a4770534afb84db2`). |
@@ -22,7 +22,7 @@ part of core completion.
 
 ## Final gates
 
-- `make quality`: Ruff and Mypy pass; **261 passed, 2 live tests deselected**.
+- `make quality`: Ruff and Mypy pass; **258 passed, 2 live tests deselected**.
 - `UV_CACHE_DIR=/tmp/scholar-agent-uv-cache uv lock --check`: passes.
 - Default tests make no paid provider calls; provider tests use the `live` marker.
 - Tracked-artifact audit contains no `.env`, API key, generated index, model

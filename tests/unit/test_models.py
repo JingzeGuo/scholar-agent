@@ -1,4 +1,4 @@
-"""Tests for core Phase 0 models."""
+"""Tests for shared runtime models."""
 
 from __future__ import annotations
 

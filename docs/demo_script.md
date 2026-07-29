@@ -69,7 +69,6 @@ uv sync
 uv run scholar-agent demo --replay selfrag_vs_crag
 uv run scholar-agent demo --replay what_is_selfrag
 uv run scholar-agent demo --replay unanswerable_market
-uv run scholar-agent prototype "What is corrective RAG?"
 uv run pytest tests/unit/test_e2e_fixture.py tests/unit/test_demo.py -q
 ```
 

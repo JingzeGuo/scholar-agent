@@ -1,4 +1,4 @@
-.PHONY: sync install test lint typecheck quality compatibility prototype clean demo evaluate evaluate-smoke
+.PHONY: sync install test lint typecheck quality compatibility clean demo evaluate evaluate-smoke
 
 sync:
 	uv sync
@@ -28,9 +28,6 @@ quality: lint typecheck test
 
 compatibility:
 	uv run python scripts/deepseek_compatibility.py
-
-prototype:
-	uv run python -m scholar_agent.agents.prototype_loop
 
 corpus-download:
 	uv run python scripts/download_corpus.py --target 120 --skip-existing

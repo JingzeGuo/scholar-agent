@@ -926,13 +926,11 @@ Deliver:
 - `pyproject.toml`, linting, typing, and tests;
 - configuration system;
 - DeepSeek compatibility script;
-- small LangGraph loop prototype;
 - architectural decision records.
 
 Acceptance:
 
 - structured output, streaming, and tool calling verified;
-- one conditional loop runs with a deterministic fake model;
 - dependency versions are locked.
 
 ### Phase 1 — Domain models and canonical storage
@@ -1241,7 +1239,6 @@ uv run scholar-agent ask "Compare corrective RAG and self-RAG."
 
 # Evaluation
 uv run scholar-agent evaluate --config configs/evaluation.yaml
-uv run scholar-agent ablate --all
 
 # Quality
 uv run pytest

@@ -228,21 +228,18 @@ uv run scholar-agent ingest --help
 uv run scholar-agent graph inspect
 uv run scholar-agent ask --help
 uv run scholar-agent evaluate --help
-uv run scholar-agent ablate --all    # alias of evaluate; --all is also the default
 ```
 
 | Command | Description |
 |---|---|
 | `scholar-agent version` | Package version |
 | `scholar-agent config` | Show validated config |
-| `scholar-agent prototype "…"` | Fake-model LangGraph loop |
 | `scholar-agent corpus validate` | Manifest validation |
 | `scholar-agent ingest` | PDF → processed JSONL |
 | `scholar-agent index build` | Dense + BM25 indexes |
 | `scholar-agent retrieve "…"` | Search modes |
 | `scholar-agent ask-naive "…"` | Naive RAG baseline |
 | `scholar-agent graph build\|inspect` | Knowledge graph |
-| `scholar-agent research "…"` | Research Agent loop |
 | `scholar-agent ask "…"` | Full plan→verify→write→cite |
 | `scholar-agent evaluate` | Frozen-split ablations |
 | `scholar-agent demo` | Streamlit or offline replay |

@@ -2,10 +2,6 @@
 
 from scholar_agent.agents.citation_validator import CitationValidator
 from scholar_agent.agents.planner import Planner
-from scholar_agent.agents.prototype_loop import (
-    PrototypeLoopConfig,
-    run_prototype_loop,
-)
 from scholar_agent.agents.researcher import (
     ResearchAgent,
     ResearchAgentConfig,
@@ -24,7 +20,6 @@ from scholar_agent.agents.writer import Writer, format_inline_citation, render_c
 __all__ = [
     "CitationValidator",
     "Planner",
-    "PrototypeLoopConfig",
     "ResearchAgent",
     "ResearchAgentConfig",
     "ResearchPassResult",
@@ -36,6 +31,5 @@ __all__ = [
     "Writer",
     "format_inline_citation",
     "render_claim_markdown",
-    "run_prototype_loop",
     "run_research_workflow",
 ]
