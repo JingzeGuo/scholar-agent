@@ -15,7 +15,6 @@ METHOD_RE = re.compile(
     r"[A-Z][a-z]+[A-Z][A-Za-z0-9]*)(?![\w-])",
 )
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
-GENERIC_TARGETS = {"rag", "retrieval augmented generation", "llm", "lm", "qa", "nlp"}
 GENERIC_TARGET_SUFFIXES = {"method", "methods", "approach", "approaches", "frameworks"}
 
 
@@ -57,10 +56,8 @@ def _explicit_targets(values: object, question: str) -> list[str]:
             )
         )
         tokens = re.findall(r"[a-z0-9]+", explicit.casefold())
-        normalized = " ".join(tokens)
         if (
             explicit
-            and normalized not in GENERIC_TARGETS
             and (not tokens or tokens[-1] not in GENERIC_TARGET_SUFFIXES)
             and explicit not in targets
         ):

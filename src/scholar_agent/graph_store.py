@@ -21,10 +21,6 @@ STOP_ENTITIES = {
     "large language models",
     "retrieval augmented generation",
 }
-ENTITY_ALIASES = {
-    "self rag": "self-rag",
-    "corrective rag": "crag",
-}
 
 
 def normalize_entity(name: str) -> str:
@@ -86,8 +82,9 @@ def load_graph(path: Path) -> nx.Graph:
 def _matching_nodes(graph: nx.Graph, entity: str) -> list[str]:
     key = normalize_entity(entity)
     word_form = _word_form(key)
-    canonical = ENTITY_ALIASES.get(word_form, key)
-    exact = [node for node in graph if normalize_entity(node) == canonical]
+    exact = [
+        node for node in graph if normalize_entity(node) == key or _word_form(node) == word_form
+    ]
     if exact:
         return exact
 
