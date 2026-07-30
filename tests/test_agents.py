@@ -258,8 +258,26 @@ def test_verifier_computes_coverage_and_rejects_target_mismatch(
     state["question"] = "Which RAG methods evaluate retrieval quality?"
     state["plan"].update(targets=[], facets=["method examples"])
     assert verifier_node(state)["verification"]["status"] == "complete"
+
     state["evidence"] = sample_chunks[:1]
-    assert verifier_node(state)["verification"]["status"] == "insufficient"
+    open_result = verifier_node(state)["verification"]
+    assert open_result["status"] == "insufficient"
+    assert open_result["missing"] == ["question: method examples"]
+
+    state["question"] = "语料中的 RAG 评估方法有哪些？请举出至少两个框架。"
+    state["plan"].update(targets=[], facets=["framework examples"])
+    state["evidence"] = [
+        {**sample_chunks[0], "paper": "RAGAS.pdf"},
+        {**sample_chunks[1], "paper": "RGB.pdf"},
+    ]
+
+    framework_result = verifier_node(state)["verification"]
+    assert framework_result["status"] == "complete"
+
+    state["evidence"] = state["evidence"][:1]
+    framework_result = verifier_node(state)["verification"]
+    assert framework_result["status"] == "insufficient"
+    assert framework_result["missing"] == ["question: framework examples"]
 
     state["question"] = "Compare CRAG with Comprehensive RAG Benchmark."
     state["plan"].update(

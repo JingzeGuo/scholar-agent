@@ -38,9 +38,7 @@ def _matches_coverage_target(target: str, named_targets: list[str], text: str) -
         return False
     target_length = len(tokenize(target))
     return not any(
-        other != target
-        and len(tokenize(other)) > target_length
-        and target_matches(other, text)
+        other != target and len(tokenize(other)) > target_length and target_matches(other, text)
         for other in named_targets
     )
 
@@ -55,7 +53,9 @@ def _deterministic_coverage(state: AgentState) -> dict[str, dict[str, list[str]]
             ids = []
             for index, item in enumerate(state["evidence"], start=1):
                 target_ok = _matches_coverage_target(
-                    target, plan["targets"], item["text"],
+                    target,
+                    plan["targets"],
+                    item["text"],
                 )
                 if target_ok and _facet_matches(facet, item["text"]):
                     ids.append(f"E{index}")
@@ -67,8 +67,7 @@ def _deterministic_coverage(state: AgentState) -> dict[str, dict[str, list[str]]
 def _verifier_prompt(state: AgentState) -> str:
     plan = state["plan"]
     evidence_text = "\n".join(
-        f"E{index}: {item['text']}"
-        for index, item in enumerate(state["evidence"], start=1)
+        f"E{index}: {item['text']}" for index, item in enumerate(state["evidence"], start=1)
     )
     return f"""You are the Verifier in an academic research workflow.
 
@@ -87,6 +86,8 @@ additional example. Its method-examples facet must cite evidence that names and
 describes another method; a comparative chunk may also mention a named target.
 For a plural "which methods" question, "method examples" needs IDs supporting
 at least two distinct named methods from different papers.
+For a request asking for at least two frameworks, "framework examples" must
+cite evidence describing at least two distinct named frameworks.
 For "three approaches", approach description needs at least three evidence IDs
 that each describe a concrete mechanism; taxonomy labels alone are insufficient.
 Respect timing and operational qualifiers. Post-hoc RAG evaluation frameworks
@@ -129,7 +130,9 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, dict[str, 
                     continue
                 item = state["evidence"][index - 1]
                 if target != "question" and not _matches_coverage_target(
-                    target, plan["targets"], item["text"],
+                    target,
+                    plan["targets"],
+                    item["text"],
                 ):
                     continue
                 valid_ids.append(f"E{index}")
@@ -141,6 +144,7 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, dict[str, 
 def verifier_node(state: AgentState, llm: LLMClient | None = None) -> dict:
     """Return deterministic complete, partial, or insufficient coverage."""
     plan = state["plan"]
+    coverage_targets = _coverage_targets(state)
     required_targets = plan["targets"] or ["question"]
     corrective_query = ""
     if llm is None:
@@ -154,32 +158,38 @@ def verifier_node(state: AgentState, llm: LLMClient | None = None) -> dict:
         except (KeyError, TypeError, ValueError):
             covered = _deterministic_coverage(state)
 
-    required = [
-        (target, facet) for target in required_targets for facet in plan["facets"]
-    ]
-    if "question" in _coverage_targets(state):
+    required = [(target, facet) for target in required_targets for facet in plan["facets"]]
+    if plan["targets"] and "question" in coverage_targets:
         required.extend(
-            ("question", facet)
-            for facet in plan["facets"]
-            if "example" in facet.casefold()
+            ("question", facet) for facet in plan["facets"] if "example" in facet.casefold()
         )
 
     def is_covered(target: str, facet: str) -> bool:
         ids = covered.get(target, {}).get(facet, [])
-        if target == "question" and facet.casefold() == "method examples":
-            papers = {
-                state["evidence"][int(evidence_id[1:]) - 1]["paper"]
-                for evidence_id in ids
-            }
+        facet_name = facet.casefold()
+
+        if target == "question" and facet_name == "method examples":
+            papers = {state["evidence"][int(evidence_id[1:]) - 1]["paper"] for evidence_id in ids}
             return len(papers) >= 2 if OPEN_METHOD_RE.search(state["question"]) else bool(ids)
-        if target == "question" and facet.casefold() == "approach description":  # noqa: SIM102
-            if re.search(r"\bthree\b.*\bapproaches\b", state["question"], re.IGNORECASE):
-                return len(ids) >= 3
+
+        if target == "question" and facet_name == "framework examples":
+            asks_for_two = re.search(
+                r"\bat least\s+two\b|至少\s*(?:两个|2\s*个?)",
+                state["question"],
+                re.IGNORECASE,
+            )
+            return len(ids) >= 2 if asks_for_two else bool(ids)
+
+        if (
+            target == "question"
+            and facet_name == "approach description"
+            and re.search(r"\bthree\b.*\bapproaches\b", state["question"], re.IGNORECASE)
+        ):
+            return len(ids) >= 3
+
         return bool(ids)
 
-    missing = [
-        f"{target}: {facet}" for target, facet in required if not is_covered(target, facet)
-    ]
+    missing = [f"{target}: {facet}" for target, facet in required if not is_covered(target, facet)]
     covered_count = len(required) - len(missing)
     status = "complete" if not missing else "partial" if covered_count else "insufficient"
     if missing and not corrective_query:
