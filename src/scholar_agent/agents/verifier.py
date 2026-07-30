@@ -5,37 +5,42 @@ from __future__ import annotations
 import logging
 import re
 
-from scholar_agent.agents.planner import OPEN_METHOD_RE, target_matches
+from scholar_agent.agents.planner import target_matches
 from scholar_agent.indexes import tokenize
 from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
 EVIDENCE_ID_RE = re.compile(r"E(\d+)")
-OPEN_EXAMPLE_RE = re.compile(
-    r"\b(?:another|other methods?|examples?)\b|另一个|其他.{0,4}方法|举例",
-    re.IGNORECASE,
-)
 
 
 def _facet_matches(facet: str, text: str) -> bool:
-    terms = {term for term in tokenize(facet) if len(term) > 3}
-    special = facet.casefold() in {"mechanism", "method examples", "framework examples"}
-    return special or bool(terms.intersection(tokenize(text)))
+    """Conservative lexical fallback used only without an LLM."""
+    facet_terms = {term for term in tokenize(facet) if len(term) > 3}
+    if not facet_terms:
+        return False
+
+    overlap = facet_terms.intersection(tokenize(text))
+    required_overlap = 1 if len(facet_terms) <= 2 else 2
+    return len(overlap) >= required_overlap
 
 
 def _coverage_targets(state: AgentState) -> list[str]:
     targets = list(state["plan"]["targets"])
-    if not targets:
-        return ["question"]
-    return [*targets, "question"] if OPEN_EXAMPLE_RE.search(state["question"]) else targets
+    return targets or ["question"]
 
 
-def _matches_coverage_target(target: str, named_targets: list[str], text: str) -> bool:
+def _matches_coverage_target(
+    target: str,
+    named_targets: list[str],
+    text: str,
+) -> bool:
     if target == "question":
-        return not named_targets or not any(target_matches(named, text) for named in named_targets)
+        return True
+
     if not target_matches(target, text):
         return False
+
     target_length = len(tokenize(target))
     return not any(
         other != target and len(tokenize(other)) > target_length and target_matches(other, text)
@@ -69,31 +74,27 @@ def _verifier_prompt(state: AgentState) -> str:
     evidence_text = "\n".join(
         f"E{index}: {item['text']}" for index, item in enumerate(state["evidence"], start=1)
     )
+
     return f"""You are the Verifier in an academic research workflow.
 
-Map evidence to each named target and target-level facet. Related methods must
-not substitute for the named target. Return one JSON object:
-- "covered": target -> facet -> list of supplied IDs such as ["E1"]
-- "missing": a list of uncovered "target: facet" strings
-- "corrective_query": one concise English retrieval query, empty if complete
+Decide which supplied evidence directly supports each requested target and facet.
+
+Return one JSON object:
+- "covered": target -> facet -> list of supplied evidence IDs
+- "corrective_query": one concise English query for the most important missing evidence,
+  or an empty string when no additional retrieval is useful
+
+Rules:
+- Use only supplied evidence IDs.
+- Related methods cannot substitute for a named target.
+- Do not mark a facet covered merely because the evidence is topically related.
+- Partial coverage is acceptable.
+- Evidence absence is preferable to unsupported approval.
+- Respect constraints present in the original question without inventing new ones.
 
 Targets: {_coverage_targets(state)}
 Facets: {plan["facets"]}
 Question: {state["question"]}
-
-The optional "question" target is only for an explicitly requested unnamed
-additional example. Its method-examples facet must cite evidence that names and
-describes another method; a comparative chunk may also mention a named target.
-For a plural "which methods" question, "method examples" needs IDs supporting
-at least two distinct named methods from different papers.
-For a request asking for at least two frameworks, "framework examples" must
-cite evidence describing at least two distinct named frameworks.
-For "three approaches", approach description needs at least three evidence IDs
-that each describe a concrete mechanism; taxonomy labels alone are insufficient.
-Respect timing and operational qualifiers. Post-hoc RAG evaluation frameworks
-cannot support a facet asking about in-pipeline checks before generation.
-For such a facet, evidence must explicitly show a retrieval-quality signal
-changing retrieval or the context before the generator produces its answer.
 
 Evidence:
 {evidence_text}
@@ -142,64 +143,56 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, dict[str, 
 
 
 def verifier_node(state: AgentState, llm: LLMClient | None = None) -> dict:
-    """Return deterministic complete, partial, or insufficient coverage."""
+    """Return complete, partial, or insufficient evidence coverage."""
     plan = state["plan"]
     coverage_targets = _coverage_targets(state)
-    required_targets = plan["targets"] or ["question"]
     corrective_query = ""
+
     if llm is None:
         covered = _deterministic_coverage(state)
     else:
         try:
             payload = llm.complete_json(_verifier_prompt(state))
-            covered = _sanitize_coverage(state, payload.get("covered"))
-            value = payload.get("corrective_query", "")
-            corrective_query = value.strip() if isinstance(value, str) else ""
+            covered = _sanitize_coverage(
+                state,
+                payload.get("covered"),
+            )
+
+            raw_query = payload.get("corrective_query", "")
+            if isinstance(raw_query, str):
+                corrective_query = raw_query.strip()
+
         except (KeyError, TypeError, ValueError):
+            LOGGER.warning(
+                "[verifier] invalid LLM response; using deterministic coverage",
+            )
             covered = _deterministic_coverage(state)
 
-    required = [(target, facet) for target in required_targets for facet in plan["facets"]]
-    if plan["targets"] and "question" in coverage_targets:
-        required.extend(
-            ("question", facet) for facet in plan["facets"] if "example" in facet.casefold()
-        )
+    required = [(target, facet) for target in coverage_targets for facet in plan["facets"]]
 
-    def is_covered(target: str, facet: str) -> bool:
-        ids = covered.get(target, {}).get(facet, [])
-        facet_name = facet.casefold()
+    missing = [
+        f"{target}: {facet}" for target, facet in required if not covered.get(target, {}).get(facet)
+    ]
 
-        if target == "question" and facet_name == "method examples":
-            papers = {state["evidence"][int(evidence_id[1:]) - 1]["paper"] for evidence_id in ids}
-            return len(papers) >= 2 if OPEN_METHOD_RE.search(state["question"]) else bool(ids)
-
-        if target == "question" and facet_name == "framework examples":
-            asks_for_two = re.search(
-                r"\bat least\s+two\b|至少\s*(?:两个|2\s*个?)",
-                state["question"],
-                re.IGNORECASE,
-            )
-            return len(ids) >= 2 if asks_for_two else bool(ids)
-
-        if (
-            target == "question"
-            and facet_name == "approach description"
-            and re.search(r"\bthree\b.*\bapproaches\b", state["question"], re.IGNORECASE)
-        ):
-            return len(ids) >= 3
-
-        return bool(ids)
-
-    missing = [f"{target}: {facet}" for target, facet in required if not is_covered(target, facet)]
     covered_count = len(required) - len(missing)
-    status = "complete" if not missing else "partial" if covered_count else "insufficient"
+
+    if not required or covered_count == 0:
+        status = "insufficient"
+    elif not missing:
+        status = "complete"
+    else:
+        status = "partial"
+
     if missing and not corrective_query:
         corrective_query = "Find direct evidence for " + "; ".join(missing)
+
     verification = {
         "status": status,
         "covered": covered,
         "missing": missing,
         "corrective_query": corrective_query,
     }
+
     LOGGER.info(
         "[verifier] status=%s covered=%d/%d missing=%d",
         status,
@@ -207,4 +200,5 @@ def verifier_node(state: AgentState, llm: LLMClient | None = None) -> dict:
         len(required),
         len(missing),
     )
+
     return {"verification": verification}

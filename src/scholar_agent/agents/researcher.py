@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections import Counter
 from collections.abc import Callable
 
@@ -23,79 +22,57 @@ PER_TARGET = 2
 PER_PAPER = 4
 
 
-def _paper_key(paper: str) -> tuple[int, int, str]:
-    match = re.match(r"(\d{4})\.(\d+)\.pdf$", paper)
-    return (int(match.group(1)), int(match.group(2)), paper) if match else (9999, 99999, paper)
+def _select_evidence(
+    items: list[dict],
+    targets: list[str],
+) -> list[dict]:
+    ranked = sorted(
+        items,
+        key=lambda item: item["score"],
+        reverse=True,
+    )
 
-
-def _target_ratios(targets: list[str], chunks: list[dict]) -> dict[str, dict[str, float]]:
-    totals = Counter(item["paper"] for item in chunks)
-    hits: dict[str, Counter] = {target: Counter() for target in targets}
-    for item in chunks:
-        for target in targets:
-            if target_matches(target, item["text"]):
-                hits[target][item["paper"]] += 1
-    return {
-        target: {paper: count / totals[paper] for paper, count in target_hits.items()}
-        for target, target_hits in hits.items()
-    }
-
-
-def _select_evidence(items: list[dict], targets: list[str], chunks: list[dict]) -> list[dict]:
-    ratios = _target_ratios(targets, chunks)
-    available_targets = [target for target in targets if ratios[target]]
-    if targets and not available_targets:
+    if targets and not any(
+        target_matches(target, item["text"]) for target in targets for item in ranked
+    ):
         return []
+
     selected: list[dict] = []
     selected_ids: set[str] = set()
     selected_pages: set[tuple[str, int]] = set()
     paper_counts: Counter = Counter()
 
-    def add(
-        item: dict,
-        enforce_paper_cap: bool = True,
-        enforce_unique_page: bool = True,
-    ) -> bool:
-        page = (item["paper"], item["page"])
+    def add(item: dict) -> bool:
+        page_key = (item["paper"], item["page"])
+
         if item["chunk_id"] in selected_ids:
             return False
-        if enforce_unique_page and page in selected_pages:
+        if page_key in selected_pages:
             return False
-        if enforce_paper_cap and paper_counts[item["paper"]] >= PER_PAPER:
+        if paper_counts[item["paper"]] >= PER_PAPER:
             return False
+
         selected.append(item)
         selected_ids.add(item["chunk_id"])
-        selected_pages.add(page)
+        selected_pages.add(page_key)
         paper_counts[item["paper"]] += 1
         return True
 
-    for target in available_targets:
-        matches = [item for item in items if target_matches(target, item["text"])]
-        primary_paper = min({item["paper"] for item in matches}, key=_paper_key, default="")
-        matches.sort(
-            key=lambda item: (
-                item["paper"] == primary_paper,
-                ratios[target].get(item["paper"], 0.0),
-                item["score"],
-            ),
-            reverse=True,
-        )
+    # Give explicitly named targets a fair chance.
+    for target in targets:
         added = 0
-        for unique_page in (True, False):
-            for item in matches:
-                if add(item, enforce_unique_page=unique_page):
-                    added += 1
-                if added == PER_TARGET:
-                    break
-            if added == PER_TARGET:
+        for item in ranked:
+            if target_matches(target, item["text"]) and add(item):
+                added += 1
+            if added >= PER_TARGET:
                 break
 
-    ranked = sorted(items, key=lambda item: item["score"], reverse=True)
-    for enforce_cap, unique_page in ((True, True), (False, True), (True, False), (False, False)):
-        for item in ranked:
-            add(item, enforce_cap, unique_page)
-            if len(selected) == MAX_EVIDENCE:
-                return selected
+    # Fill the remaining evidence slots purely by relevance.
+    for item in ranked:
+        add(item)
+        if len(selected) >= MAX_EVIDENCE:
+            break
+
     return selected
 
 
@@ -160,7 +137,10 @@ def researcher_node(
         if previous is None or item["score"] > previous["score"]:
             by_id[item["chunk_id"]] = item
     eligible = [item for item in by_id.values() if item["score"] >= settings.min_rerank_score]
-    evidence = _select_evidence(eligible, plan["targets"], engine.chunks)
+    evidence = _select_evidence(
+        eligible,
+        plan["targets"],
+    )
     LOGGER.info("[reranker] selected %d evidence chunks", len(evidence))
     for index, item in enumerate(evidence, start=1):
         LOGGER.info(

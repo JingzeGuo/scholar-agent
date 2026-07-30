@@ -64,31 +64,20 @@ def _offline_draft(state: AgentState, allowed: list[int]) -> str:
 
 def _writer_prompt(state: AgentState, allowed: list[int]) -> str:
     evidence_text = "\n".join(
-        f"[E{index}] {state['evidence'][index - 1]['text']}"
-        for index in allowed
+        f"[E{index}] {state['evidence'][index - 1]['text']}" for index in allowed
     )
     verification = state["verification"]
     return f"""You are the Writer in an evidence-grounded research workflow.
 
 Answer in {state["plan"]["output_language"]} using only the supplied evidence.
 Every factual statement needs an inline supplied [E1], [E2], ... reference.
-For multiple sources, write adjacent references like [E1][E5], never [E1, E5].
-Use the smallest sufficient citation set, normally one or two IDs per paragraph.
-Do not repeat the same evidence ID within one factual paragraph.
-Do not substitute related methods for these targets: {state["plan"]["targets"]}.
-When targets are empty, identify relevant methods from the approved evidence
-and organize multi-method answers by method rather than by evidence chunk.
-For a plural method question, discuss every distinct approved method.
-When coverage includes a "question" bucket, include its requested unnamed
-method example in addition to every explicit target.
-For a numbered approaches request, give that many concrete mechanisms rather
-than listing unsupported taxonomy labels.
-Derive differences only from approved evidence. Answer only covered aspects;
-the system appends the missing-evidence list.
-Treat experimental comparisons as scoped examples. A counterexample can reject
-an "always" claim, but cannot prove the opposite universal claim.
-Preserve before/after timing exactly; never present a post-generation evaluator
-as a pre-generation retrieval-control mechanism.
+For multiple sources, write adjacent references like [E1][E5].
+Use the smallest sufficient citation set.
+Do not use evidence IDs that were not supplied.
+Do not substitute related methods for explicitly named targets.
+Respect constraints in the original question only when supported by evidence.
+Answer only supported aspects and do not fill missing gaps from memory.
+Organize the answer around the user's question rather than around evidence chunks.
 
 Status: {verification["status"]}
 Covered: {verification["covered"]}
