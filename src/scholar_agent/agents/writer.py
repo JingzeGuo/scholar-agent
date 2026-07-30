@@ -72,6 +72,7 @@ def _writer_prompt(state: AgentState, allowed: list[int]) -> str:
 
 Answer in {state["plan"]["output_language"]} using only the supplied evidence.
 Every factual statement needs an inline supplied [E1], [E2], ... reference.
+For multiple sources, write adjacent references like [E1][E5], never [E1, E5].
 Do not substitute related methods for these targets: {state["plan"]["targets"]}.
 Derive differences only from target-level evidence. Answer only covered aspects;
 the system will append the missing-evidence list.

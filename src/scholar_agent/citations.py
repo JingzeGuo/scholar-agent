@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 
-EVIDENCE_CITATION_RE = re.compile(r"\[E(\d+)\]")
+EVIDENCE_CITATION_RE = re.compile(r"\[(E\d+(?:\s*,\s*E\d+)*)\]")
+EVIDENCE_ID_RE = re.compile(r"E(\d+)")
 PAGE_CITATION_RE = re.compile(r"\[([^\[\]]+\.pdf) p\.(\d+)\]")
 
 
@@ -17,7 +18,10 @@ def validate_citations(answer: str, evidence: list[dict]) -> str:
     }
 
     def replace(match: re.Match[str]) -> str:
-        return citations.get(int(match.group(1)), "")
+        return "".join(
+            citations.get(int(value), "")
+            for value in EVIDENCE_ID_RE.findall(match.group(1))
+        )
 
     answer = EVIDENCE_CITATION_RE.sub(replace, answer)
     valid_pages = {
@@ -39,10 +43,11 @@ def validate_citations(answer: str, evidence: list[dict]) -> str:
 def valid_evidence_ids(answer: str, evidence_count: int) -> list[int]:
     """Return unique in-range evidence references in their first-seen order."""
     result: list[int] = []
-    for value in EVIDENCE_CITATION_RE.findall(answer):
-        evidence_id = int(value)
-        if 1 <= evidence_id <= evidence_count and evidence_id not in result:
-            result.append(evidence_id)
+    for citation in EVIDENCE_CITATION_RE.findall(answer):
+        for value in EVIDENCE_ID_RE.findall(citation):
+            evidence_id = int(value)
+            if 1 <= evidence_id <= evidence_count and evidence_id not in result:
+                result.append(evidence_id)
     return result
 
 

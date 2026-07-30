@@ -123,3 +123,15 @@ Acceptance:
 - Out-of-corpus questions abstain after one retrieval with no citations.
 - Chinese questions are answered in Chinese without substituting related methods.
 - The compact source, documentation, and deterministic-test limits remain satisfied.
+
+## Phase 8 — Grouped citation compatibility
+
+- Require the Writer to emit adjacent single Evidence IDs such as `[E1][E2]`.
+- Accept comma-grouped IDs such as `[E1, E2]` at the citation-validation boundary.
+- Use the same grouped-ID parsing for Writer allow-list checks and page rendering.
+
+Acceptance:
+
+- Single and grouped Evidence IDs render as validated physical-page citations.
+- Unknown IDs inside a group are removed without dropping valid group members.
+- Grouped IDs count as valid Writer evidence references.
