@@ -61,5 +61,5 @@ def citation_summary(answer: str, evidence: list[dict]) -> dict[str, int | bool]
     return {
         "citations": len(pages),
         "sources": len({paper for paper, _ in pages}),
-        "all_grounded": all(page in valid_pages for page in pages),
+        "all_grounded": bool(pages) and all(page in valid_pages for page in pages),
     }

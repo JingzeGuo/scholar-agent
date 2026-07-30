@@ -54,7 +54,6 @@ def researcher_node(
 
     retry_count = state["retry_count"] + (1 if state["feedback"] else 0)
     return {
-        "candidates": candidates,
         "evidence": evidence,
         "retry_count": retry_count,
     }

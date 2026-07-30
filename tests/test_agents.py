@@ -31,12 +31,17 @@ def test_planner_caps_queries_and_entities() -> None:
     assert result == {"queries": ["q1", "q2", "q3"], "entities": ["a", "b", "c", "d", "e"]}
 
 
-def test_planner_json_failure_uses_original_question() -> None:
-    state = initial_state("Original question")
+def test_planner_json_failure_uses_heuristic_entities() -> None:
+    state = initial_state("Compare Self-RAG and CRAG")
 
     result = planner_node(state, StubLLM(ValueError("bad JSON")))  # type: ignore[arg-type]
 
-    assert result == {"queries": ["Original question"], "entities": []}
+    assert result["queries"] == [
+        "Compare Self-RAG and CRAG",
+        "Self-RAG academic paper evidence",
+        "CRAG academic paper evidence",
+    ]
+    assert result["entities"] == ["Self-RAG", "CRAG"]
 
 
 def test_verifier_requires_two_papers_for_comparison(sample_chunks: list[dict]) -> None:
@@ -48,6 +53,32 @@ def test_verifier_requires_two_papers_for_comparison(sample_chunks: list[dict]) 
 
     assert insufficient["sufficient"] is False
     assert sufficient["sufficient"] is True
+
+
+def test_llm_cannot_override_deterministic_verifier_guard(sample_chunks: list[dict]) -> None:
+    state = initial_state("Compare Self-RAG and CRAG")
+    state["evidence"] = [sample_chunks[0]]
+
+    result = verifier_node(
+        state,
+        StubLLM({"sufficient": True, "feedback": ""}),  # type: ignore[arg-type]
+    )
+
+    assert result["sufficient"] is False
+    assert result["feedback"]
+
+
+def test_llm_can_downgrade_sufficient_evidence(sample_chunks: list[dict]) -> None:
+    state = initial_state("Compare Self-RAG and CRAG")
+    state["evidence"] = sample_chunks[:2]
+
+    result = verifier_node(
+        state,
+        StubLLM({"sufficient": False, "feedback": "Find mechanism details."}),  # type: ignore[arg-type]
+    )
+
+    assert result["sufficient"] is False
+    assert result["feedback"] == "Find mechanism details."
 
 
 def test_writer_expresses_uncertainty_and_uses_only_evidence(sample_chunks: list[dict]) -> None:

@@ -26,7 +26,10 @@ def _unique_strings(values: object, limit: int) -> list[str]:
 def _heuristic_plan(question: str) -> tuple[list[str], list[str]]:
     methods = list(dict.fromkeys(METHOD_RE.findall(question)))
     entities = methods + [
-        entity for entity in extract_entities(question) if entity not in methods
+        entity
+        for entity in extract_entities(question)
+        if entity not in methods
+        and not any(method.casefold() in entity.casefold() for method in methods)
     ]
     queries = [question]
     queries.extend(f"{entity} academic paper evidence" for entity in methods)
@@ -61,7 +64,7 @@ def planner_node(state: AgentState, llm: LLMClient | None = None) -> dict:
             if not queries:
                 raise ValueError("Planner returned no queries")
         except (KeyError, TypeError, ValueError):
-            queries, entities = [question], []
+            queries, entities = _heuristic_plan(question)
     LOGGER.info(
         "[planner] generated %d queries and %d entities",
         len(queries),

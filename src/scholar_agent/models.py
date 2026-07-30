@@ -15,7 +15,6 @@ class AgentState(TypedDict):
     question: str
     queries: list[str]
     entities: list[str]
-    candidates: list[dict]
     evidence: list[dict]
     sufficient: bool
     feedback: str

@@ -15,6 +15,8 @@ from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
 from scholar_agent.retrieval import RetrievalEngine
 
+WORKFLOW_RECURSION_LIMIT = 10
+
 
 def route_after_verification(state: AgentState) -> str:
     if state["sufficient"]:
@@ -54,7 +56,6 @@ def initial_state(question: str) -> AgentState:
         "question": question,
         "queries": [],
         "entities": [],
-        "candidates": [],
         "evidence": [],
         "sufficient": False,
         "feedback": "",
@@ -69,5 +70,8 @@ def run_question(
     settings: Settings,
     llm: LLMClient | None = None,
 ) -> AgentState:
-    result = build_workflow(engine, settings, llm).invoke(initial_state(question))
+    result = build_workflow(engine, settings, llm).invoke(
+        initial_state(question),
+        config={"recursion_limit": WORKFLOW_RECURSION_LIMIT},
+    )
     return AgentState(**result)

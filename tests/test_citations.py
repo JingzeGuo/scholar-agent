@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scholar_agent.citations import cited_pages, validate_citations
+from scholar_agent.citations import citation_summary, cited_pages, validate_citations
 
 
 def test_fake_citation_is_removed(sample_chunks: list[dict]) -> None:
@@ -25,3 +25,10 @@ def test_cited_pages_extracts_validated_provenance() -> None:
         ("Self-RAG.pdf", 3),
         ("CRAG.pdf", 11),
     ]
+
+
+def test_answer_without_citations_is_not_grounded(sample_chunks: list[dict]) -> None:
+    summary = citation_summary("An uncited answer.", sample_chunks)
+
+    assert summary["citations"] == 0
+    assert summary["all_grounded"] is False

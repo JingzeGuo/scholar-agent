@@ -36,6 +36,21 @@ def test_graph_retrieval_finds_entity_chunk(sample_chunks: list[dict]) -> None:
     assert results[0]["paper"] == "Self-RAG.pdf"
 
 
+def test_graph_short_substring_does_not_match_crag(sample_chunks: list[dict]) -> None:
+    graph = build_graph(sample_chunks)
+
+    assert graph_search(["RAG"], graph, sample_chunks) == []
+
+
+def test_graph_normalizes_multiword_entity_alias(sample_chunks: list[dict]) -> None:
+    graph = build_graph(sample_chunks)
+
+    results = graph_search(["Self RAG"], graph, sample_chunks)
+
+    assert results
+    assert results[0]["chunk_id"] == "self-1"
+
+
 def test_rrf_rewards_results_found_by_multiple_retrievers(sample_chunks: list[dict]) -> None:
     sparse = [sample_chunks[0], sample_chunks[1]]
     dense = [sample_chunks[1], sample_chunks[2]]

@@ -216,7 +216,7 @@ src/scholar_agent/
 
 ## Tests and quality
 
-The 18 deterministic tests cover physical page provenance, BM25, dense and
+The 26 deterministic tests cover physical page provenance, BM25, dense and
 graph retrieval, RRF, reranking, Planner bounds and fallback, verification,
 the one-retry limit, complete LangGraph execution, evidence-only writing,
 false-citation removal, real filename/page rendering, and the CLI surface.

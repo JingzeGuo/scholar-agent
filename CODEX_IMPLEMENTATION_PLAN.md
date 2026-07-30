@@ -63,7 +63,7 @@ Acceptance:
 
 ## Phase 4 — Focused deterministic tests
 
-- Replace legacy architecture tests with 12–18 behavior-focused tests.
+- Keep 20–30 behavior-focused tests after adding correctness regressions.
 - Keep any provider-dependent test behind the `live` marker.
 
 Acceptance:

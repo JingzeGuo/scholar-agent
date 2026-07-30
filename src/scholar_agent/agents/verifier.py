@@ -54,17 +54,19 @@ Evidence:
 
 def verifier_node(state: AgentState, llm: LLMClient | None = None) -> dict:
     """Judge sufficiency and state only the missing evidence."""
-    sufficient, feedback = _deterministic_verification(state)
+    deterministic_ok, fallback_feedback = _deterministic_verification(state)
+    sufficient = deterministic_ok
+    feedback = fallback_feedback
     if llm is not None:
         try:
             payload = llm.complete_json(_verifier_prompt(state))
-            sufficient = bool(payload["sufficient"])
-            feedback = str(payload.get("feedback", "")).strip()
+            sufficient = deterministic_ok and bool(payload["sufficient"])
+            llm_feedback = str(payload.get("feedback", "")).strip()
+            feedback = "" if sufficient else llm_feedback or fallback_feedback
         except (KeyError, TypeError, ValueError):
             pass
-    if not state["evidence"]:
-        sufficient = False
-        feedback = feedback or "Find directly relevant evidence for the question."
+    if not sufficient and not feedback:
+        feedback = "Retrieve more directly relevant evidence for the original question."
 
     LOGGER.info(
         "[verifier] evidence %s",

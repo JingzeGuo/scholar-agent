@@ -21,6 +21,18 @@ STOP_ENTITIES = {
     "large language models",
     "retrieval augmented generation",
 }
+ENTITY_ALIASES = {
+    "self rag": "self-rag",
+    "corrective rag": "crag",
+}
+
+
+def normalize_entity(name: str) -> str:
+    return " ".join(name.casefold().strip().split())
+
+
+def _word_form(name: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", normalize_entity(name)))
 
 
 def extract_entities(text: str, limit: int = 20) -> list[str]:
@@ -29,7 +41,7 @@ def extract_entities(text: str, limit: int = 20) -> list[str]:
     seen: set[str] = set()
     for match in ENTITY_RE.finditer(text):
         entity = match.group(0).strip(" ,.;:()[]")
-        key = entity.casefold()
+        key = normalize_entity(entity)
         if key in STOP_ENTITIES or key in seen:
             continue
         seen.add(key)
@@ -46,7 +58,7 @@ def build_graph(chunks: list[dict]) -> nx.Graph:
         entities = extract_entities(chunk["text"])
         keys: list[str] = []
         for entity in entities:
-            key = entity.casefold()
+            key = normalize_entity(entity)
             keys.append(key)
             if key not in graph:
                 graph.add_node(key, label=entity, chunks=[])
@@ -72,11 +84,27 @@ def load_graph(path: Path) -> nx.Graph:
 
 
 def _matching_nodes(graph: nx.Graph, entity: str) -> list[str]:
-    key = entity.casefold().strip()
-    exact = [node for node in graph if node == key]
+    key = normalize_entity(entity)
+    word_form = _word_form(key)
+    canonical = ENTITY_ALIASES.get(word_form, key)
+    exact = [node for node in graph if normalize_entity(node) == canonical]
     if exact:
         return exact
-    return [node for node in graph if key in node or node in key]
+
+    if len(word_form.split()) > 1:
+        normalized = [node for node in graph if _word_form(node) == word_form]
+        if normalized:
+            return normalized
+
+    compact = word_form.replace(" ", "")
+    if len(compact) < 5:
+        return []
+    return [
+        node
+        for node in graph
+        if compact in _word_form(node).replace(" ", "")
+        or _word_form(node).replace(" ", "") in compact
+    ]
 
 
 def graph_search(
