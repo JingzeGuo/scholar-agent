@@ -71,6 +71,23 @@ def test_partial_workflow_retries_exactly_once(
 ) -> None:
     engine = FakeEngine(sample_chunks[:1], sample_chunks[:2])
     monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
+    researcher_calls = 0
+    verifier_calls = 0
+    original_researcher = workflow_module.researcher_node
+    original_verifier = workflow_module.verifier_node
+
+    def counting_researcher(*args: Any, **kwargs: Any) -> dict:
+        nonlocal researcher_calls
+        researcher_calls += 1
+        return original_researcher(*args, **kwargs)
+
+    def counting_verifier(*args: Any, **kwargs: Any) -> dict:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        return original_verifier(*args, **kwargs)
+
+    monkeypatch.setattr(workflow_module, "researcher_node", counting_researcher)
+    monkeypatch.setattr(workflow_module, "verifier_node", counting_verifier)
 
     result = run_question(
         "Compare Self-RAG and CRAG",
@@ -80,7 +97,9 @@ def test_partial_workflow_retries_exactly_once(
 
     assert result["verification"]["status"] == "partial"
     assert result["retry_count"] == 1
-    assert engine.calls == 2
+    assert result["stop_reason"] == "no_new_evidence"
+    assert researcher_calls == 2
+    assert verifier_calls == 1
     assert "Missing evidence" in result["answer"]
 
 

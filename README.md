@@ -12,14 +12,14 @@ factories, vector databases, registries, event ledgers, and speculative APIs.
 
 ```text
 Planner
-  │  queries + targets + target-level facets
+  │  queries + explicit targets + shared facets
   ▼
 Researcher
   ├── BM25 sparse retrieval
   ├── Sentence Transformer dense retrieval
   ├── Lightweight GraphRAG
   ├── Reciprocal Rank Fusion
-  └── Multi-query reranking + threshold + target balance
+  └── Per-query candidates + reranking + target balance
   ▼
 Verifier
   ├── complete ────────────────────────────────┐
@@ -52,28 +52,30 @@ The Planner receives the original question and returns:
 }
 ```
 
-It does not create a sub-question DAG or allocate budgets. With an API key it
-requests a small JSON plan from the configured LLM. Invalid JSON falls back to
-a method-name heuristic. Deterministic behavior is explicit through `--offline`.
+Only method names written in the question become targets; open-ended discovery
+keeps `targets=[]` and uses question-level facets. It does not create a
+sub-question DAG or allocate budgets. Invalid JSON falls back to a method-name
+heuristic. Deterministic behavior is explicit through `--offline`.
 
 ### Researcher
 
 The Researcher always executes the core retrieval pipeline directly:
 
-1. BM25 retrieval using `rank_bm25.BM25Okapi`.
-2. Dense cosine retrieval over a NumPy embedding matrix.
-3. Entity-graph retrieval.
-4. Reciprocal Rank Fusion over the three rankings.
+1. Per-query BM25, dense cosine, and entity-graph retrieval.
+2. Eight candidates retained from each query/retriever route.
+3. Reciprocal Rank Fusion across the independent rankings.
+4. Up to 30 fused candidates retained for neural scoring.
 5. Multi-query cross-encoder reranking of at most 30 candidates.
-6. Relevance filtering and two evidence slots per named target.
+6. Relevance filtering, page deduplication, and named-target balance.
 
 There is no tool registry, retrieval toolkit, async task queue, vector-store
 interface, provider factory, or dynamic fusion weighting.
 
 ### Verifier
 
-The Verifier maps evidence IDs to each target-level facet and returns complete,
-partial, or insufficient coverage. Incomplete evidence can trigger one retry.
+The Verifier maps evidence IDs to target-level facets, or global facets when
+there are no explicit targets. Incomplete evidence can trigger one retry;
+an unchanged evidence set skips the redundant second verification.
 
 ### Writer
 
@@ -130,6 +132,8 @@ scorer is used so the full architecture can still be demonstrated.
 ## Install and run
 
 Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+The first neural run may download and load model snapshots; report that cold
+start separately from subsequent warm-query latency in benchmarks and demos.
 
 ```bash
 uv sync
@@ -218,7 +222,7 @@ src/scholar_agent/
 
 ## Tests and quality
 
-The 29 deterministic tests cover physical page provenance, all retrievers,
+The 30 deterministic tests cover physical page provenance, all retrievers,
 multi-query reranking, target identity, thresholds, coverage, retry bounds,
 strict abstention, page citations, and the four-command CLI.
 

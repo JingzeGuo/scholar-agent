@@ -135,3 +135,23 @@ Acceptance:
 - Single and grouped Evidence IDs render as validated physical-page citations.
 - Unknown IDs inside a group are removed without dropping valid group members.
 - Grouped IDs count as valid Writer evidence references.
+
+## Phase 9 — Open and multi-method query hardening
+
+- Keep only method targets written explicitly in the user's question.
+- Use question-level facets and globally ranked evidence when targets are empty.
+- Preserve available-target evidence when another explicit target is absent.
+- Retain candidates independently per query before cross-query fusion.
+- Stop a corrective loop before re-verification when evidence IDs are unchanged.
+- Prefer distinct physical pages during evidence selection.
+
+Acceptance:
+
+- Deterministic tests prove explicit-target filtering, target-free selection,
+  partial-target preservation, per-query retrieval, and no-new-evidence routing.
+- Q9 retrieves substantive evidence for Self-RAG, CRAG, and FLARE.
+- Q10–Q12 answer from relevant corpus evidence instead of falsely abstaining.
+- Q16 answers in Chinese with at least two supported evaluation frameworks.
+- Q19 distinguishes the two CRAG identities without inapplicable missing facets.
+- Q20 rejects the universal accuracy-and-cost claim without overgeneralization.
+- Source, README, deterministic-test, quality, and lockfile limits still pass.

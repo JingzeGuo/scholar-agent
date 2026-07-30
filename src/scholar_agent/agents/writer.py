@@ -73,9 +73,22 @@ def _writer_prompt(state: AgentState, allowed: list[int]) -> str:
 Answer in {state["plan"]["output_language"]} using only the supplied evidence.
 Every factual statement needs an inline supplied [E1], [E2], ... reference.
 For multiple sources, write adjacent references like [E1][E5], never [E1, E5].
+Use the smallest sufficient citation set, normally one or two IDs per paragraph.
+Do not repeat the same evidence ID within one factual paragraph.
 Do not substitute related methods for these targets: {state["plan"]["targets"]}.
-Derive differences only from target-level evidence. Answer only covered aspects;
-the system will append the missing-evidence list.
+When targets are empty, identify relevant methods from the approved evidence
+and organize multi-method answers by method rather than by evidence chunk.
+For a plural method question, discuss every distinct approved method.
+When coverage includes a "question" bucket, include its requested unnamed
+method example in addition to every explicit target.
+For a numbered approaches request, give that many concrete mechanisms rather
+than listing unsupported taxonomy labels.
+Derive differences only from approved evidence. Answer only covered aspects;
+the system appends the missing-evidence list.
+Treat experimental comparisons as scoped examples. A counterexample can reject
+an "always" claim, but cannot prove the opposite universal claim.
+Preserve before/after timing exactly; never present a post-generation evaluator
+as a pre-generation retrieval-control mechanism.
 
 Status: {verification["status"]}
 Covered: {verification["covered"]}
