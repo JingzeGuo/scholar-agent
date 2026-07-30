@@ -10,8 +10,9 @@ from scholar_agent.workflow import initial_state, run_question
 
 
 class FakeEngine:
-    def __init__(self, results: list[dict]) -> None:
+    def __init__(self, results: list[dict], chunks: list[dict] | None = None) -> None:
         self.results = results
+        self.chunks = chunks or results
         self.calls = 0
 
     def sparse_search(self, queries: list[str]) -> list[dict]:
@@ -27,20 +28,7 @@ class FakeEngine:
 
 class FakeCrossEncoder:
     def predict(self, pairs: list[tuple[str, str]], show_progress_bar: bool) -> list[float]:
-        return [float(len(pairs) - index) for index in range(len(pairs))]
-
-
-class EmptyFeedbackLLM:
-    def complete_json(self, prompt: str) -> dict:
-        if "Planner" in prompt:
-            return {
-                "queries": ["Compare Self-RAG and CRAG"],
-                "entities": ["Self-RAG", "CRAG"],
-            }
-        return {"sufficient": False, "feedback": ""}
-
-    def complete(self, prompt: str) -> str:
-        return "The retrieved evidence remains incomplete. [E1]"
+        return [5.0] * len(pairs)
 
 
 def test_langgraph_completes_four_agent_flow(
@@ -56,14 +44,13 @@ def test_langgraph_completes_four_agent_flow(
         Settings(),
     )
 
-    assert result["sufficient"] is True
+    assert result["verification"]["status"] == "complete"
     assert result["retry_count"] == 0
-    assert "candidates" not in result
     assert "[Self-RAG.pdf p.1]" in result["answer"]
     assert "[CRAG.pdf p.2]" in result["answer"]
 
 
-def test_insufficient_workflow_retries_exactly_once(monkeypatch: Any) -> None:
+def test_no_relevant_evidence_abstains_without_retry() -> None:
     engine = FakeEngine([])
     result = run_question(
         "Evidence that does not exist",
@@ -71,30 +58,30 @@ def test_insufficient_workflow_retries_exactly_once(monkeypatch: Any) -> None:
         Settings(),
     )
 
-    assert result["sufficient"] is False
-    assert result["retry_count"] == 1
-    assert engine.calls == 2
-    assert "insufficient" in result["answer"]
+    assert result["verification"]["status"] == "insufficient"
+    assert result["stop_reason"] == "no_relevant_evidence"
+    assert result["retry_count"] == 0
+    assert engine.calls == 1
+    assert "sufficiently relevant evidence" in result["answer"]
 
 
-def test_empty_llm_feedback_cannot_loop_forever(
+def test_partial_workflow_retries_exactly_once(
     sample_chunks: list[dict],
     monkeypatch: Any,
 ) -> None:
-    engine = FakeEngine(sample_chunks[:2])
+    engine = FakeEngine(sample_chunks[:1], sample_chunks[:2])
     monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
 
     result = run_question(
         "Compare Self-RAG and CRAG",
         engine,  # type: ignore[arg-type]
         Settings(),
-        EmptyFeedbackLLM(),  # type: ignore[arg-type]
     )
 
-    assert result["sufficient"] is False
+    assert result["verification"]["status"] == "partial"
     assert result["retry_count"] == 1
-    assert result["feedback"]
     assert engine.calls == 2
+    assert "Missing evidence" in result["answer"]
 
 
 def test_run_question_sets_recursion_limit(monkeypatch: Any) -> None:
@@ -114,6 +101,13 @@ def test_run_question_sets_recursion_limit(monkeypatch: Any) -> None:
     assert compiled.config == {"recursion_limit": 10}
 
 
-def test_agent_state_has_only_cross_agent_fields() -> None:
-    assert "candidates" not in AgentState.__annotations__
-    assert len(AgentState.__annotations__) == 8
+def test_agent_state_has_seven_cross_agent_fields() -> None:
+    assert set(AgentState.__annotations__) == {
+        "question",
+        "plan",
+        "evidence",
+        "verification",
+        "retry_count",
+        "stop_reason",
+        "answer",
+    }

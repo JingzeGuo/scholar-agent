@@ -107,3 +107,19 @@ Acceptance:
   count, selected evidence, a real fixture filename, and a physical page.
 - The answer contains no fabricated citation.
 - All checks pass and the finished refactor is committed to Git.
+
+## Phase 7 — Demo quality hardening
+
+- Filter reranked evidence with a configurable relevance threshold.
+- Balance comparison evidence across named targets and merge retry evidence.
+- Verify target-level facet coverage as complete, partial, or insufficient.
+- Make partial answers and abstention strict, with explicit offline mode.
+
+Acceptance:
+
+- Comparison evidence includes two identity-matched chunks per target when available.
+- Evidence below the configured reranker threshold never reaches the Writer.
+- A second incomplete verification produces only a partial answer or abstention.
+- Out-of-corpus questions abstain after one retrieval with no citations.
+- Chinese questions are answered in Chinese without substituting related methods.
+- The compact source, documentation, and deterministic-test limits remain satisfied.

@@ -18,8 +18,12 @@ from scholar_agent.retrieval import RetrievalEngine
 WORKFLOW_RECURSION_LIMIT = 10
 
 
+def route_after_research(state: AgentState) -> str:
+    return "writer" if state["stop_reason"] == "no_relevant_evidence" else "verifier"
+
+
 def route_after_verification(state: AgentState) -> str:
-    if state["sufficient"]:
+    if state["verification"]["status"] == "complete":
         return "writer"
     if state["retry_count"] >= 1:
         return "writer"
@@ -41,7 +45,11 @@ def build_workflow(
     workflow.add_node("writer", lambda state: writer_node(state, llm))
     workflow.set_entry_point("planner")
     workflow.add_edge("planner", "researcher")
-    workflow.add_edge("researcher", "verifier")
+    workflow.add_conditional_edges(
+        "researcher",
+        route_after_research,
+        {"verifier": "verifier", "writer": "writer"},
+    )
     workflow.add_conditional_edges(
         "verifier",
         route_after_verification,
@@ -54,12 +62,22 @@ def build_workflow(
 def initial_state(question: str) -> AgentState:
     return {
         "question": question,
-        "queries": [],
-        "entities": [],
+        "plan": {
+            "queries": [],
+            "entities": [],
+            "targets": [],
+            "facets": ["mechanism"],
+            "output_language": "English",
+        },
         "evidence": [],
-        "sufficient": False,
-        "feedback": "",
+        "verification": {
+            "status": "insufficient",
+            "covered": {},
+            "missing": [],
+            "corrective_query": "",
+        },
         "retry_count": 0,
+        "stop_reason": "",
         "answer": "",
     }
 

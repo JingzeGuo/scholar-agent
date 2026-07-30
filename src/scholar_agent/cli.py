@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 import typer
+from openai import OpenAIError
 
 from scholar_agent.config import Settings
 from scholar_agent.ingest import ingest_directory
@@ -20,6 +21,10 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 LOGGER = logging.getLogger(__name__)
+
+
+class MissingAPIKeyError(RuntimeError):
+    pass
 
 
 def _settings() -> Settings:
@@ -53,24 +58,44 @@ def build_indexes() -> None:
     typer.echo("Built BM25, dense, and graph indexes")
 
 
-def _ask(question: str) -> str:
+def _ask(question: str, offline: bool = False) -> str:
     settings = _settings()
     engine = RetrievalEngine.load(settings)
-    llm = LLMClient.from_env(settings)
+    llm = None if offline else LLMClient.from_env(settings)
+    if offline:
+        LOGGER.info("[offline] deterministic planner, verifier, and writer")
+    elif llm is None:
+        raise MissingAPIKeyError
     state = run_question(question, engine, settings, llm)
     return state["answer"]
 
 
+def _answer_or_exit(question: str, offline: bool) -> None:
+    try:
+        typer.echo(_ask(question, offline))
+    except MissingAPIKeyError:
+        typer.echo("LLM API key missing. Run with --offline for deterministic mode.", err=True)
+        raise typer.Exit(code=2) from None
+    except OpenAIError:
+        typer.echo("LLM API unavailable. Run with --offline for deterministic mode.", err=True)
+        raise typer.Exit(code=1) from None
+
+
 @app.command()
-def ask(question: str) -> None:
+def ask(
+    question: str,
+    offline: bool = typer.Option(False, "--offline", help="Use deterministic agents."),
+) -> None:
     """Run the complete four-agent workflow."""
-    typer.echo(_ask(question))
+    _answer_or_exit(question, offline)
 
 
 @app.command()
-def demo() -> None:
+def demo(
+    offline: bool = typer.Option(False, "--offline", help="Use deterministic agents."),
+) -> None:
     """Run the fixed interview demonstration question."""
-    typer.echo(_ask("Compare Self-RAG and CRAG"))
+    _answer_or_exit("Compare Self-RAG and CRAG", offline)
 
 
 if __name__ == "__main__":

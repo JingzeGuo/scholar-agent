@@ -12,18 +12,18 @@ factories, vector databases, registries, event ledgers, and speculative APIs.
 
 ```text
 Planner
-  │  up to 3 queries + 5 entities
+  │  queries + targets + target-level facets
   ▼
 Researcher
   ├── BM25 sparse retrieval
   ├── Sentence Transformer dense retrieval
   ├── Lightweight GraphRAG
   ├── Reciprocal Rank Fusion
-  └── Cross-encoder reranking → up to 8 evidence chunks
+  └── Multi-query reranking + threshold + target balance
   ▼
 Verifier
-  ├── sufficient ──────────────────────────────┐
-  └── insufficient → Researcher once at most  │
+  ├── complete ────────────────────────────────┐
+  └── partial/insufficient → Researcher once  │
                                                ▼
 Writer → deterministic citation validation → answer
 ```
@@ -31,9 +31,9 @@ Writer → deterministic citation validation → answer
 The compiled graph has exactly four nodes:
 
 ```text
-planner → researcher → verifier ─┬→ writer → END
-                    ▲            │
-                    └────────────┘  (one retry maximum)
+planner → researcher ─┬→ verifier ─┬→ writer → END
+                      │      ▲      │
+                      └──────┴──────┘  (abstain or retry once)
 ```
 
 ## The four agents
@@ -46,13 +46,15 @@ The Planner receives the original question and returns:
 {
     "queries": list[str],   # maximum 3
     "entities": list[str],  # maximum 5
+    "targets": list[str],   # maximum 3
+    "facets": list[str],    # target-level coverage
+    "output_language": str,
 }
 ```
 
 It does not create a sub-question DAG or allocate budgets. With an API key it
 requests a small JSON plan from the configured LLM. Invalid JSON falls back to
-the original question as the only query. Without an API key, a transparent
-method-name heuristic keeps the demo offline.
+a method-name heuristic. Deterministic behavior is explicit through `--offline`.
 
 ### Researcher
 
@@ -62,24 +64,22 @@ The Researcher always executes the core retrieval pipeline directly:
 2. Dense cosine retrieval over a NumPy embedding matrix.
 3. Entity-graph retrieval.
 4. Reciprocal Rank Fusion over the three rankings.
-5. Cross-encoder reranking of at most 30 candidates.
+5. Multi-query cross-encoder reranking of at most 30 candidates.
+6. Relevance filtering and two evidence slots per named target.
 
 There is no tool registry, retrieval toolkit, async task queue, vector-store
 interface, provider factory, or dynamic fusion weighting.
 
 ### Verifier
 
-The Verifier answers two questions: is the evidence sufficient, and if not,
-what is missing? Insufficient evidence can return to the Researcher only once.
-After that, the graph must continue to the Writer.
+The Verifier maps evidence IDs to each target-level facet and returns complete,
+partial, or insufficient coverage. Incomplete evidence can trigger one retry.
 
 ### Writer
 
-The Writer sees only the current evidence. It drafts with `[E1]`, `[E2]`
-references and states uncertainty when verification failed. A deterministic
-validator removes nonexistent evidence IDs and any pre-rendered page citation
-that is not backed by a real stored chunk. Valid IDs become
-`[paper.pdf p.N]`.
+The Writer sees only verifier-approved evidence IDs. It answers covered facets,
+lists missing evidence for partial results, and abstains without citations when
+evidence is insufficient. Valid IDs become `[paper.pdf p.N]`.
 
 ## Retrieval
 
@@ -136,6 +136,7 @@ uv sync
 uv run scholar-agent ingest tests/fixtures/papers
 uv run scholar-agent index
 uv run scholar-agent ask "Compare Self-RAG and CRAG"
+uv run scholar-agent ask "Compare Self-RAG and CRAG" --offline
 ```
 
 The repository includes two tiny, synthetic two-page PDF excerpts for
@@ -153,8 +154,8 @@ Supported commands are intentionally limited to:
 ```text
 scholar-agent ingest <pdf-directory>
 scholar-agent index
-scholar-agent ask "<question>"
-scholar-agent demo
+scholar-agent ask "<question>" [--offline]
+scholar-agent demo [--offline]
 ```
 
 ## Configuration
@@ -166,23 +167,24 @@ Configuration is a single environment-backed dataclass:
 | `SCHOLAR_AGENT_LLM_MODEL` | `deepseek-chat` |
 | `SCHOLAR_AGENT_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |
 | `SCHOLAR_AGENT_TOP_K` | `20` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
-Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` to enable the optional LLM path.
-Keys are read from the environment and are never logged. No key is required
-for ingestion, indexing, tests, or the offline demonstration.
+Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` for online questions. Keys are never
+logged. Without a key, use `--offline`; online mode never silently downgrades.
 
 ## Example
 
 ```text
-[planner] generated 3 queries and 3 entities
+[planner] queries=3 targets=2 facets=3 language=English
 [researcher] sparse=4 dense=4 graph=4
 [fusion] 4 unique candidates
+[reranker] retained=4 rejected=0 threshold=-1.000
 [reranker] selected 4 evidence chunks
 [reranker] E1 CRAG.pdf p.2 score=5.354
-[verifier] evidence sufficient
-[writer] answer generated with 4 citations
+[verifier] status=complete covered=6/6 missing=0
+[writer] status=complete citations=4 sources=2
 
 The retrieved evidence supports this comparison:
 - CRAG applies correction after initial retrieval ... [CRAG.pdf p.2]
@@ -216,10 +218,9 @@ src/scholar_agent/
 
 ## Tests and quality
 
-The 26 deterministic tests cover physical page provenance, BM25, dense and
-graph retrieval, RRF, reranking, Planner bounds and fallback, verification,
-the one-retry limit, complete LangGraph execution, evidence-only writing,
-false-citation removal, real filename/page rendering, and the CLI surface.
+The 29 deterministic tests cover physical page provenance, all retrievers,
+multi-query reranking, target identity, thresholds, coverage, retry bounds,
+strict abstention, page citations, and the four-command CLI.
 
 ```bash
 uv run pytest -q

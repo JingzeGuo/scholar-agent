@@ -20,42 +20,57 @@ def _cross_encoder(model_name: str) -> Any:
     return CrossEncoder(resolve_model_path(model_name), local_files_only=True)
 
 
-def _lexical_scores(question: str, candidates: list[dict]) -> list[float]:
-    query_terms = set(tokenize(question))
-    if not query_terms:
-        return [0.0] * len(candidates)
-    return [
-        len(query_terms.intersection(tokenize(candidate["text"]))) / len(query_terms)
-        for candidate in candidates
-    ]
+def _lexical_scores(queries: list[str], candidates: list[dict]) -> list[float]:
+    query_terms = [set(tokenize(query)) for query in queries]
+    scores: list[float] = []
+    for candidate in candidates:
+        terms = set(tokenize(candidate["text"]))
+        overlaps = [
+            len(query.intersection(terms)) / len(query)
+            for query in query_terms
+            if query
+        ]
+        best = max(overlaps, default=0.0)
+        scores.append(best if best > 0 else float("-inf"))
+    return scores
 
 
 def rerank(
-    question: str,
+    queries: list[str],
     candidates: list[dict],
     model_name: str,
     *,
     scorer: ScoreFunction | None = None,
 ) -> list[dict]:
-    """Score question/chunk pairs and return the candidates in descending order."""
-    if not candidates:
+    """Score each query/chunk pair and keep each chunk's best query score."""
+    queries = [query.strip() for query in queries if query.strip()]
+    if not candidates or not queries:
         return []
-    pairs = [(question, candidate["text"]) for candidate in candidates]
+    pairs = [
+        (query, candidate["text"])
+        for candidate in candidates
+        for query in queries
+    ]
     if scorer is not None:
-        scores = scorer(pairs)
+        raw_scores = scorer(pairs)
     else:
         try:
-            raw_scores: Any = _cross_encoder(model_name).predict(
+            predicted: Any = _cross_encoder(model_name).predict(
                 pairs,
                 show_progress_bar=False,
             )
-            scores = [float(score) for score in raw_scores]
+            raw_scores = [float(score) for score in predicted]
         except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
             LOGGER.warning("[reranker] local cross-encoder unavailable; lexical fallback: %s", exc)
-            scores = _lexical_scores(question, candidates)
+            raw_scores = []
 
-    scored = [
-        {**candidate, "score": float(score)}
-        for candidate, score in zip(candidates, scores, strict=True)
-    ]
+    if raw_scores:
+        width = len(queries)
+        scores = [
+            max(raw_scores[start : start + width])
+            for start in range(0, len(raw_scores), width)
+        ]
+    else:
+        scores = _lexical_scores(queries, candidates)
+    scored = [{**item, "score": float(score)} for item, score in zip(candidates, scores, strict=True)]
     return sorted(scored, key=lambda item: item["score"], reverse=True)

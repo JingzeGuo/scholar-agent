@@ -63,10 +63,10 @@ def test_rrf_rewards_results_found_by_multiple_retrievers(sample_chunks: list[di
 
 def test_reranker_reorders_candidates(sample_chunks: list[dict]) -> None:
     def fake_scorer(pairs: list[tuple[str, str]]) -> list[float]:
-        assert len(pairs) == 3
-        return [0.1, 0.9, 0.2]
+        assert len(pairs) == 6
+        return [0.1, 0.2, 0.9, 0.1, 0.2, 0.3]
 
-    ranked = rerank("compare methods", sample_chunks, "unused", scorer=fake_scorer)
+    ranked = rerank(["query one", "query two"], sample_chunks, "unused", scorer=fake_scorer)
 
     assert ranked[0]["chunk_id"] == "crag-1"
     assert ranked[0]["score"] == 0.9

@@ -6,6 +6,7 @@ import logging
 import re
 
 from scholar_agent.citations import (
+    PAGE_CITATION_RE,
     citation_summary,
     valid_evidence_ids,
     validate_citations,
@@ -16,45 +17,69 @@ from scholar_agent.models import AgentState
 LOGGER = logging.getLogger(__name__)
 
 
+def _chinese(state: AgentState) -> bool:
+    language = state["plan"]["output_language"]
+    return "chinese" in language.casefold() or "中文" in language
+
+
 def _first_sentence(text: str, limit: int = 260) -> str:
     sentence = re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)[0]
-    if len(sentence) <= limit:
-        return sentence
-    return sentence[: limit - 1].rstrip() + "…"
+    return sentence if len(sentence) <= limit else sentence[: limit - 1].rstrip() + "…"
 
 
-def _offline_draft(state: AgentState) -> str:
-    if not state["evidence"]:
-        return "The available evidence is insufficient to answer this question."
-    lead = (
-        "The available evidence is limited, so the comparison is tentative:"
-        if not state["sufficient"]
-        else "The retrieved evidence supports this comparison:"
-    )
+def _allowed_ids(state: AgentState) -> list[int]:
+    result: set[int] = set()
+    for facets in state["verification"]["covered"].values():
+        for evidence_ids in facets.values():
+            for evidence_id in evidence_ids:
+                if match := re.fullmatch(r"E(\d+)", evidence_id):
+                    result.add(int(match.group(1)))
+    return sorted(result)
+
+
+def _missing_text(state: AgentState) -> str:
+    missing = state["verification"]["missing"]
+    if not missing:
+        return ""
+    heading = "缺失证据：" if _chinese(state) else "Missing evidence:"
+    return "\n".join([heading, *(f"- {item}" for item in missing)])
+
+
+def _offline_draft(state: AgentState, allowed: list[int]) -> str:
+    status = state["verification"]["status"]
+    if status == "insufficient":
+        return (
+            "当前语料库没有足够相关的证据来回答这个问题。"
+            if _chinese(state)
+            else "The current corpus does not contain sufficiently relevant evidence "
+            "to answer this question."
+        )
+    lead = "可用证据支持以下内容：" if _chinese(state) else "The available evidence supports:"
     points = [
-        f"- {_first_sentence(item['text'])} [E{index}]"
-        for index, item in enumerate(state["evidence"][:4], start=1)
+        f"- {_first_sentence(state['evidence'][index - 1]['text'])} [E{index}]"
+        for index in allowed[:4]
     ]
-    return "\n".join([lead, *points])
+    return "\n".join([lead, *points, _missing_text(state)]).strip()
 
 
-def _writer_prompt(state: AgentState) -> str:
+def _writer_prompt(state: AgentState, allowed: list[int]) -> str:
     evidence_text = "\n".join(
-        f"[E{index}] {item['text']}"
-        for index, item in enumerate(state["evidence"], start=1)
+        f"[E{index}] {state['evidence'][index - 1]['text']}"
+        for index in allowed
     )
-    sufficiency = "sufficient" if state["sufficient"] else "incomplete"
+    verification = state["verification"]
     return f"""You are the Writer in an evidence-grounded research workflow.
 
-Answer the question using only the evidence below. Every factual statement
-must be supported by an inline [E1], [E2], ... reference. Never cite an ID that
-is not supplied. Do not use background knowledge. When evidence is incomplete,
-say exactly what remains uncertain.
+Answer in {state["plan"]["output_language"]} using only the supplied evidence.
+Every factual statement needs an inline supplied [E1], [E2], ... reference.
+Do not substitute related methods for these targets: {state["plan"]["targets"]}.
+Derive differences only from target-level evidence. Answer only covered aspects;
+the system will append the missing-evidence list.
 
-Verification status: {sufficiency}
-
-Question:
-{state["question"]}
+Status: {verification["status"]}
+Covered: {verification["covered"]}
+Missing: {verification["missing"]}
+Question: {state["question"]}
 
 Evidence:
 {evidence_text}
@@ -62,18 +87,26 @@ Evidence:
 
 
 def writer_node(state: AgentState, llm: LLMClient | None = None) -> dict:
-    """Draft only from evidence, then validate every evidence reference."""
-    if llm is None or not state["evidence"]:
-        draft = _offline_draft(state)
+    """Write only from verifier-approved evidence, or abstain without an LLM."""
+    status = state["verification"]["status"]
+    allowed = _allowed_ids(state)
+    if status == "insufficient" or llm is None:
+        draft = _offline_draft(state, allowed)
     else:
-        draft = llm.complete(_writer_prompt(state))
-        if not valid_evidence_ids(draft, len(state["evidence"])):
-            LOGGER.warning("[writer] LLM draft had no valid evidence IDs; using fallback")
-            draft = _offline_draft(state)
+        draft = llm.complete(_writer_prompt(state, allowed))
+        used = set(valid_evidence_ids(draft, len(state["evidence"])))
+        if not used or not used.issubset(allowed):
+            LOGGER.warning("[writer] draft used evidence outside verification; using fallback")
+            draft = _offline_draft(state, allowed)
+        elif status == "partial":
+            draft = "\n\n".join([draft.strip(), _missing_text(state)])
+
+    draft = PAGE_CITATION_RE.sub("", draft)
     answer = validate_citations(draft, state["evidence"])
     summary = citation_summary(answer, state["evidence"])
     LOGGER.info(
-        "[writer] answer generated with %d citations from %d sources",
+        "[writer] status=%s citations=%d sources=%d",
+        status,
         summary["citations"],
         summary["sources"],
     )
