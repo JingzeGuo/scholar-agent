@@ -1,4 +1,4 @@
-"""Shared pytest fixtures."""
+"""Small deterministic corpus fixtures."""
 
 from __future__ import annotations
 
@@ -6,25 +6,34 @@ from pathlib import Path
 
 import pytest
 
-from scholar_agent.retrieval.chunk_store import ChunkStore
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+@pytest.fixture
+def sample_chunks() -> list[dict]:
+    return [
+        {
+            "chunk_id": "self-1",
+            "paper": "Self-RAG.pdf",
+            "page": 1,
+            "text": "Self-RAG uses adaptive retrieval and reflection tokens.",
+            "score": 0.0,
+        },
+        {
+            "chunk_id": "crag-1",
+            "paper": "CRAG.pdf",
+            "page": 2,
+            "text": "CRAG uses a retrieval evaluator and corrective retrieval.",
+            "score": 0.0,
+        },
+        {
+            "chunk_id": "other-1",
+            "paper": "Other.pdf",
+            "page": 3,
+            "text": "A transformer baseline processes ordinary language.",
+            "score": 0.0,
+        },
+    ]
 
 
 @pytest.fixture
-def repo_root() -> Path:
-    return REPO_ROOT
-
-
-@pytest.fixture
-def default_config_path(repo_root: Path) -> Path:
-    return repo_root / "configs" / "default.yaml"
-
-
-@pytest.fixture
-def full_corpus_store(repo_root: Path) -> ChunkStore:
-    """Load the optional canonical store or skip when full-corpus assets are absent."""
-    processed_dir = repo_root / "data" / "processed"
-    if not (processed_dir / "chunks.jsonl").is_file():
-        pytest.skip("optional full-corpus chunk store not present (run ingest)")
-    return ChunkStore.from_processed_dir(processed_dir)
+def papers_dir() -> Path:
+    return Path(__file__).parent / "fixtures" / "papers"

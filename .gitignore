@@ -1,89 +1,43 @@
-# Python
+# Python and packaging
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
+.venv/
 build/
 dist/
 *.egg-info/
-.eggs/
-*.egg
 
-# Virtual environments
-.venv/
-venv/
-ENV/
-
-# uv / packaging
-.python-version
-uv.lock.bak
-
-# Test / type / lint caches
+# Tests and tooling
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
-.tox/
-.nox/
+.mypy_cache/
 
-# Environment and secrets
+# Secrets and local settings
 .env
-.env.local
+.env.*
 *.pem
 
-# IDE / OS
+# Editors and operating systems
+.DS_Store
 .idea/
 .vscode/
 *.swp
-.DS_Store
-Thumbs.db
-
-# Local learning notes
 plan.md
 
-# Project data artifacts (keep fixtures, ignore large generated assets)
+# Generated corpus and indexes
 data/papers/**
 !data/papers/.gitkeep
 data/processed/**
 !data/processed/.gitkeep
 data/indexes/**
 !data/indexes/.gitkeep
-data/evaluation/**
-!data/evaluation/.gitkeep
-!data/evaluation/fixtures/**
-# Frozen eval split is source-of-truth for Phase 8 (commit these)
-!data/evaluation/questions.jsonl
-!data/evaluation/reference_evidence.jsonl
-!data/evaluation/frozen_split.json
-!data/evaluation/manual_review.jsonl
-!data/evaluation/manual_review_manifest.json
-# Offline interview demo runs (Phase 9)
-!data/demo/
-!data/demo/**
-!tests/fixtures/**
 
-# Local extraction / embedding disk caches
-**/.cache/
-data/processed/.cache/
-
-# Model caches (do not ignore src/scholar_agent/models package)
+# Model caches and run output
 .cache/
-/models/
-**/sentence-transformers/
-**/torch_cache/
 .huggingface/
-.chromadb/
-
-# Logs and run outputs
+**/sentence-transformers/
 logs/
-/runs/
+runs/
 outputs/
 *.log
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Streamlit
-.streamlit/secrets.toml

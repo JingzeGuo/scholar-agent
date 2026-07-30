@@ -1,4 +1,4 @@
-"""ScholarAgent: evidence-driven multi-agent GraphRAG for literature research."""
+"""A compact multi-agent GraphRAG system for academic research."""
 
 from __future__ import annotations
 

@@ -1,54 +1,22 @@
 [project]
 name = "scholar-agent"
-version = "0.1.0"
-description = "Evidence-driven multi-agent GraphRAG for literature research"
+version = "0.2.0"
+description = "A compact multi-agent GraphRAG system for evidence-grounded academic research"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "ScholarAgent" }]
 keywords = ["rag", "agents", "literature", "graphrag", "langgraph"]
 dependencies = [
-    "pydantic>=2.7",
-    "pydantic-settings>=2.3",
-    "pyyaml>=6.0",
-    "python-dotenv>=1.0",
-    "typer>=0.12",
-    "rich>=13.7",
-    "httpx>=0.27",
-    "tenacity>=8.3",
-    "openai>=1.40",
-    "langchain-core>=0.3",
-    "langchain-openai>=0.2",
     "langgraph>=0.2",
-    "tiktoken>=0.7",
+    "networkx>=3.3",
+    "numpy>=1.26",
+    "openai>=1.40",
+    "pydantic>=2.7",
     "pymupdf>=1.24",
     "rank-bm25>=0.2",
-    "numpy>=1.26",
-    "chromadb>=0.5",
     "sentence-transformers>=3.0",
-    "networkx>=3.3",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.2",
-    "pytest-asyncio>=0.23",
-    "pillow>=10",
-    "ruff>=0.5",
-    "mypy>=1.10",
-    "types-PyYAML>=6.0",
-    "types-requests>=2.32",
-]
-ui = [
-    "streamlit>=1.59,<2",
-]
-eval = [
-    "ragas>=0.3.1,<0.4",
-    "datasets>=2.20",
-    # RAGAS 0.3.1 imports chat_models.vertexai, removed in 0.4.x.
-    "langchain-community>=0.3.9,<0.4",
-    # Imported by RAGAS prompt modules even for text-only evaluation.
-    "pillow>=10",
+    "typer>=0.12",
 ]
 
 [project.scripts]
@@ -64,87 +32,28 @@ packages = ["src/scholar_agent"]
 [dependency-groups]
 dev = [
     "pytest>=8.2",
-    "pytest-asyncio>=0.23",
-    "pillow>=10",
     "ruff>=0.5",
-    "mypy>=1.10",
-    "types-PyYAML>=6.0",
-    "types-requests>=2.32",
 ]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-pythonpath = ["src", "."]
+pythonpath = ["src"]
 markers = [
-    "full_corpus: tests that require local gitignored corpus artifacts",
-    "live: tests that call paid/live providers (opt-in)",
-    "slow: slower integration tests",
+    "live: tests that call paid or live providers (opt-in)",
 ]
 addopts = "-q --strict-markers -m 'not live'"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-]
+filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["src", "tests", "scripts"]
-extend-exclude = ["notebooks", "outputs", "data"]
+src = ["src", "tests"]
+extend-exclude = ["data"]
 
 [tool.ruff.lint]
-select = [
-    "E",   # pycodestyle errors
-    "F",   # pyflakes
-    "I",   # isort
-    "UP",  # pyupgrade
-    "B",   # bugbear
-    "SIM", # simplify
-    "N",   # pep8-naming
-]
-ignore = [
-    "E501",  # line length handled by formatter preference
-]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+ignore = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["scholar_agent"]
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-no_implicit_optional = true
-packages = ["scholar_agent"]
-mypy_path = "src"
-exclude = [
-    "tests/",
-    "scripts/",
-    "notebooks/",
-]
-
-[[tool.mypy.overrides]]
-module = [
-    "langgraph.*",
-    "langchain_core.*",
-    "fitz",
-    "pymupdf.*",
-    "chromadb.*",
-    "rank_bm25.*",
-    "sentence_transformers.*",
-    "numpy",
-    "numpy.*",
-    "networkx",
-    "networkx.*",
-    "ragas",
-    "ragas.*",
-    "datasets",
-    "datasets.*",
-    "streamlit",
-    "streamlit.*",
-]
-ignore_missing_imports = true
-follow_imports = "skip"

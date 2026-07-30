@@ -1,328 +1,243 @@
 # ScholarAgent
 
-Evidence-driven multi-agent GraphRAG for literature research.
+> A compact multi-agent GraphRAG system for evidence-grounded academic research.
 
-![ScholarAgent offline replay](docs/assets/scholaragent_replay.gif)
-
-*Replay-derived, provider-free demo: plan → adaptive retrieval → verification →
-page-grounded answer. Generate it with `scripts/build_demo_gif.py`.*
-
-A **Planner** decomposes complex questions, a **Researcher** chooses hybrid or
-graph retrieval tools under budgets, a **Verifier** checks evidence coverage and
-may request corrective retrieval, and a **Writer** answers only from verified
-evidence—with ablations to measure what actually helps.
-
-**Status:** Phases 0–10 implemented. The objective acceptance matrix is in
-[`docs/phase_acceptance.md`](docs/phase_acceptance.md); full design:
-[`CODEX_IMPLEMENTATION_PLAN.md`](CODEX_IMPLEMENTATION_PLAN.md).
-
-> Language note: this is a **portfolio research prototype**, not a production
-> service. Claims below are measured, fixture-backed, or explicitly unavailable.
-
----
-
-## Why naive RAG fails
-
-| Failure mode | What happens | What ScholarAgent does |
-|---|---|---|
-| Dense-only miss | Exact dataset/method names rank poorly | Hybrid dense + BM25 with explicit RRF |
-| Uncited fluency | Model invents claims without pages | Writer restricted to verified ledger IDs |
-| Fixed pipeline | Same retrieve→generate for every query | Adaptive router + tool loop |
-| No stop condition | Agents thrash on tools | Corrective budgets, no-new-evidence stop |
-| Graph as oracle | Triples treated as facts | Provenance-backed edges only |
-
-**Measured (offline hash embeddings, frozen 50-Q split, clean run `run_1f4dc371453d4a1f`):**
-dense-only paper Recall@8 **0.16** vs hybrid_rerank **0.61**. Source:
-[`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
-
----
+ScholarAgent is an interview-sized research system that keeps the interesting
+parts of agentic retrieval visible. Four LangGraph agents plan a search, run
+three complementary retrievers, verify the evidence, and write a page-cited
+answer. The implementation deliberately avoids production wrappers, provider
+factories, vector databases, registries, event ledgers, and speculative APIs.
 
 ## Architecture
 
-```mermaid
-flowchart TB
-  subgraph offline [Offline ingestion]
-    PDF[PDF corpus] --> ING[Ingest pages/sections/chunks]
-    ING --> CCS[Canonical chunk store]
-    CCS --> DENSE[Dense index]
-    CCS --> BM25[BM25 index]
-    CCS --> GRAPH[Knowledge graph]
-  end
-
-  subgraph online [Online research]
-    Q[User question] --> PLAN[Planner]
-    PLAN --> RES[Researcher tool loop]
-    RES --> DENSE
-    RES --> BM25
-    RES --> GRAPH
-    RES --> LEDGER[Evidence ledger]
-    LEDGER --> VER[Verifier]
-    VER -->|gaps under budget| RES
-    VER -->|sufficient / stop| WRI[Writer]
-    WRI --> CIT[Citation validator]
-    CIT --> OUT[Cited answer + trace]
-  end
+```text
+Planner
+  │  up to 3 queries + 5 entities
+  ▼
+Researcher
+  ├── BM25 sparse retrieval
+  ├── Sentence Transformer dense retrieval
+  ├── Lightweight GraphRAG
+  ├── Reciprocal Rank Fusion
+  └── Cross-encoder reranking → up to 8 evidence chunks
+  ▼
+Verifier
+  ├── sufficient ──────────────────────────────┐
+  └── insufficient → Researcher once at most  │
+                                               ▼
+Writer → deterministic citation validation → answer
 ```
 
-Also see [`docs/architecture.md`](docs/architecture.md).
+The compiled graph has exactly four nodes:
 
-### Agent responsibilities
+```text
+planner → researcher → verifier ─┬→ writer → END
+                    ▲            │
+                    └────────────┘  (one retry maximum)
+```
 
-| Role | Responsibility |
-|---|---|
-| **Planner** | Structured `QueryPlan` with sub-questions and required evidence |
-| **Researcher** | Budgeted tool loop (dense / sparse / hybrid / graph); merges evidence ledger |
-| **Verifier** | Coverage, conflicts, targeted corrective queries; never infinite loops |
-| **Writer** | Claims only from Verifier-accepted evidence IDs; page citations from ledger |
-| **Citation validator** | Canonical chunk/PDF/page checks; drops unsupported claims |
+## The four agents
 
-### Retrieval stack
+### Planner
 
-- **Dense** — Chroma + BGE (or offline hashing embedder)
-- **BM25** — persistent, aligned to stable `chunk_id`s
-- **RRF** — explicit reciprocal rank fusion (`k=60` default)
-- **Rerank** — cross-encoder in production path; lexical offline/hash eval
-- **Graph** — constrained ontology, evidence spans, staged entity resolution
-- **Adaptive routing** — rule-based policy from query type / signals
+The Planner receives the original question and returns:
 
-### Evidence ledger example (from committed demo replay)
+```python
+{
+    "queries": list[str],   # maximum 3
+    "entities": list[str],  # maximum 5
+}
+```
 
-Replay: `data/demo/runs/selfrag_vs_crag.json`
+It does not create a sub-question DAG or allocate budgets. With an API key it
+requests a small JSON plan from the configured LLM. Invalid JSON falls back to
+the original question as the only query. Without an API key, a transparent
+method-name heuristic keeps the demo offline.
 
-| evidence_id | paper_id | pages | claim support (snippet) |
-|---|---|---|---|
-| `ev_selfrag` | `paper_arxiv_2310_11511` | p.10–11 | Self-RAG / reflection tokens |
-| `ev_crag` | `paper_arxiv_2401_15884` | p.1 | CRAG corrective retrieval |
+### Researcher
 
-Final answer cites `[paper_arxiv_2310_11511 p.10-11]` and
-`[paper_arxiv_2401_15884 p.1]`. Replay loading rechecks these mappings against
-the current canonical store when local artifacts are available.
+The Researcher always executes the core retrieval pipeline directly:
 
----
+1. BM25 retrieval using `rank_bm25.BM25Okapi`.
+2. Dense cosine retrieval over a NumPy embedding matrix.
+3. Entity-graph retrieval.
+4. Reciprocal Rank Fusion over the three rankings.
+5. Cross-encoder reranking of at most 30 candidates.
 
-## Corpus statistics
+There is no tool registry, retrieval toolkit, async task queue, vector-store
+interface, provider factory, or dynamic fusion weighting.
 
-| Item | Value | Evidence |
-|---|---|---|
-| Manifest entries | **120** arXiv PDFs | `data/corpus_manifest.jsonl` |
-| Locally ingested papers | **120** (when PDFs present) | `data/processed/papers.jsonl` (gitignored) |
-| Chunks | **5858** | local `data/processed/chunks.jsonl` |
-| Pages (last ingest report) | **2593** | local `ingestion_report.json` |
-| Graph nodes / edges | **2636 / 4263** | local `graph_stats.json` via `graph inspect` |
-| Relations with evidence | **4263 / 4263** | independent PDF-span audit; 4181 single-page + 82 cross-page |
-| PDFs committed? | **No** | `.gitignore` — download via script |
+### Verifier
 
-If you clone without downloading PDFs, treat full-corpus stats as **unavailable
-until** `download_corpus.py` + `ingest` complete. Fixture corpus under
-`tests/fixtures/` is always available for offline tests.
+The Verifier answers two questions: is the evidence sufficient, and if not,
+what is missing? Insufficient evidence can return to the Researcher only once.
+After that, the graph must continue to the Writer.
 
----
+### Writer
 
-## Evaluation
+The Writer sees only the current evidence. It drafts with `[E1]`, `[E2]`
+references and states uncertainty when verification failed. A deterministic
+validator removes nonexistent evidence IDs and any pre-rendered page citation
+that is not backed by a real stored chunk. Valid IDs become
+`[paper.pdf p.N]`.
 
-### Dataset (frozen)
+## Retrieval
 
-| Type | Count |
-|---|---:|
-| Single-paper factual | 10 |
-| Exact terminology / keyword | 10 |
-| Cross-paper comparison | 15 |
-| Multi-hop relational | 10 |
-| Unanswerable from corpus | 5 |
+### Page-aware ingestion
 
-Artifacts: `data/evaluation/{questions,reference_evidence,frozen_split}.jsonl|json`.
+PyMuPDF extracts each physical page independently. Character chunks are about
+1,200 characters with about 150 characters of overlap. A chunk never crosses
+a page boundary and stores only:
 
-### Ablation systems
+```python
+{
+    "chunk_id": str,
+    "paper": str,
+    "page": int,
+    "text": str,
+}
+```
 
-`naive_dense` · `hybrid_rag` · `hybrid_rerank` · `hybrid_graph` ·
-`hybrid_corrective` · `full_agent` · `static_all_tools`
+No corpus manifest, tokenizer fingerprint, header-frequency model, section
+hierarchy, cross-page chunk, or cache-invalidation framework is involved.
 
-### Quantitative results (measured offline)
+### BM25 and dense indexes
 
-**Configuration:** hashing embedder + lexical rerank · graph loaded · no live LLM ·
-cost $0.00 · clean run `run_1f4dc371453d4a1f` · corpus fingerprint `79d20fac…`.
-Full table: [`docs/results/offline_hash_eval_summary.md`](docs/results/offline_hash_eval_summary.md).
+BM25 tokens are persisted as a small JSON file. Dense embeddings are saved as
+`dense.npy` and searched with cosine similarity. The configured Sentence
+Transformer is downloaded and cached on first use. In an offline environment
+without the model cache, a deterministic hashing encoder keeps tests and the
+demo runnable; the log makes that fallback explicit.
 
-| system | paper R@8 | cite P | latency ms |
-|---|---:|---:|---:|
-| naive_dense | 0.16 | 0.038 | 3.6 |
-| hybrid_rerank | 0.61 | 0.166 | 10.7 |
-| hybrid_graph | **0.67** | 0.212 | 289.9 |
-| full_agent | 0.54 | **0.288** | 572.2 |
+### Lightweight GraphRAG
 
-**Per-category (paper R@8):** hybrid_rerank factual/keyword **0.90**; comparison
-**0.57**; relational **0.40**. Full agent unanswerable refusals: **5/5**.
-Corrective loops trigger safely but `improvement_after_correction = 0.0` offline.
+Lightweight GraphRAG using entity co-occurrence and one-hop neighborhood
+expansion.
 
-**Full live shared-LLM + RAGAS 50×7** (`run_a23467bb0aa84115`, DeepSeek flash,
-hash retrieval):
-[`docs/results/live_llm_ragas_50x7_summary.md`](docs/results/live_llm_ragas_50x7_summary.md).
+Each extracted entity is a NetworkX node whose `chunks` attribute contains the
+supporting chunk IDs. Entities in the same chunk are connected. Retrieval
+matches the Planner's entities, expands one hop, collects supporting chunks,
+and ranks them by entity-hit score. It does not perform community detection,
+global summaries, entity resolution, graph embeddings, or multi-hop search.
 
-| system | paper R@8 | cite P | RAGAS faith. | RAGAS relev. |
-|---|---:|---:|---:|---:|
-| hybrid_rerank | 0.61 | 0.603 | 0.922 | 0.549 |
-| hybrid_graph | **0.67** | **0.620** | **0.959** | **0.583** |
-| full_agent | 0.54 | 0.491 | 0.877 | 0.492 |
+### Fusion and reranking
 
-RAGAS coverage **0.90** because 5 unanswerable questions × 7 systems correctly
-refuse (empty answer → no RAGAS score). Generation used on **350/350** rows;
-**0** system errors.
+RRF adds `1 / (60 + rank)` for every appearance of a chunk in a retriever
+ranking. A single Sentence Transformers `CrossEncoder` then reranks the first
+30 fused candidates. When that model is unavailable offline, a logged lexical
+scorer is used so the full architecture can still be demonstrated.
 
-**BGE + cross-encoder full 50×7 (measured):**
+## Install and run
 
-| regime | run | best paper R@8 | notes |
-|---|---|---:|---|
-| Offline extractive | `run_a4770534afb84db2` | static_all_tools **0.73** (dense alone **0.70**) | [`docs/results/bge_ce_offline_50x7_summary.md`](docs/results/bge_ce_offline_50x7_summary.md) |
-| Live LLM + RAGAS | `run_6270c2cf8cd94186` | static_all_tools **0.73** | CE lifts MRR; hybrid_rerank cite P **0.660**, full_agent RAGAS faith. **0.965** — [`docs/results/bge_ce_llm_ragas_50x7_summary.md`](docs/results/bge_ce_llm_ragas_50x7_summary.md) |
-
-Vs hash offline, dense-only paper R@8 jumps **0.16 → 0.70**.
-
-**Fixture-only:** unit/E2E tests under `tests/` (not full-corpus metrics).
-
-**Dataset review:** 50/50 AI-assisted independent review
-(`data/evaluation/manual_review_manifest.json`) — **not** human-signed audit.
-
-Failure analysis: [`docs/failure_analysis.md`](docs/failure_analysis.md).
-
----
-
-## Setup
+Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Python 3.11+ and uv (https://github.com/astral-sh/uv)
 uv sync
-cp .env.example .env   # optional: DEEPSEEK_API_KEY for live checks only
-
-# Offline quality gates (no paid APIs)
-make quality
-# or:
-uv run pytest -m "not live" -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
+uv run scholar-agent ingest tests/fixtures/papers
+uv run scholar-agent index
+uv run scholar-agent ask "Compare Self-RAG and CRAG"
 ```
 
-### Optional full corpus (local)
+The repository includes two tiny, synthetic two-page PDF excerpts for
+deterministic tests. They are not redistributed full papers. To use your own
+corpus, point `ingest` at a directory containing PDFs.
+
+The interview shortcut runs the same fixed question:
 
 ```bash
-uv run python scripts/download_corpus.py --target 120 --skip-existing
-uv run scholar-agent corpus validate -m data/corpus_manifest.jsonl --check-pdfs
-uv run scholar-agent ingest --manifest data/corpus_manifest.jsonl
-uv run scholar-agent index build --embedding-backend st
-uv run scholar-agent graph build
+uv run scholar-agent demo
 ```
 
-Canonical ingestion requires the configured exact tokenizer
-(`tiktoken:cl100k_base`) and records its backend plus an ingestion-configuration
-fingerprint. `--allow-tokenizer-fallback` is an explicit non-canonical diagnostic
-escape hatch; it is never used for the measured corpus.
+Supported commands are intentionally limited to:
 
----
-
-## CLI usage
-
-```bash
-uv run scholar-agent --help
-uv run scholar-agent corpus validate -m tests/fixtures/corpus_manifest.jsonl
-uv run scholar-agent ingest --help
-uv run scholar-agent graph inspect
-uv run scholar-agent ask --help
-uv run scholar-agent evaluate --help
+```text
+scholar-agent ingest <pdf-directory>
+scholar-agent index
+scholar-agent ask "<question>"
+scholar-agent demo
 ```
 
-| Command | Description |
+## Configuration
+
+Configuration is a single environment-backed dataclass:
+
+| Variable | Default |
 |---|---|
-| `scholar-agent version` | Package version |
-| `scholar-agent config` | Show validated config |
-| `scholar-agent corpus validate` | Manifest validation |
-| `scholar-agent ingest` | PDF → processed JSONL |
-| `scholar-agent index build` | Dense + BM25 indexes |
-| `scholar-agent retrieve "…"` | Search modes |
-| `scholar-agent ask-naive "…"` | Naive RAG baseline |
-| `scholar-agent graph build\|inspect` | Knowledge graph |
-| `scholar-agent ask "…"` | Full plan→verify→write→cite |
-| `scholar-agent evaluate` | Frozen-split ablations |
-| `scholar-agent demo` | Streamlit or offline replay |
+| `SCHOLAR_AGENT_LLM_MODEL` | `deepseek-chat` |
+| `SCHOLAR_AGENT_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
+| `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| `SCHOLAR_AGENT_TOP_K` | `20` |
+| `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
----
+Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` to enable the optional LLM path.
+Keys are read from the environment and are never logged. No key is required
+for ingestion, indexing, tests, or the offline demonstration.
 
-## Tests
+## Example
 
-```bash
-# Fresh-clone-safe offline suite
-uv run pytest -m "not live" -q
+```text
+[planner] generated 3 queries and 3 entities
+[researcher] sparse=4 dense=4 graph=4
+[fusion] 4 unique candidates
+[reranker] selected 4 evidence chunks
+[reranker] E1 CRAG.pdf p.2 score=5.354
+[verifier] evidence sufficient
+[writer] answer generated with 4 citations
 
-# Optional checks against local gitignored corpus artifacts
-uv run pytest -m full_corpus -q
-
-# Optional live provider tests (requires API key; never default)
-uv run pytest -m live
-# or
-make test-live
-
-# Targeted
-uv run pytest tests/unit/test_e2e_fixture.py tests/unit/test_hardening.py -q
+The retrieved evidence supports this comparison:
+- CRAG applies correction after initial retrieval ... [CRAG.pdf p.2]
+- Self-RAG ... generate reflection tokens. [Self-RAG.pdf p.1]
 ```
 
-Live tests are marked `live`, skip without credentials, and must not log secrets
-or provider reasoning fields.
+Every displayed filename and page is copied from the evidence chunk. A draft
+reference such as `[E99]` or `[Fake.pdf p.999]` is removed.
 
-Full-corpus tests are marked `full_corpus`. They run when local PDFs and
-`data/processed/chunks.jsonl` are available and skip cleanly in a fresh clone.
-The current fresh-clone result is **252 passed, 6 skipped, 2 live deselected**;
-with the local full corpus and UI extra installed it is **258 passed, 2 live
-deselected**. The repository does not currently define a hosted CI workflow.
+## Project layout
 
----
-
-## Streamlit demo
-
-```bash
-uv sync --extra ui
-make demo
-# Offline interview-safe replay:
-uv run scholar-agent demo --replay selfrag_vs_crag
+```text
+src/scholar_agent/
+├── agents/
+│   ├── planner.py
+│   ├── researcher.py
+│   ├── verifier.py
+│   └── writer.py
+├── citations.py
+├── cli.py
+├── config.py
+├── graph_store.py
+├── indexes.py
+├── ingest.py
+├── llm.py
+├── models.py
+├── reranker.py
+├── retrieval.py
+└── workflow.py
 ```
 
-Full script: [`docs/demo_script.md`](docs/demo_script.md). UI notes: [`docs/demo.md`](docs/demo.md).
-The committed GIF above is rebuilt from the same provenance-checked replay data,
-so the interview path does not require a provider or browser session.
+## Tests and quality
 
----
+The 18 deterministic tests cover physical page provenance, BM25, dense and
+graph retrieval, RRF, reranking, Planner bounds and fallback, verification,
+the one-retry limit, complete LangGraph execution, evidence-only writing,
+false-citation removal, real filename/page rendering, and the CLI surface.
 
-## Design decisions & reliability
+```bash
+uv run pytest -q
+uv run ruff check .
+make quality
+```
 
-- Design ADRs: [`docs/design_decisions.md`](docs/design_decisions.md)
-- Caching policy: [`docs/caching.md`](docs/caching.md)
-- Interview guide: [`docs/interview_guide.md`](docs/interview_guide.md)
-- 中文项目状态与面试要点: [`docs/interview_project_summary_zh.md`](docs/interview_project_summary_zh.md)
-- Evaluation ops: [`docs/evaluation.md`](docs/evaluation.md)
-- Phase acceptance evidence: [`docs/phase_acceptance.md`](docs/phase_acceptance.md)
-
-Hardening highlights (Phase 10): config validation, structured LLM parse/retry,
-provider backoff with jitter, workflow budgets, graceful index degradation,
-disk cache with corruption handling, untrusted-content delimiters, secret-safe logs.
-
----
+Provider calls are optional. Any future provider-dependent test belongs behind
+the `live` pytest marker so the default suite stays deterministic and free.
 
 ## Limitations
 
-1. Offline hash metrics are **not** BGE/cross-encoder production quality.
-2. Corrective loops **trigger but do not improve** gold paper recall offline
-   (`improvement_after_correction = 0.0`).
-3. Graph improves paper recall but multiplies latency (~30× in that run).
-4. PDFs, indexes, and raw eval outputs are local (gitignored).
-5. Single-user CLI/Streamlit prototype — not multi-tenant production.
-6. The committed demo GIF is a deterministic saved-run replay, not a live video.
-
-## Future work
-
-- Larger and out-of-domain evaluation for BGE/cross-encoder retrieval
-- Stronger entailment/refusal checks on a development set
-- Score-calibrated hybrid+graph fusion
-- Multi-user API, auth, quotas, managed vector DB
-- Optional extensions listed in the implementation plan §21 (only after core DoD)
-
-## License
-
-MIT (portfolio project).
+- Entity extraction is regex-based and intentionally has no resolution stage.
+- One-hop co-occurrence graphs are useful for local connections, not corpus-wide
+  synthesis or deep relationship reasoning.
+- Hash embeddings and lexical reranking are offline fallbacks, not substitutes
+  for the configured neural models in a quality evaluation.
+- The deterministic Writer summarizes retrieved sentences; nuanced synthesis
+  benefits from a configured LLM.
+- Citation validation proves provenance, not semantic entailment of every word.
+- Indexes are rebuilt as a unit and assume a laptop-scale interview corpus.
