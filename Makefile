@@ -59,9 +59,6 @@ graph-build:
 graph-inspect:
 	uv run scholar-agent graph inspect
 
-research-demo:
-	uv run scholar-agent research "Compare Self-RAG and CRAG" --embedding-backend hash
-
 ask-demo:
 	uv run scholar-agent ask "Compare Self-RAG versus CRAG" --max-iterations 2
 

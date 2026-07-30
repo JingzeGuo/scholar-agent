@@ -108,7 +108,7 @@ the current canonical store when local artifacts are available.
 | Locally ingested papers | **120** (when PDFs present) | `data/processed/papers.jsonl` (gitignored) |
 | Chunks | **5858** | local `data/processed/chunks.jsonl` |
 | Pages (last ingest report) | **2593** | local `ingestion_report.json` |
-| Graph nodes / edges | **2636 / 4263** | local `graph_stats.json` via `graph stats` |
+| Graph nodes / edges | **2636 / 4263** | local `graph_stats.json` via `graph inspect` |
 | Relations with evidence | **4263 / 4263** | independent PDF-span audit; 4181 single-page + 82 cross-page |
 | PDFs committed? | **No** | `.gitignore` — download via script |
 
