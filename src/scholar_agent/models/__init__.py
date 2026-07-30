@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from scholar_agent.ids import new_run_id
 from scholar_agent.models.answer import (
+    AnswerStatus,
     CitationIssue,
     CitationReport,
     ClaimWithCitations,
+    ComparisonCell,
+    ComparisonRow,
     DraftAnswer,
     FinalAnswer,
     SourceCard,
@@ -47,7 +50,13 @@ from scholar_agent.models.ingestion import (
     PaperExtractionReport,
     SectionBlock,
 )
-from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
+from scholar_agent.models.planning import (
+    AnswerRequirement,
+    PlannedEntity,
+    QueryPlan,
+    SubQuestion,
+    SubQuestionStatus,
+)
 from scholar_agent.models.retrieval import (
     CitationRef,
     NaiveRAGAnswer,
@@ -64,6 +73,8 @@ from scholar_agent.models.workflow import (
 )
 
 __all__ = [
+    "AnswerRequirement",
+    "AnswerStatus",
     "BudgetStatus",
     "Chunk",
     "CitationIssue",
@@ -71,6 +82,8 @@ __all__ = [
     "CitationReport",
     "ClaimWithCitations",
     "CompatibilityDecision",
+    "ComparisonCell",
+    "ComparisonRow",
     "CorrectiveQuery",
     "CorpusIngestionReport",
     "CorpusManifestEntry",
@@ -90,6 +103,7 @@ __all__ = [
     "Paper",
     "PaperExtractionReport",
     "PaperPage",
+    "PlannedEntity",
     "SectionBlock",
     "QueryPlan",
     "QueryType",

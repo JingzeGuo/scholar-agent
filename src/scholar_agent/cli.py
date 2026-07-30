@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import typer
 from rich.console import Console
@@ -515,6 +515,37 @@ _ASK_MAX_ITER_OPT = typer.Option(
     "--max-iterations",
     help="Max corrective iterations (default from config)",
 )
+_ASK_AGENT_MODE_OPT = typer.Option(
+    "auto",
+    "--agent-mode",
+    help="Agent reasoning mode: auto | llm | deterministic",
+)
+_ASK_OFFLINE_OPT = typer.Option(
+    False,
+    "--offline",
+    help="Force deterministic agents and make zero LLM calls",
+)
+
+
+def _agent_runtime_label(events: list[Any], component: str) -> str:
+    """Format the actual component trace, not merely client configuration."""
+    payload: dict[str, Any] = {}
+    for event in reversed(events):
+        if getattr(event, "component", None) != component:
+            continue
+        candidate = getattr(event, "payload", None)
+        if isinstance(candidate, dict) and candidate.get("backend"):
+            payload = candidate
+            break
+    if not payload:
+        return "not_run"
+    backend = str(payload["backend"])
+    details: list[str] = []
+    if payload.get("model"):
+        details.append(f"model={payload['model']}")
+    if payload.get("fallback_reason"):
+        details.append(f"fallback={payload['fallback_reason']}")
+    return f"{backend} ({', '.join(details)})" if details else backend
 
 
 @app.command("ask")
@@ -526,14 +557,48 @@ def ask_cmd(
     max_tools: int | None = _ASK_MAX_TOOLS_OPT,
     json_output: bool = _JSON_OPT,
     no_parallel: bool = _ASK_NO_PARALLEL_OPT,
+    agent_mode: str = _ASK_AGENT_MODE_OPT,
+    offline: bool = _ASK_OFFLINE_OPT,
 ) -> None:
     """Full plan → research → verify → write → citation validate (Phases 6–7)."""
+    from scholar_agent.agents.planner import Planner, PlannerLLMError
     from scholar_agent.agents.researcher import ResearchAgentConfig
     from scholar_agent.agents.workflow import ResearchWorkflow, WorkflowConfig
+    from scholar_agent.agents.writer import Writer, WriterLLMError
+    from scholar_agent.llm.client import create_llm_client
     from scholar_agent.retrieval.index_builder import load_toolkit
 
     cfg = load_config(config_path)
     setup_logging(cfg)
+    requested_agent_mode = agent_mode.strip().lower()
+    if requested_agent_mode not in {"auto", "llm", "deterministic"}:
+        raise typer.BadParameter(
+            "must be auto, llm, or deterministic",
+            param_hint="--agent-mode",
+        )
+    effective_agent_mode = "deterministic" if offline else requested_agent_mode
+    llm = None
+    if effective_agent_mode == "llm" and not cfg.llm.api_key:
+        console.print(
+            "[red]--agent-mode llm requires an LLM API key. "
+            "Set DEEPSEEK_API_KEY or configure llm.api_key.[/red]"
+        )
+        raise typer.Exit(code=2)
+    if effective_agent_mode in {"auto", "llm"} and cfg.llm.api_key:
+        try:
+            # Planner and Writer deliberately share one provider client.
+            llm = create_llm_client(cfg)
+        except Exception as exc:  # noqa: BLE001
+            if effective_agent_mode == "llm":
+                console.print(
+                    "[red]Unable to initialize the LLM client in strict mode "
+                    f"({type(exc).__name__}).[/red]"
+                )
+                raise typer.Exit(code=1) from exc
+            console.print(
+                "[yellow]LLM initialization failed; auto mode is using "
+                f"deterministic agents ({type(exc).__name__}).[/yellow]"
+            )
     if embedding_backend not in {"auto", "hash", "st"}:
         embedding_backend = "auto"
     toolkit = load_toolkit(
@@ -557,7 +622,21 @@ def ask_cmd(
         ),
         parallel_research=not no_parallel,
     )
-    result = ResearchWorkflow(toolkit, config=wf_cfg).run(query)
+    strict_llm = effective_agent_mode == "llm"
+    workflow = ResearchWorkflow(
+        toolkit,
+        config=wf_cfg,
+        planner=Planner(llm=llm, strict_llm=strict_llm),
+        writer=Writer(llm=llm, strict_llm=strict_llm),
+    )
+    try:
+        result = workflow.run(query)
+    except (PlannerLLMError, WriterLLMError) as exc:
+        console.print(
+            "[red]LLM agent execution failed in strict mode "
+            f"({type(exc).__name__}).[/red]"
+        )
+        raise typer.Exit(code=1) from exc
 
     if json_output:
         console.print_json(json.dumps(result.model_dump(mode="json")))
@@ -565,6 +644,12 @@ def ask_cmd(
 
     console.print(f"[bold]run_id[/bold]: {result.run_id}")
     console.print(f"[bold]terminated[/bold]: {result.terminated_reason}")
+    console.print(f"[bold]answer status[/bold]: {result.answer_status.value}")
+    console.print(
+        f"[bold]agent mode[/bold]: requested={requested_agent_mode} "
+        f"planner={_agent_runtime_label(result.events, 'planner')} "
+        f"writer={_agent_runtime_label(result.events, 'writer')}"
+    )
     console.print(
         f"[bold]plan[/bold]: {result.plan.answer_type} "
         f"({len(result.plan.sub_questions)} sub-questions)"
@@ -598,7 +683,7 @@ def ask_cmd(
         fa = result.final_answer
         report = fa.citation_report
         console.print(
-            f"[bold]answer[/bold]: claims={len(fa.claims)} "
+            f"[bold]answer[/bold]: status={fa.status.value} claims={len(fa.claims)} "
             f"sources={len(fa.source_cards)} "
             f"citation_valid={report.is_valid if report else None} "
             f"corpus_insufficient={fa.corpus_insufficient}"

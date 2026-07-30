@@ -15,7 +15,12 @@ from scholar_agent.agents.workflow import (
     WorkflowResult,
     run_research_workflow,
 )
-from scholar_agent.agents.writer import Writer, format_inline_citation, render_claim_markdown
+from scholar_agent.agents.writer import (
+    Writer,
+    WriterLLMError,
+    format_inline_citation,
+    render_claim_markdown,
+)
 
 __all__ = [
     "CitationValidator",
@@ -29,6 +34,7 @@ __all__ = [
     "WorkflowConfig",
     "WorkflowResult",
     "Writer",
+    "WriterLLMError",
     "format_inline_citation",
     "render_claim_markdown",
     "run_research_workflow",

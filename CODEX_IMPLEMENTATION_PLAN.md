@@ -1112,6 +1112,50 @@ Acceptance:
 - core tests run without paid API calls;
 - README distinguishes measured results from claims and future work.
 
+### Phase 11 — Answer intelligence remediation
+
+Historical acceptance for Phases 0–10 remains unchanged. Phase 11 repairs the
+semantic quality gap demonstrated by the multi-sentence Self-RAG versus CRAG
+comparison failure. Implement and accept P0, P1, then P2 in that order.
+
+Current implementation scope: **P0 only**. This milestone covers structured
+planning, optional LLM Planner/Writer execution, truthful answer status, and
+structured comparison rendering. P1 and P2 below remain planned and must not be
+reported as accepted by the P0 commit.
+
+Deliver:
+
+- typed comparison entities, answer requirements, evidence assignments, answer
+  status, citation integrity, and answer-quality models;
+- LLM-backed Planner, evidence judge/query rewriter, and Writer with explicit
+  deterministic fallback and secret-free backend traces;
+- an Evidence Gate before the ledger, assignment-scoped verification, scoped
+  contradiction detection, and accepted-evidence-based loop termination;
+- structured comparison synthesis with complete, partial, and insufficient
+  outcomes;
+- separate provenance, claim-support, requirement-coverage, comparison-
+  completeness, and optional answer-relevance metrics;
+- compatible CLI, evaluation, replay, demo, and documentation updates.
+
+Acceptance:
+
+- the reported multi-sentence comparison parses Self-RAG and Corrective RAG as
+  separate canonical entities and retains retrieval trigger, correction
+  mechanism, and key-difference requirements;
+- acknowledgements, generic RAG passages, CRAG Benchmark, Distributed RAG, and
+  R²AG decoys do not enter the verified answer;
+- comparison coverage is evaluated per entity and requirement, with no implicit
+  cross-sub-question ledger reuse;
+- insufficient verification never renders a normal complete answer;
+- a complete fixture answer is a cited comparison across both primary papers,
+  while missing evidence produces an explicit partial or insufficient result;
+- citation provenance and claim support are reported separately from answer
+  relevance and completeness;
+- default tests remain deterministic and provider-free, while a live-marker
+  test exercises the real configured LLM path;
+- the frozen 50-question dataset is not mutated, quality gates pass, and the
+  remediation is committed with objective acceptance evidence.
+
 ---
 
 ## 16. Definition of Done

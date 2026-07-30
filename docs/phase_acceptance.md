@@ -1,7 +1,8 @@
 # Implementation-plan acceptance audit
 
-Audit date: **2026-07-29**. Scope: core Phases 0–10 and the Definition of Done
-in `CODEX_IMPLEMENTATION_PLAN.md`. Section 21 is explicitly optional and is not
+Audit date: **2026-07-30**. Scope: core Phases 0–10, the Phase 11 P0 milestone,
+and the Definition of Done in `CODEX_IMPLEMENTATION_PLAN.md`. Phase 11 P1/P2
+remain planned and unaccepted. Section 21 is explicitly optional and is not
 part of core completion.
 
 ## Phase evidence
@@ -19,10 +20,12 @@ part of core completion.
 | 8 — evaluation | Complete | Frozen fingerprinted **50-question** split; all **7 systems × 50 = 350** rows in clean exact-hash run `run_1f4dc371453d4a1f` with zero system errors. Separate full DeepSeek+RAGAS and BGE+cross-encoder 50×7 runs are committed as numeric summaries under `docs/results/`. Six concrete failures are documented in `failure_analysis.md`. |
 | 9 — demo | Complete | Streamlit AppTest covers provider-free end-to-end replay; tests cover canonical source→PDF-page rendering, corrective trace, ablation settings, status, and replay without indexes. The committed GIF is deterministically rebuilt and frame-checked. |
 | 10 — hardening/docs | Complete | Startup validation, retries/jitter, caches, degradation, untrusted-text delimiters, secret-safe logs, and offline-by-default test selection are covered by hardening tests. README, ADRs, evaluation, failure analysis, demo script, and interview guide are present. |
+| 11 P0 — upper-agent answer path | Complete (P0 only) | The exact multi-sentence Self-RAG/CRAG query parses canonical entities plus retrieval-trigger, correction-mechanism, and key-difference requirements. Fake-LLM tests cover valid and malformed structured plans/answers, invented entities, unknown evidence IDs, provider failures, strict mode, deterministic fallback, and zero-call offline mode. Writer output is an entity×dimension comparison with complete/partial/insufficient status; citation repair preserves the structured renderer. `make quality` reports **299 passed, 2 live tests deselected**. P1 Evidence Gate/assignment verification and P2 metrics/display are explicitly deferred. |
 
 ## Final gates
 
 - `make quality`: Ruff and Mypy pass.
+- Phase 11 P0 current gate: **299 passed, 2 live tests deselected**.
 - Fresh clone/default dependencies: **252 passed, 6 optional tests skipped,
   2 live tests deselected**.
 - Local full corpus + UI extra: **258 passed, 2 live tests deselected**.

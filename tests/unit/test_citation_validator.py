@@ -7,7 +7,13 @@ from pathlib import Path
 import pymupdf
 
 from scholar_agent.agents.citation_validator import CitationValidator
-from scholar_agent.models.answer import ClaimWithCitations, DraftAnswer
+from scholar_agent.models.answer import (
+    AnswerStatus,
+    ClaimWithCitations,
+    ComparisonCell,
+    ComparisonRow,
+    DraftAnswer,
+)
 from scholar_agent.models.corpus import Chunk, Paper
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.retrieval.chunk_store import ChunkStore
@@ -329,3 +335,159 @@ def test_matching_negative_polarity_is_supported() -> None:
     )
     final = CitationValidator().validate(draft, ledger)
     assert len(final.claims) == 1
+
+
+def test_citation_repair_preserves_comparison_matrix_and_downgrades_one_cell() -> None:
+    self_text = "Self-RAG retrieves on demand using reflection tokens."
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                evidence_id="ev_self",
+                claim=self_text,
+                evidence_text=self_text,
+                paper_id="paper_self",
+                chunk_id="chunk_self",
+            ),
+            _item(
+                evidence_id="ev_crag",
+                claim="CRAG evaluates retrieved documents.",
+                evidence_text="CRAG evaluates retrieved documents before correction.",
+                paper_id="paper_crag",
+                chunk_id="chunk_crag",
+            ),
+        ]
+    )
+    claims = [
+        ClaimWithCitations(
+            claim_id="claim_self",
+            text=self_text,
+            evidence_ids=["ev_self"],
+            requirement_key="retrieval_trigger",
+            entity_id="self_rag",
+            dimension="retrieval_trigger",
+        ),
+        ClaimWithCitations(
+            claim_id="claim_crag",
+            text="Quantum music occurs on Mars.",
+            evidence_ids=["ev_crag"],
+            requirement_key="retrieval_trigger",
+            entity_id="crag",
+            dimension="retrieval_trigger",
+        ),
+    ]
+    draft = DraftAnswer(
+        claims=claims,
+        status=AnswerStatus.COMPLETE,
+        rows=[
+            ComparisonRow(
+                requirement_key="retrieval_trigger",
+                dimension="retrieval_trigger",
+                label="Retrieval trigger",
+                cells=[
+                    ComparisonCell(
+                        entity_id="self_rag",
+                        entity_label="Self-RAG",
+                        text=claims[0].text,
+                        evidence_ids=["ev_self"],
+                        claim_id="claim_self",
+                        supported=True,
+                    ),
+                    ComparisonCell(
+                        entity_id="crag",
+                        entity_label="CRAG",
+                        text=claims[1].text,
+                        evidence_ids=["ev_crag"],
+                        claim_id="claim_crag",
+                        supported=True,
+                    ),
+                ],
+            )
+        ],
+    )
+
+    final = CitationValidator(min_support_overlap=0.5).validate(draft, ledger)
+
+    assert final.status == AnswerStatus.PARTIAL
+    assert len(final.rows) == 1
+    assert [cell.supported for cell in final.rows[0].cells] == [True, False]
+    assert final.rows[0].cells[1].text == "Insufficient verified evidence"
+    assert "| Retrieval trigger |" in final.core_answer
+    assert "Self-RAG retrieves on demand" in final.markdown
+    assert "Quantum music" not in final.core_answer
+
+
+def test_all_removed_partial_claims_make_legacy_citation_validity_false() -> None:
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                evidence_id="ev_1",
+                claim="Dense retrieval uses vector similarity.",
+                evidence_text="Dense retrieval uses vector similarity for ranking.",
+            )
+        ]
+    )
+    draft = DraftAnswer(
+        claims=[
+            ClaimWithCitations(
+                claim_id="claim_bad",
+                text="Quantum music occurs on Mars.",
+                evidence_ids=["ev_1"],
+            )
+        ],
+        status=AnswerStatus.PARTIAL,
+    )
+
+    final = CitationValidator().validate(draft, ledger)
+
+    assert final.claims == []
+    assert final.status == AnswerStatus.INSUFFICIENT
+    assert final.citation_report is not None
+    assert final.citation_report.is_valid is False
+
+
+def test_citation_repair_rejects_wrong_entity_requirement_cell_binding() -> None:
+    text = "Self-RAG retrieves on demand using reflection tokens."
+    ledger = EvidenceLedger(
+        items=[_item(evidence_id="ev_self", claim=text, evidence_text=text)]
+    )
+    claim = ClaimWithCitations(
+        claim_id="claim_self",
+        text=text,
+        evidence_ids=["ev_self"],
+        entity_id="self_rag",
+        requirement_key="retrieval_trigger",
+        dimension="retrieval_trigger",
+    )
+    draft = DraftAnswer(
+        claims=[claim],
+        status=AnswerStatus.COMPLETE,
+        rows=[
+            ComparisonRow(
+                requirement_key="correction_mechanism",
+                dimension="correction_mechanism",
+                label="Correction mechanism",
+                cells=[
+                    ComparisonCell(
+                        entity_id="crag",
+                        entity_label="CRAG",
+                        text=claim.text,
+                        evidence_ids=["ev_self"],
+                        claim_id=claim.claim_id,
+                        supported=True,
+                    )
+                ],
+            )
+        ],
+    )
+
+    final = CitationValidator().validate(draft, ledger)
+
+    assert final.claims == []
+    assert final.status == AnswerStatus.INSUFFICIENT
+    assert final.rows[0].cells[0].supported is False
+    assert final.citation_report is not None
+    assert final.citation_report.is_valid is False
+    assert any(
+        "binding" in issue.message.lower()
+        for issue in final.citation_report.issues
+    )

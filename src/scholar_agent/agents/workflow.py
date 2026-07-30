@@ -17,6 +17,7 @@ so limitations are stated from the ledger rather than model memory.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Literal
@@ -29,10 +30,10 @@ from scholar_agent.agents.citation_validator import CitationValidator
 from scholar_agent.agents.planner import Planner
 from scholar_agent.agents.researcher import ResearchAgent, ResearchAgentConfig
 from scholar_agent.agents.verifier import Verifier
-from scholar_agent.agents.writer import Writer
+from scholar_agent.agents.writer import Writer, WriterLLMError
 from scholar_agent.ids import new_run_id
 from scholar_agent.logging import get_logger
-from scholar_agent.models.answer import DraftAnswer, FinalAnswer
+from scholar_agent.models.answer import AnswerStatus, DraftAnswer, FinalAnswer
 from scholar_agent.models.base import BudgetStatus, EventType, ExecutionEvent, QueryType, TokenUsage
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import QueryPlan, SubQuestion, SubQuestionStatus
@@ -70,6 +71,7 @@ class WorkflowResult(BaseModel):
     terminated_reason: str
     events: list[ExecutionEvent] = Field(default_factory=list)
     unanswerable: bool = False
+    answer_status: AnswerStatus = AnswerStatus.INSUFFICIENT
     draft_answer: DraftAnswer | None = None
     final_answer: FinalAnswer | None = None
     state: ResearchRunState | None = None
@@ -87,6 +89,9 @@ class WorkflowState(TypedDict, total=False):
     iteration: int
     tool_call_count: int
     estimated_tokens: int
+    llm_prompt_tokens: int
+    llm_completion_tokens: int
+    llm_total_tokens: int
     token_budget_blocked: bool
     prev_evidence_ids: list[str]
     terminated_reason: str | None
@@ -98,6 +103,7 @@ class WorkflowState(TypedDict, total=False):
     started_ms: float
     draft_answer: dict[str, Any] | None
     final_answer: dict[str, Any] | None
+    answer_status: str
 
 
 @dataclass
@@ -141,6 +147,9 @@ class ResearchWorkflow:
             "iteration": 0,
             "tool_call_count": 0,
             "estimated_tokens": 0,
+            "llm_prompt_tokens": 0,
+            "llm_completion_tokens": 0,
+            "llm_total_tokens": 0,
             "token_budget_blocked": False,
             "prev_evidence_ids": [],
             "terminated_reason": None,
@@ -152,6 +161,7 @@ class ResearchWorkflow:
             "started_ms": perf_counter() * 1000,
             "draft_answer": None,
             "final_answer": None,
+            "answer_status": AnswerStatus.INSUFFICIENT.value,
         }
         final: WorkflowState = app.invoke(initial)
         return self._to_result(final)
@@ -184,22 +194,31 @@ class ResearchWorkflow:
 
     def _node_plan(self, state: WorkflowState) -> dict[str, Any]:
         plan = self.planner.plan(state["query"])
+        runtime = _component_runtime(self.planner)
+        usage = runtime["token_usage"]
         event = ExecutionEvent(
             run_id=state["run_id"],
             event_type=EventType.PLAN_CREATED,
             component="planner",
             summary=(
-                f"plan answer_type={plan.answer_type} sub_questions={len(plan.sub_questions)}"
+                f"plan answer_type={plan.answer_type} sub_questions={len(plan.sub_questions)} "
+                f"backend={runtime['backend']}"
             ),
             payload={
                 "answer_type": plan.answer_type,
                 "sub_question_ids": [sq.id for sq in plan.sub_questions],
                 "sub_questions": [sq.question for sq in plan.sub_questions],
+                "backend": runtime["backend"],
+                "model": runtime["model"],
+                "prompt_version": runtime["prompt_version"],
+                "fallback_reason": runtime["fallback_reason"],
+                "token_usage": usage.model_dump(mode="json"),
             },
         )
         return {
             "plan": plan.model_dump(mode="json"),
             "events": _append_event_dicts(state, [event]),
+            **_usage_state_updates(state, usage),
         }
 
     def _node_research(self, state: WorkflowState) -> dict[str, Any]:
@@ -564,30 +583,63 @@ class ResearchWorkflow:
         verification = None
         if state.get("verification"):
             verification = VerificationResult.model_validate(state["verification"])
+        max_tokens = int(
+            state.get("max_total_tokens") or self.config.max_total_tokens
+        )
+        token_budget_exhausted = bool(state.get("token_budget_blocked")) or int(
+            state.get("estimated_tokens") or 0
+        ) >= max_tokens
+        force_deterministic = (
+            token_budget_exhausted and getattr(self.writer, "llm", None) is not None
+        )
+        if force_deterministic and bool(getattr(self.writer, "strict_llm", False)):
+            # Strict mode may neither exceed the budget nor silently degrade.
+            # This fixed message deliberately excludes provider response data.
+            raise WriterLLMError(
+                "LLM writer blocked because the global token budget is exhausted"
+            )
         draft = self.writer.write(
             query=state["query"],
             plan=plan,
             ledger=ledger,
             verification=verification,
-            corpus_insufficient=bool(state.get("unanswerable")),
+            # A stopped-but-incomplete research loop may still contain useful
+            # evidence. It must be rendered as a partial answer rather than a
+            # normal complete answer.
+            corpus_insufficient=not bool(verification and verification.is_sufficient),
+            force_deterministic=force_deterministic,
+            forced_fallback_reason=(
+                "token_budget_exhausted" if force_deterministic else None
+            ),
         )
+        runtime = _component_runtime(self.writer)
+        usage = runtime["token_usage"]
         event = ExecutionEvent(
             run_id=state["run_id"],
             event_type=EventType.ANSWER_DRAFTED,
             component="writer",
             summary=(
-                f"draft claims={len(draft.claims)} corpus_insufficient={draft.corpus_insufficient}"
+                f"draft status={draft.status.value} claims={len(draft.claims)} "
+                f"corpus_insufficient={draft.corpus_insufficient} backend={runtime['backend']}"
             ),
             payload={
                 "claim_ids": [c.claim_id for c in draft.claims],
                 "claim_evidence_ids": {c.claim_id: list(c.evidence_ids) for c in draft.claims},
+                "answer_status": draft.status.value,
                 "corpus_insufficient": draft.corpus_insufficient,
                 "notes": list(draft.notes),
+                "backend": runtime["backend"],
+                "model": runtime["model"],
+                "prompt_version": runtime["prompt_version"],
+                "fallback_reason": runtime["fallback_reason"],
+                "token_usage": usage.model_dump(mode="json"),
             },
         )
         return {
             "draft_answer": draft.model_dump(mode="json"),
+            "answer_status": draft.status.value,
             "events": _append_event_dicts(state, [event]),
+            **_usage_state_updates(state, usage),
         }
 
     def _node_validate_citations(self, state: WorkflowState) -> dict[str, Any]:
@@ -604,11 +656,12 @@ class ResearchWorkflow:
             component="citation_validator",
             summary=(
                 f"citation valid={report.is_valid if report else False} "
-                f"claims={len(final.claims)} "
+                f"status={final.status.value} claims={len(final.claims)} "
                 f"sources={len(final.source_cards)}"
             ),
             payload={
                 "is_valid": report.is_valid if report else False,
+                "answer_status": final.status.value,
                 "cited_evidence_ids": list(report.cited_evidence_ids) if report else [],
                 "cited_paper_ids": list(report.cited_paper_ids) if report else [],
                 "issue_count": len(report.issues) if report else 0,
@@ -620,6 +673,7 @@ class ResearchWorkflow:
         )
         return {
             "final_answer": final.model_dump(mode="json"),
+            "answer_status": final.status.value,
             "events": _append_event_dicts(state, [event]),
         }
 
@@ -644,6 +698,7 @@ class ResearchWorkflow:
                 "estimated_tokens": state.get("estimated_tokens"),
                 "latency_ms": latency,
                 "unanswerable": state.get("unanswerable"),
+                "answer_status": state.get("answer_status"),
                 "citation_valid": citation_valid,
                 "has_final_answer": bool(final_raw),
             },
@@ -712,10 +767,9 @@ class ResearchWorkflow:
         final: FinalAnswer | None = None
         if state.get("final_answer"):
             final = FinalAnswer.model_validate(state["final_answer"])
-        token_usage = TokenUsage(
-            prompt_tokens=int(state.get("estimated_tokens") or 0),
-            total_tokens=int(state.get("estimated_tokens") or 0),
-        )
+        answer = final or draft
+        answer_status = answer.status if answer is not None else AnswerStatus.INSUFFICIENT
+        token_usage = _workflow_token_usage(state)
         corrective_limit = state.get("max_corrective_iterations")
         budget_status = BudgetStatus(
             tool_call_count=int(state.get("tool_call_count") or 0),
@@ -752,6 +806,7 @@ class ResearchWorkflow:
             execution_events=events,
             draft_answer=draft,
             final_answer=final,
+            answer_status=answer_status,
             citation_report=final.citation_report if final else None,
             errors=[],
         )
@@ -768,6 +823,7 @@ class ResearchWorkflow:
             terminated_reason=str(state.get("terminated_reason") or "completed"),
             events=events,
             unanswerable=bool(state.get("unanswerable")),
+            answer_status=answer_status,
             draft_answer=draft,
             final_answer=final,
             state=snapshot,
@@ -797,3 +853,79 @@ def _append_event_dicts(
         else:
             existing.append(event)
     return existing
+
+
+_SAFE_TRACE_REASON = re.compile(r"^[A-Za-z0-9_. _-]{1,120}$")
+
+
+def _component_runtime(component: Any) -> dict[str, Any]:
+    """Return a secret-free trace view of one Planner/Writer invocation."""
+    backend = str(getattr(component, "last_backend", "") or "").strip()
+    if not backend:
+        backend = "llm" if getattr(component, "llm", None) is not None else "deterministic"
+    model = str(getattr(component, "last_model", "") or "").strip() or None
+    prompt_version = (
+        str(getattr(component, "last_prompt_version", "") or "").strip() or None
+    )
+    fallback_reason = _safe_trace_reason(
+        getattr(component, "last_fallback_reason", None)
+    )
+    return {
+        "backend": backend[:40],
+        "model": model[:120] if model else None,
+        "prompt_version": prompt_version[:120] if prompt_version else None,
+        "fallback_reason": fallback_reason,
+        "token_usage": _component_token_usage(component),
+    }
+
+
+def _safe_trace_reason(reason: Any) -> str | None:
+    """Keep reason codes, never raw provider responses or exception payloads."""
+    if reason is None:
+        return None
+    cleaned = str(reason).strip()
+    if not cleaned:
+        return None
+    if _SAFE_TRACE_REASON.fullmatch(cleaned):
+        return cleaned
+    return "component_fallback"
+
+
+def _component_token_usage(component: Any) -> TokenUsage:
+    raw = getattr(component, "last_token_usage", None)
+    if raw is None:
+        return TokenUsage()
+    try:
+        usage = raw if isinstance(raw, TokenUsage) else TokenUsage.model_validate(raw)
+    except (TypeError, ValueError):
+        return TokenUsage()
+    total = usage.total_tokens or usage.prompt_tokens + usage.completion_tokens
+    return usage.model_copy(update={"total_tokens": total})
+
+
+def _usage_state_updates(state: WorkflowState, usage: TokenUsage) -> dict[str, int]:
+    return {
+        "estimated_tokens": int(state.get("estimated_tokens") or 0) + usage.total_tokens,
+        "llm_prompt_tokens": int(state.get("llm_prompt_tokens") or 0) + usage.prompt_tokens,
+        "llm_completion_tokens": (
+            int(state.get("llm_completion_tokens") or 0) + usage.completion_tokens
+        ),
+        "llm_total_tokens": int(state.get("llm_total_tokens") or 0) + usage.total_tokens,
+    }
+
+
+def _workflow_token_usage(state: WorkflowState) -> TokenUsage:
+    """Combine retrieval estimates with actual Planner/Writer usage."""
+    total = int(state.get("estimated_tokens") or 0)
+    llm_total = min(total, int(state.get("llm_total_tokens") or 0))
+    retrieval_estimate = max(0, total - llm_total)
+    completion = int(state.get("llm_completion_tokens") or 0)
+    prompt = retrieval_estimate + int(state.get("llm_prompt_tokens") or 0)
+    # Defensive normalization for provider usage objects that only report total.
+    if prompt + completion < total:
+        prompt += total - (prompt + completion)
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=total,
+    )

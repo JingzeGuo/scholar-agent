@@ -14,13 +14,19 @@ from pathlib import Path
 import pymupdf
 
 from scholar_agent.agents.evidence_support import claim_is_supported
-from scholar_agent.agents.writer import render_claim_markdown
+from scholar_agent.agents.writer import (
+    INSUFFICIENT_CELL_TEXT,
+    render_core_answer_markdown,
+)
 from scholar_agent.ids import normalize_text
 from scholar_agent.logging import get_logger
 from scholar_agent.models.answer import (
+    AnswerStatus,
     CitationIssue,
     CitationReport,
     ClaimWithCitations,
+    ComparisonCell,
+    ComparisonRow,
     DraftAnswer,
     FinalAnswer,
     SourceCard,
@@ -95,6 +101,37 @@ class CitationValidator:
                     )
                 )
 
+        final_rows = self._repair_rows(draft.rows, final_claims, issues)
+        if draft.rows:
+            row_claim_ids = {
+                cell.claim_id
+                for row in final_rows
+                for cell in row.cells
+                if cell.supported and cell.claim_id is not None
+            }
+            orphaned = [
+                claim for claim in final_claims if claim.claim_id not in row_claim_ids
+            ]
+            if orphaned:
+                for claim in orphaned:
+                    issues.append(
+                        CitationIssue(
+                            severity="error",
+                            claim_id=claim.claim_id,
+                            message=(
+                                "Claim removed from comparison answer: no valid "
+                                "entity/requirement cell binding"
+                            ),
+                        )
+                    )
+                    removed_qualifications.append(
+                        f"{claim.claim_id}: removed from the comparison answer "
+                        "(invalid entity/requirement cell binding)."
+                    )
+                final_claims = [
+                    claim for claim in final_claims if claim.claim_id in row_claim_ids
+                ]
+
         cited_ids = self._ordered_cited_ids(final_claims, by_id)
         source_cards = [self._to_source_card(by_id[eid]) for eid in cited_ids]
         sources = [card.format_reference() for card in source_cards]
@@ -107,7 +144,7 @@ class CitationValidator:
             if eid in by_id
         )
         # If we had to strip everything and draft claimed evidence, still report invalid
-        if draft.claims and not final_claims and not draft.corpus_insufficient:
+        if draft.claims and not final_claims:
             is_valid = False
             if not any("no valid citations" in i.message for i in issues):
                 issues.append(
@@ -124,10 +161,20 @@ class CitationValidator:
             cited_paper_ids=sorted({by_id[e].paper_id for e in cited_ids}),
         )
 
-        markdown = self._render_final_markdown(
+        status = self._final_status(
             draft=draft,
             claims=final_claims,
-            by_id=by_id,
+            rows=final_rows,
+        )
+        core_answer = render_core_answer_markdown(
+            status=status,
+            claims=final_claims,
+            rows=final_rows,
+            ledger_by_id=by_id,
+        )
+        markdown = self._render_final_markdown(
+            draft=draft,
+            core_answer=core_answer,
             source_cards=source_cards,
             report=report,
             removed_qualifications=removed_qualifications,
@@ -136,11 +183,12 @@ class CitationValidator:
         final = FinalAnswer(
             markdown=markdown,
             claims=final_claims,
+            rows=final_rows,
+            status=status,
+            core_answer=core_answer,
             sources=sources,
             source_cards=source_cards,
             citation_report=report,
-            corpus_insufficient=draft.corpus_insufficient
-            or (not final_claims and bool(draft.claims)),
         )
         logger.info(
             "citation_validated is_valid=%s claims=%s→%s issues=%s",
@@ -230,11 +278,96 @@ class CitationValidator:
 
         if not valid_ids:
             return None
-        return ClaimWithCitations(
-            claim_id=claim.claim_id,
-            text=claim.text,
-            evidence_ids=valid_ids,
-        )
+        return claim.model_copy(update={"evidence_ids": valid_ids})
+
+    def _repair_rows(
+        self,
+        rows: list[ComparisonRow],
+        claims: list[ClaimWithCitations],
+        issues: list[CitationIssue],
+    ) -> list[ComparisonRow]:
+        """Keep the matrix shape while downgrading cells whose claim was removed."""
+        claims_by_id = {claim.claim_id: claim for claim in claims}
+        repaired: list[ComparisonRow] = []
+        for row in rows:
+            cells: list[ComparisonCell] = []
+            for cell in row.cells:
+                claim = claims_by_id.get(cell.claim_id or "")
+                if (
+                    claim is None
+                    or not claim.evidence_ids
+                    or claim.entity_id != cell.entity_id
+                    or claim.requirement_key != row.requirement_key
+                    or claim.dimension != row.dimension
+                ):
+                    if claim is not None and claim.evidence_ids:
+                        issues.append(
+                            CitationIssue(
+                                severity="error",
+                                claim_id=claim.claim_id,
+                                message=(
+                                    "Comparison cell binding does not match claim "
+                                    "entity/requirement/dimension"
+                                ),
+                            )
+                        )
+                    cells.append(
+                        cell.model_copy(
+                            update={
+                                "text": INSUFFICIENT_CELL_TEXT,
+                                "evidence_ids": [],
+                                "claim_id": None,
+                                "supported": False,
+                            }
+                        )
+                    )
+                    continue
+                cells.append(
+                    cell.model_copy(
+                        update={
+                            "text": claim.text,
+                            "evidence_ids": list(claim.evidence_ids),
+                            "claim_id": claim.claim_id,
+                            "supported": True,
+                        }
+                    )
+                )
+            repaired.append(row.model_copy(update={"cells": cells}))
+        return repaired
+
+    def _final_status(
+        self,
+        *,
+        draft: DraftAnswer,
+        claims: list[ClaimWithCitations],
+        rows: list[ComparisonRow],
+    ) -> AnswerStatus:
+        claims_by_id = {claim.claim_id: claim for claim in claims}
+        if rows:
+            supported_claim_ids = {
+                cell.claim_id
+                for row in rows
+                for cell in row.cells
+                if cell.supported
+                and cell.claim_id is not None
+                and cell.claim_id in claims_by_id
+            }
+            if not supported_claim_ids:
+                return AnswerStatus.INSUFFICIENT
+            matrix_complete = all(
+                cell.supported
+                and cell.claim_id is not None
+                and cell.claim_id in claims_by_id
+                for row in rows
+                for cell in row.cells
+            )
+        else:
+            if not claims:
+                return AnswerStatus.INSUFFICIENT
+            matrix_complete = True
+        if draft.status == AnswerStatus.COMPLETE and matrix_complete:
+            return AnswerStatus.COMPLETE
+        return AnswerStatus.PARTIAL
 
     def _provenance_error(self, item: EvidenceItem) -> str | None:
         """Validate evidence against canonical chunk, paper, and physical PDF."""
@@ -348,8 +481,7 @@ class CitationValidator:
         self,
         *,
         draft: DraftAnswer,
-        claims: list[ClaimWithCitations],
-        by_id: dict[str, EvidenceItem],
+        core_answer: str,
         source_cards: list[SourceCard],
         report: CitationReport,
         removed_qualifications: list[str] | None = None,
@@ -366,23 +498,7 @@ class CitationValidator:
                 lines.append("")
                 break
 
-        if draft.corpus_insufficient or not claims or removed_qualifications:
-            lines.extend(
-                [
-                    "> **Limitation:** The answer is restricted to verified evidence. "
-                    "Unsupported claims were removed or the corpus is insufficient.",
-                    "",
-                ]
-            )
-
-        lines.append("### Claims")
-        lines.append("")
-        if not claims:
-            lines.append("No citation-validated claims remain.")
-        else:
-            for claim in claims:
-                lines.append(f"- {render_claim_markdown(claim, by_id)}")
-        lines.append("")
+        lines.extend([core_answer, ""])
 
         notes = list(draft.notes)
         if removed_qualifications:

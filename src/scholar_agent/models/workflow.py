@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from scholar_agent.models.answer import CitationReport, DraftAnswer, FinalAnswer
+from scholar_agent.models.answer import AnswerStatus, CitationReport, DraftAnswer, FinalAnswer
 from scholar_agent.models.base import BudgetStatus, ExecutionEvent, TokenUsage
 from scholar_agent.models.evidence import EvidenceItem, EvidenceLedger
 from scholar_agent.models.planning import QueryPlan
@@ -72,6 +72,7 @@ class ResearchRunState(BaseModel):
     execution_events: list[ExecutionEvent] = Field(default_factory=list)
     draft_answer: DraftAnswer | None = None
     final_answer: FinalAnswer | None = None
+    answer_status: AnswerStatus = AnswerStatus.INSUFFICIENT
     citation_report: CitationReport | None = None
     errors: list[str] = Field(default_factory=list)
 
@@ -82,6 +83,14 @@ class ResearchRunState(BaseModel):
         if not cleaned:
             raise ValueError("must be a non-empty string")
         return cleaned
+
+    @model_validator(mode="after")
+    def _derive_answer_status(self) -> ResearchRunState:
+        if self.final_answer is not None:
+            self.answer_status = self.final_answer.status
+        elif self.draft_answer is not None:
+            self.answer_status = self.draft_answer.status
+        return self
 
     def evidence_items(self) -> list[EvidenceItem]:
         return list(self.evidence_ledger.items)
