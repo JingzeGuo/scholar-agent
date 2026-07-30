@@ -170,8 +170,14 @@ class DraftAnswer(BaseModel):
         return migrated
 
     @model_validator(mode="after")
-    def _derive_legacy_insufficiency(self) -> DraftAnswer:
-        self.corpus_insufficient = self.status != AnswerStatus.COMPLETE
+    def _corpus_insufficiency_prevents_complete_status(self) -> DraftAnswer:
+        # ``partial`` describes answer coverage. ``corpus_insufficient`` is
+        # narrower: targeted research confirmed that the corpus cannot supply
+        # the missing evidence. Do not derive the latter from the former.
+        if self.corpus_insufficient and self.status == AnswerStatus.COMPLETE:
+            self.status = (
+                AnswerStatus.PARTIAL if self.claims else AnswerStatus.INSUFFICIENT
+            )
         return self
 
 
@@ -226,6 +232,9 @@ class FinalAnswer(BaseModel):
         return migrated
 
     @model_validator(mode="after")
-    def _derive_legacy_insufficiency(self) -> FinalAnswer:
-        self.corpus_insufficient = self.status != AnswerStatus.COMPLETE
+    def _corpus_insufficiency_prevents_complete_status(self) -> FinalAnswer:
+        if self.corpus_insufficient and self.status == AnswerStatus.COMPLETE:
+            self.status = (
+                AnswerStatus.PARTIAL if self.claims else AnswerStatus.INSUFFICIENT
+            )
         return self

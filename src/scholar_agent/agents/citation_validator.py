@@ -36,6 +36,9 @@ from scholar_agent.retrieval.chunk_store import ChunkStore
 
 logger = get_logger(__name__)
 
+_KEY_DIFFERENCES = "key_differences"
+_DIFFERENCE_PREREQUISITES = ("retrieval_trigger", "correction_mechanism")
+
 
 def _snippet(text: str, max_chars: int = 200) -> str:
     cleaned = " ".join(text.split())
@@ -109,9 +112,7 @@ class CitationValidator:
                 for cell in row.cells
                 if cell.supported and cell.claim_id is not None
             }
-            orphaned = [
-                claim for claim in final_claims if claim.claim_id not in row_claim_ids
-            ]
+            orphaned = [claim for claim in final_claims if claim.claim_id not in row_claim_ids]
             if orphaned:
                 for claim in orphaned:
                     issues.append(
@@ -128,21 +129,16 @@ class CitationValidator:
                         f"{claim.claim_id}: removed from the comparison answer "
                         "(invalid entity/requirement cell binding)."
                     )
-                final_claims = [
-                    claim for claim in final_claims if claim.claim_id in row_claim_ids
-                ]
+                final_claims = [claim for claim in final_claims if claim.claim_id in row_claim_ids]
 
         cited_ids = self._ordered_cited_ids(final_claims, by_id)
         source_cards = [self._to_source_card(by_id[eid]) for eid in cited_ids]
         sources = [card.format_reference() for card in source_cards]
 
         # Validity: every remaining citation is real and supports its claim.
-        is_valid = all(eid in by_id for c in final_claims for eid in c.evidence_ids) and all(
-            self._supports(c, by_id[eid])
-            for c in final_claims
-            for eid in c.evidence_ids
-            if eid in by_id
-        )
+        is_valid = all(
+            eid in by_id for claim in final_claims for eid in claim.evidence_ids
+        ) and all(self._claim_citations_support(claim, by_id) for claim in final_claims)
         # If we had to strip everything and draft claimed evidence, still report invalid
         if draft.claims and not final_claims:
             is_valid = False
@@ -189,6 +185,7 @@ class CitationValidator:
             sources=sources,
             source_cards=source_cards,
             citation_report=report,
+            corpus_insufficient=draft.corpus_insufficient,
         )
         logger.info(
             "citation_validated is_valid=%s claims=%s→%s issues=%s",
@@ -198,6 +195,34 @@ class CitationValidator:
             len(issues),
         )
         return final
+
+    def restatus(
+        self,
+        final: FinalAnswer,
+        *,
+        status: AnswerStatus,
+        ledger: EvidenceLedger,
+    ) -> FinalAnswer:
+        """Re-render an already validated answer with a stricter final status."""
+        if final.status == status:
+            return final
+        by_id = {item.evidence_id: item for item in ledger.items}
+        core_answer = render_core_answer_markdown(
+            status=status,
+            claims=final.claims,
+            rows=final.rows,
+            ledger_by_id=by_id,
+        )
+        markdown = final.markdown
+        if final.core_answer and final.core_answer in markdown:
+            markdown = markdown.replace(final.core_answer, core_answer, 1)
+        return final.model_copy(
+            update={
+                "status": status,
+                "core_answer": core_answer,
+                "markdown": markdown,
+            }
+        )
 
     def _validate_claim(
         self,
@@ -216,9 +241,12 @@ class CitationValidator:
             return None
 
         valid_ids: list[str] = []
+        joint_difference = claim.requirement_key == _KEY_DIFFERENCES
+        provenance_failed = False
         for eid in claim.evidence_ids:
             item = by_id.get(eid)
             if item is None:
+                provenance_failed = True
                 issues.append(
                     CitationIssue(
                         severity="error",
@@ -230,6 +258,7 @@ class CitationValidator:
                 continue
             # Provenance integrity
             if not item.paper_id or not item.chunk_id:
+                provenance_failed = True
                 issues.append(
                     CitationIssue(
                         severity="error",
@@ -240,6 +269,7 @@ class CitationValidator:
                 )
                 continue
             if item.page_start < 1 or item.page_end < item.page_start:
+                provenance_failed = True
                 issues.append(
                     CitationIssue(
                         severity="error",
@@ -251,6 +281,7 @@ class CitationValidator:
                 continue
             provenance_error = self._provenance_error(item)
             if provenance_error is not None:
+                provenance_failed = True
                 issues.append(
                     CitationIssue(
                         severity="error",
@@ -260,7 +291,7 @@ class CitationValidator:
                     )
                 )
                 continue
-            if not self._supports(claim, item):
+            if not joint_difference and not self._supports(claim, item):
                 issues.append(
                     CitationIssue(
                         severity="error",
@@ -275,6 +306,28 @@ class CitationValidator:
                 continue
             if eid not in valid_ids:
                 valid_ids.append(eid)
+
+        if joint_difference:
+            # A key-difference statement is a synthesis over the four
+            # prerequisite entity×dimension cells. Every cited passage must
+            # retain valid provenance, while semantic support is assessed on
+            # their union because no single primary-paper passage is expected
+            # to entail the cross-paper contrast.
+            if provenance_failed or len(valid_ids) != len(set(claim.evidence_ids)):
+                return None
+            items = [by_id[evidence_id] for evidence_id in valid_ids]
+            if not self._supports_collectively(claim, items):
+                issues.append(
+                    CitationIssue(
+                        severity="error",
+                        claim_id=claim.claim_id,
+                        message=(
+                            "Cited evidence does not jointly support the derived "
+                            "key-differences claim"
+                        ),
+                    )
+                )
+                return None
 
         if not valid_ids:
             return None
@@ -333,7 +386,45 @@ class CitationValidator:
                     )
                 )
             repaired.append(row.model_copy(update={"cells": cells}))
-        return repaired
+        prerequisite_rows = {
+            row.requirement_key: row
+            for row in repaired
+            if row.requirement_key in _DIFFERENCE_PREREQUISITES
+        }
+        differences_row = next(
+            (row for row in repaired if row.requirement_key == _KEY_DIFFERENCES),
+            None,
+        )
+        if differences_row is None:
+            return repaired
+        prerequisites_complete = all(
+            requirement_key in prerequisite_rows
+            and prerequisite_rows[requirement_key].cells
+            and all(cell.supported for cell in prerequisite_rows[requirement_key].cells)
+            for requirement_key in _DIFFERENCE_PREREQUISITES
+        )
+        differences_complete = bool(differences_row.cells) and all(
+            cell.supported for cell in differences_row.cells
+        )
+        if prerequisites_complete and differences_complete:
+            return repaired
+
+        downgraded = differences_row.model_copy(
+            update={
+                "cells": [
+                    cell.model_copy(
+                        update={
+                            "text": INSUFFICIENT_CELL_TEXT,
+                            "evidence_ids": [],
+                            "claim_id": None,
+                            "supported": False,
+                        }
+                    )
+                    for cell in differences_row.cells
+                ]
+            }
+        )
+        return [downgraded if row.requirement_key == _KEY_DIFFERENCES else row for row in repaired]
 
     def _final_status(
         self,
@@ -348,16 +439,12 @@ class CitationValidator:
                 cell.claim_id
                 for row in rows
                 for cell in row.cells
-                if cell.supported
-                and cell.claim_id is not None
-                and cell.claim_id in claims_by_id
+                if cell.supported and cell.claim_id is not None and cell.claim_id in claims_by_id
             }
             if not supported_claim_ids:
                 return AnswerStatus.INSUFFICIENT
             matrix_complete = all(
-                cell.supported
-                and cell.claim_id is not None
-                and cell.claim_id in claims_by_id
+                cell.supported and cell.claim_id is not None and cell.claim_id in claims_by_id
                 for row in rows
                 for cell in row.cells
             )
@@ -365,7 +452,8 @@ class CitationValidator:
             if not claims:
                 return AnswerStatus.INSUFFICIENT
             matrix_complete = True
-        if draft.status == AnswerStatus.COMPLETE and matrix_complete:
+        all_draft_claims_survived = len(claims) == len(draft.claims)
+        if draft.status == AnswerStatus.COMPLETE and matrix_complete and all_draft_claims_survived:
             return AnswerStatus.COMPLETE
         return AnswerStatus.PARTIAL
 
@@ -441,6 +529,34 @@ class CitationValidator:
             min_overlap=self.min_support_overlap,
             allow_meta_claims=True,
         )
+
+    def _supports_collectively(
+        self,
+        claim: ClaimWithCitations,
+        items: list[EvidenceItem],
+    ) -> bool:
+        evidence_blob = " ".join(f"{item.claim} {item.evidence_text}" for item in items)
+        return claim_is_supported(
+            claim.text,
+            evidence_blob,
+            min_overlap=self.min_support_overlap,
+            allow_meta_claims=True,
+        )
+
+    def _claim_citations_support(
+        self,
+        claim: ClaimWithCitations,
+        by_id: dict[str, EvidenceItem],
+    ) -> bool:
+        if claim.requirement_key == _KEY_DIFFERENCES:
+            items = [
+                by_id[evidence_id] for evidence_id in claim.evidence_ids if evidence_id in by_id
+            ]
+            return len(items) == len(claim.evidence_ids) and self._supports_collectively(
+                claim,
+                items,
+            )
+        return all(self._supports(claim, by_id[evidence_id]) for evidence_id in claim.evidence_ids)
 
     def _ordered_cited_ids(
         self,

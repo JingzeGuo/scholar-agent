@@ -408,6 +408,7 @@ def test_citation_repair_preserves_comparison_matrix_and_downgrades_one_cell() -
     final = CitationValidator(min_support_overlap=0.5).validate(draft, ledger)
 
     assert final.status == AnswerStatus.PARTIAL
+    assert final.corpus_insufficient is False
     assert len(final.rows) == 1
     assert [cell.supported for cell in final.rows[0].cells] == [True, False]
     assert final.rows[0].cells[1].text == "Insufficient verified evidence"
@@ -441,15 +442,14 @@ def test_all_removed_partial_claims_make_legacy_citation_validity_false() -> Non
 
     assert final.claims == []
     assert final.status == AnswerStatus.INSUFFICIENT
+    assert final.corpus_insufficient is False
     assert final.citation_report is not None
     assert final.citation_report.is_valid is False
 
 
 def test_citation_repair_rejects_wrong_entity_requirement_cell_binding() -> None:
     text = "Self-RAG retrieves on demand using reflection tokens."
-    ledger = EvidenceLedger(
-        items=[_item(evidence_id="ev_self", claim=text, evidence_text=text)]
-    )
+    ledger = EvidenceLedger(items=[_item(evidence_id="ev_self", claim=text, evidence_text=text)])
     claim = ClaimWithCitations(
         claim_id="claim_self",
         text=text,
@@ -487,7 +487,250 @@ def test_citation_repair_rejects_wrong_entity_requirement_cell_binding() -> None
     assert final.rows[0].cells[0].supported is False
     assert final.citation_report is not None
     assert final.citation_report.is_valid is False
+    assert any("binding" in issue.message.lower() for issue in final.citation_report.issues)
+
+
+def test_noncomparison_claim_repair_downgrades_complete_draft_to_partial() -> None:
+    supported = "Dense retrieval uses vector similarity for ranking."
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                evidence_id="ev_1",
+                claim=supported,
+                evidence_text=supported,
+            )
+        ]
+    )
+    draft = DraftAnswer(
+        status=AnswerStatus.COMPLETE,
+        claims=[
+            ClaimWithCitations(
+                claim_id="claim_valid",
+                text=supported,
+                evidence_ids=["ev_1"],
+                sub_question_id="sq_0",
+            ),
+            ClaimWithCitations(
+                claim_id="claim_invalid",
+                text="Quantum music occurs on Mars.",
+                evidence_ids=["ev_1"],
+                sub_question_id="sq_0",
+            ),
+        ],
+    )
+
+    final = CitationValidator().validate(draft, ledger)
+
+    assert [claim.claim_id for claim in final.claims] == ["claim_valid"]
+    assert final.status == AnswerStatus.PARTIAL
+    assert final.corpus_insufficient is False
+    assert "**Answer status:** partial" in final.markdown
+
+
+def test_citation_validation_preserves_confirmed_corpus_insufficiency() -> None:
+    draft = DraftAnswer(
+        status=AnswerStatus.INSUFFICIENT,
+        corpus_insufficient=True,
+    )
+
+    final = CitationValidator().validate(draft, EvidenceLedger())
+
+    assert final.status == AnswerStatus.INSUFFICIENT
+    assert final.corpus_insufficient is True
+
+
+def _joint_difference_draft() -> tuple[DraftAnswer, EvidenceLedger]:
+    evidence_texts = {
+        "ev_self_trigger": (
+            "Self-RAG uses reflection tokens to decide when to retrieve on demand."
+        ),
+        "ev_crag_trigger": (
+            "Corrective RAG (CRAG) uses a retrieval evaluator to classify retrieved "
+            "documents as Correct, Ambiguous, or Incorrect."
+        ),
+        "ev_self_correction": (
+            "Self-RAG uses reflection tokens to critique and correct generated responses."
+        ),
+        "ev_crag_correction": (
+            "Corrective RAG (CRAG) refines retrieved documents and uses web search "
+            "to correct low-quality retrieval."
+        ),
+    }
+    ledger = EvidenceLedger(
+        items=[
+            _item(
+                evidence_id=evidence_id,
+                claim=text,
+                evidence_text=text,
+                paper_id=(
+                    "paper_arxiv_2310_11511" if "self" in evidence_id else "paper_arxiv_2401_15884"
+                ),
+                chunk_id=f"chunk_{evidence_id}",
+            )
+            for evidence_id, text in evidence_texts.items()
+        ]
+    )
+    base_specs = [
+        ("claim_self_trigger", "self_rag", "retrieval_trigger", "ev_self_trigger"),
+        ("claim_crag_trigger", "crag", "retrieval_trigger", "ev_crag_trigger"),
+        (
+            "claim_self_correction",
+            "self_rag",
+            "correction_mechanism",
+            "ev_self_correction",
+        ),
+        (
+            "claim_crag_correction",
+            "crag",
+            "correction_mechanism",
+            "ev_crag_correction",
+        ),
+    ]
+    base_claims = [
+        ClaimWithCitations(
+            claim_id=claim_id,
+            text=evidence_texts[evidence_id],
+            evidence_ids=[evidence_id],
+            entity_id=entity_id,
+            requirement_key=requirement_key,
+            dimension=requirement_key,
+        )
+        for claim_id, entity_id, requirement_key, evidence_id in base_specs
+    ]
+    joint_ids = list(evidence_texts)
+    difference_text = (
+        "Self-RAG differs from CRAG across retrieval and correction: "
+        f"{evidence_texts['ev_self_trigger']} "
+        f"{evidence_texts['ev_self_correction']} By contrast, "
+        f"{evidence_texts['ev_crag_trigger']} "
+        f"{evidence_texts['ev_crag_correction']}"
+    )
+    difference_claims = [
+        ClaimWithCitations(
+            claim_id=f"claim_difference_{entity_id}",
+            text=difference_text,
+            evidence_ids=joint_ids,
+            entity_id=entity_id,
+            requirement_key="key_differences",
+            dimension="key_differences",
+        )
+        for entity_id in ("self_rag", "crag")
+    ]
+    claims = [*base_claims, *difference_claims]
+    claims_by_id = {claim.claim_id: claim for claim in claims}
+    labels = {"self_rag": "Self-RAG", "crag": "CRAG"}
+
+    def _row(requirement_key: str, claim_ids: list[str]) -> ComparisonRow:
+        return ComparisonRow(
+            requirement_key=requirement_key,
+            dimension=requirement_key,
+            label=requirement_key.replace("_", " ").title(),
+            cells=[
+                ComparisonCell(
+                    entity_id=claims_by_id[claim_id].entity_id or "",
+                    entity_label=labels[claims_by_id[claim_id].entity_id or ""],
+                    text=claims_by_id[claim_id].text,
+                    evidence_ids=list(claims_by_id[claim_id].evidence_ids),
+                    claim_id=claim_id,
+                    supported=True,
+                )
+                for claim_id in claim_ids
+            ],
+        )
+
+    return (
+        DraftAnswer(
+            claims=claims,
+            status=AnswerStatus.COMPLETE,
+            rows=[
+                _row(
+                    "retrieval_trigger",
+                    ["claim_self_trigger", "claim_crag_trigger"],
+                ),
+                _row(
+                    "correction_mechanism",
+                    ["claim_self_correction", "claim_crag_correction"],
+                ),
+                _row(
+                    "key_differences",
+                    ["claim_difference_self_rag", "claim_difference_crag"],
+                ),
+            ],
+        ),
+        ledger,
+    )
+
+
+def test_key_differences_use_joint_support_after_per_evidence_provenance() -> None:
+    draft, ledger = _joint_difference_draft()
+    validator = CitationValidator()
+    difference = next(claim for claim in draft.claims if claim.requirement_key == "key_differences")
+    by_id = {item.evidence_id: item for item in ledger.items}
     assert any(
-        "binding" in issue.message.lower()
-        for issue in final.citation_report.issues
+        not validator._supports(difference, by_id[evidence_id])
+        for evidence_id in difference.evidence_ids
+    )
+
+    final = validator.validate(draft, ledger)
+
+    assert final.status == AnswerStatus.COMPLETE
+    assert final.citation_report is not None
+    assert final.citation_report.is_valid
+    difference_claims = [
+        claim for claim in final.claims if claim.requirement_key == "key_differences"
+    ]
+    assert len(difference_claims) == 2
+    assert all("Self-RAG differs from CRAG" in claim.text for claim in difference_claims)
+
+
+def test_key_differences_reject_any_missing_or_bad_provenance() -> None:
+    draft, ledger = _joint_difference_draft()
+    claims_with_ghost = [
+        claim.model_copy(update={"evidence_ids": [*claim.evidence_ids, "ev_ghost"]})
+        if claim.requirement_key == "key_differences"
+        else claim
+        for claim in draft.claims
+    ]
+    ghost_claims_by_id = {claim.claim_id: claim for claim in claims_with_ghost}
+    rows_with_ghost = [
+        row.model_copy(
+            update={
+                "cells": [
+                    cell.model_copy(
+                        update={
+                            "evidence_ids": list(ghost_claims_by_id[cell.claim_id].evidence_ids)
+                        }
+                    )
+                    if (row.requirement_key == "key_differences" and cell.claim_id is not None)
+                    else cell
+                    for cell in row.cells
+                ]
+            }
+        )
+        for row in draft.rows
+    ]
+    ghost_draft = draft.model_copy(update={"claims": claims_with_ghost, "rows": rows_with_ghost})
+
+    missing_final = CitationValidator().validate(ghost_draft, ledger)
+
+    assert not any(claim.requirement_key == "key_differences" for claim in missing_final.claims)
+    assert any(
+        "nonexistent" in issue.message.lower() for issue in missing_final.citation_report.issues
+    )
+
+    bad_evidence_id = "ev_crag_correction"
+    bad_ledger = EvidenceLedger(
+        items=[
+            item.model_copy(update={"page_start": 0})
+            if item.evidence_id == bad_evidence_id
+            else item
+            for item in ledger.items
+        ]
+    )
+
+    bad_final = CitationValidator().validate(draft, bad_ledger)
+
+    assert not any(claim.requirement_key == "key_differences" for claim in bad_final.claims)
+    assert any(
+        "invalid page range" in issue.message.lower() for issue in bad_final.citation_report.issues
     )

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from scholar_agent.agents.planner import Planner
 from scholar_agent.agents.writer import (
     Writer,
     WriterLLMError,
@@ -14,7 +15,10 @@ from scholar_agent.agents.writer import (
     render_claim_markdown,
 )
 from scholar_agent.llm.client import ChatResponse
-from scholar_agent.llm.structured import StructuredOutputError
+from scholar_agent.llm.structured import (
+    StructuredOutputError,
+    StructuredOutputErrorCode,
+)
 from scholar_agent.models.answer import (
     AnswerStatus,
     ClaimWithCitations,
@@ -293,7 +297,7 @@ def test_comparison_writer_builds_matrix_and_marks_partial_cells() -> None:
     )
 
     assert draft.status == AnswerStatus.PARTIAL
-    assert draft.corpus_insufficient
+    assert draft.corpus_insufficient is False
     assert len(draft.rows) == 1
     assert [cell.supported for cell in draft.rows[0].cells] == [True, False]
     assert "Insufficient verified evidence" in draft.core_answer
@@ -317,7 +321,243 @@ def test_legacy_corpus_insufficient_payload_migrates_to_answer_status() -> None:
     assert partial.status == AnswerStatus.PARTIAL
     assert partial.corpus_insufficient
     assert empty.status == AnswerStatus.INSUFFICIENT
-    assert empty.corpus_insufficient
+    assert empty.corpus_insufficient is False
+
+
+def _phase11_comparison_fixture(
+    *,
+    include_crag_correction: bool = True,
+    truncated_self_trigger: bool = False,
+) -> tuple[QueryPlan, EvidenceLedger, dict[str, str]]:
+    query = (
+        "Compare Self-RAG versus CRAG. Explain their retrieval triggers, "
+        "correction mechanisms, and key differences."
+    )
+    plan = Planner().plan(query)
+    entity_ids = {entity.canonical_name: entity.id for entity in plan.target_entities}
+    sub_question_ids = {
+        (sub_question.target_entity_ids[0], sub_question.dimension): sub_question.id
+        for sub_question in plan.sub_questions
+        if len(sub_question.target_entity_ids) == 1
+    }
+    self_id = entity_ids["Self-RAG"]
+    crag_id = entity_ids["Corrective RAG"]
+    expected = {
+        "self_trigger": "ev_self_trigger",
+        "self_correction": "ev_self_correction",
+        "crag_trigger": "ev_crag_trigger",
+        "crag_correction": "ev_crag_correction",
+        "direct_difference": "ev_direct_difference",
+    }
+    self_trigger = (
+        "Self-RAG retrieves on demand using reflection tokens but the passage "
+        "ends before completing the statement"
+        if truncated_self_trigger
+        else "Self-RAG uses reflection tokens to decide when to retrieve on demand."
+    )
+    items = [
+        _item(
+            evidence_id=expected["self_trigger"],
+            sub_question_id=sub_question_ids[(self_id, "retrieval_trigger")],
+            claim=self_trigger,
+            evidence_text=self_trigger,
+            paper_id="paper_arxiv_2310_11511",
+            chunk_id="chunk_self_trigger",
+        ),
+        _item(
+            evidence_id=expected["self_correction"],
+            sub_question_id=sub_question_ids[(self_id, "correction_mechanism")],
+            claim=("Self-RAG uses reflection tokens to critique and correct generated responses."),
+            evidence_text=(
+                "Self-RAG uses reflection tokens to critique and correct generated responses."
+            ),
+            paper_id="paper_arxiv_2310_11511",
+            chunk_id="chunk_self_correction",
+        ),
+        _item(
+            evidence_id=expected["crag_trigger"],
+            sub_question_id=sub_question_ids[(crag_id, "retrieval_trigger")],
+            claim=(
+                "Corrective RAG (CRAG) uses a retrieval evaluator to classify "
+                "retrieved documents as Correct, Ambiguous, or Incorrect."
+            ),
+            evidence_text=(
+                "Corrective RAG (CRAG) uses a retrieval evaluator to classify "
+                "retrieved documents as Correct, Ambiguous, or Incorrect."
+            ),
+            paper_id="paper_arxiv_2401_15884",
+            chunk_id="chunk_crag_trigger",
+        ),
+        # A survey and the other method's primary paper may mention the target,
+        # but neither may fill this target's primary-method cell.
+        _item(
+            evidence_id="ev_survey_junk",
+            sub_question_id=sub_question_ids[(self_id, "correction_mechanism")],
+            claim=("Self-RAG uses reflection tokens to critique and correct generated responses."),
+            evidence_text=(
+                "Self-RAG uses reflection tokens to critique and correct generated responses."
+            ),
+            paper_id="paper_rag_survey",
+            chunk_id="chunk_survey",
+        ),
+        _item(
+            evidence_id="ev_crag_mentions_self",
+            sub_question_id=sub_question_ids[(self_id, "retrieval_trigger")],
+            claim=("The CRAG paper says Self-RAG uses reflection tokens to retrieve on demand."),
+            evidence_text=(
+                "The CRAG paper says Self-RAG uses reflection tokens to retrieve on demand."
+            ),
+            paper_id="paper_arxiv_2401_15884",
+            chunk_id="chunk_crag_mentions_self",
+        ),
+        _item(
+            evidence_id="ev_acknowledgement",
+            sub_question_id=sub_question_ids[(self_id, "retrieval_trigger")],
+            claim=(
+                "The Self-RAG authors would like to thank reviewers for retrieval "
+                "trigger suggestions."
+            ),
+            evidence_text=(
+                "The Self-RAG authors would like to thank reviewers for retrieval "
+                "trigger suggestions."
+            ),
+            paper_id="paper_arxiv_2310_11511",
+            chunk_id="chunk_acknowledgement",
+        ),
+        _item(
+            evidence_id=expected["direct_difference"],
+            sub_question_id="sq_direct_key_differences",
+            claim=("Self-RAG and CRAG differ in their retrieval and correction strategies."),
+            evidence_text=(
+                "Self-RAG and CRAG differ in their retrieval and correction strategies."
+            ),
+            paper_id="paper_comparison_survey",
+            chunk_id="chunk_direct_difference",
+        ),
+    ]
+    if include_crag_correction:
+        items.append(
+            _item(
+                evidence_id=expected["crag_correction"],
+                sub_question_id=sub_question_ids[(crag_id, "correction_mechanism")],
+                claim=(
+                    "Corrective RAG (CRAG) refines retrieved documents and uses "
+                    "web search to correct low-quality retrieval."
+                ),
+                evidence_text=(
+                    "Corrective RAG (CRAG) refines retrieved documents and uses "
+                    "web search to correct low-quality retrieval."
+                ),
+                paper_id="paper_arxiv_2401_15884",
+                chunk_id="chunk_crag_correction",
+            )
+        )
+    return plan, EvidenceLedger(items=items), expected
+
+
+def test_phase11_writer_derives_explicit_differences_from_four_primary_cells() -> None:
+    plan, ledger, expected = _phase11_comparison_fixture()
+
+    draft = Writer().write(query=plan.original_query, plan=plan, ledger=ledger)
+
+    rows = {row.requirement_key: row for row in draft.rows}
+    assert list(rows) == [
+        "retrieval_trigger",
+        "correction_mechanism",
+        "key_differences",
+    ]
+    assert all(cell.supported for row in rows.values() for cell in row.cells)
+    assert draft.status == AnswerStatus.COMPLETE
+
+    base_claims = {
+        (claim.entity_id, claim.requirement_key): claim
+        for claim in draft.claims
+        if claim.requirement_key != "key_differences"
+    }
+    assert {claim.evidence_ids[0] for claim in base_claims.values()} == {
+        expected["self_trigger"],
+        expected["self_correction"],
+        expected["crag_trigger"],
+        expected["crag_correction"],
+    }
+    assert not {
+        "ev_survey_junk",
+        "ev_crag_mentions_self",
+        "ev_acknowledgement",
+        expected["direct_difference"],
+    } & {evidence_id for claim in draft.claims for evidence_id in claim.evidence_ids}
+
+    difference_claims = [
+        claim for claim in draft.claims if claim.requirement_key == "key_differences"
+    ]
+    assert len(difference_claims) == 2
+    expected_joint_ids = {
+        expected["self_trigger"],
+        expected["self_correction"],
+        expected["crag_trigger"],
+        expected["crag_correction"],
+    }
+    for claim in difference_claims:
+        assert "differs from" in claim.text
+        assert "Self-RAG" in claim.text
+        assert "CRAG" in claim.text
+        assert set(claim.evidence_ids) == expected_joint_ids
+
+
+def test_phase11_writer_withholds_entire_difference_row_when_one_cell_missing() -> None:
+    plan, ledger, _ = _phase11_comparison_fixture(include_crag_correction=False)
+
+    draft = Writer().write(query=plan.original_query, plan=plan, ledger=ledger)
+
+    rows = {row.requirement_key: row for row in draft.rows}
+    assert [cell.supported for cell in rows["correction_mechanism"].cells] == [
+        True,
+        False,
+    ]
+    assert not any(cell.supported for cell in rows["key_differences"].cells)
+    assert not any(claim.requirement_key == "key_differences" for claim in draft.claims)
+    assert draft.status == AnswerStatus.PARTIAL
+
+
+def test_phase11_writer_rejects_truncated_evidence_instead_of_excerpting_it() -> None:
+    plan, ledger, _ = _phase11_comparison_fixture(truncated_self_trigger=True)
+
+    draft = Writer().write(query=plan.original_query, plan=plan, ledger=ledger)
+
+    rows = {row.requirement_key: row for row in draft.rows}
+    assert rows["retrieval_trigger"].cells[0].supported is False
+    assert not any(cell.supported for cell in rows["key_differences"].cells)
+    assert "ends before completing" not in draft.core_answer
+
+
+def test_phase11_writer_conservatively_rebinds_legacy_deduplicated_spans() -> None:
+    plan, ledger, _ = _phase11_comparison_fixture()
+    first_sub_question_id = plan.sub_questions[0].id
+    legacy_ledger = EvidenceLedger(
+        items=[
+            item.model_copy(update={"sub_question_id": first_sub_question_id})
+            for item in ledger.items
+        ]
+    )
+
+    draft = Writer().write(
+        query=plan.original_query,
+        plan=plan,
+        ledger=legacy_ledger,
+    )
+
+    planned_pairs = {
+        (sub_question.target_entity_ids[0], sub_question.requirement_keys[0]): sub_question.id
+        for sub_question in plan.sub_questions
+        if (len(sub_question.target_entity_ids) == 1 and len(sub_question.requirement_keys) == 1)
+    }
+    base_claims = [claim for claim in draft.claims if claim.requirement_key != "key_differences"]
+    assert len(base_claims) == 4
+    assert all(
+        claim.sub_question_id == planned_pairs[(claim.entity_id, claim.requirement_key)]
+        for claim in base_claims
+    )
+    assert draft.status == AnswerStatus.COMPLETE
 
 
 class _FakeWriterLLM:
@@ -438,6 +678,29 @@ def test_structured_llm_writer_uses_main_model_and_records_safe_metadata() -> No
     assert writer.last_fallback_reason is None
     assert writer.last_token_usage.total_tokens == 15
     assert llm.calls[0]["fast"] is False
+    messages = llm.calls[0]["messages"]
+    assert isinstance(messages, list)
+    system_prompt = messages[0].content
+    assert '"claims"' in system_prompt
+    assert '"rows"' in system_prompt
+    assert "entity_1" in system_prompt
+    assert "entity_2" in system_prompt
+    assert "ev_self" in system_prompt
+    assert "ev_crag" in system_prompt
+    assert "entity_without_evidence" not in system_prompt
+    assert "ev_allowed" not in system_prompt
+    user_payload = json.loads(messages[1].content or "{}")
+    assert {
+        (
+            binding["entity_id"],
+            binding["requirement_key"],
+            tuple(binding["allowed_evidence_ids"]),
+        )
+        for binding in user_payload["allowed_bindings"]
+    } == {
+        ("entity_1", "overview", ("ev_self",)),
+        ("entity_2", "overview", ("ev_crag",)),
+    }
     assert "raw" not in writer.__dict__
 
 
@@ -458,7 +721,7 @@ def test_llm_writer_rejects_unknown_evidence_and_falls_back() -> None:
     draft = writer.write(query=plan.original_query, plan=plan, ledger=ledger)
 
     assert writer.last_backend == "deterministic"
-    assert writer.last_fallback_reason == "structured_output_invalid"
+    assert writer.last_fallback_reason == "unknown_evidence_id"
     assert {eid for claim in draft.claims for eid in claim.evidence_ids} == {
         "ev_self",
         "ev_crag",
@@ -476,7 +739,66 @@ def test_strict_llm_writer_propagates_malformed_structured_output() -> None:
         writer.write(query=plan.original_query, plan=plan, ledger=ledger)
     assert isinstance(exc_info.value.__cause__, StructuredOutputError)
     assert writer.last_backend == "llm"
-    assert writer.last_fallback_reason == "structured_output_invalid"
+    assert writer.last_fallback_reason == "json_decode_failed"
+
+
+def test_strict_llm_writer_reports_missing_top_level_field() -> None:
+    plan, ledger = _two_sided_comparison()
+    writer = Writer(
+        llm=_FakeWriterLLM(json.dumps({"claims": []})),  # type: ignore[arg-type]
+        strict_llm=True,
+    )
+
+    with pytest.raises(WriterLLMError) as exc_info:
+        writer.write(query=plan.original_query, plan=plan, ledger=ledger)
+
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, StructuredOutputError)
+    assert cause.code == StructuredOutputErrorCode.MISSING_REQUIRED_FIELD
+    assert cause.field_paths == ("rows",)
+    assert writer.last_fallback_reason == "missing_required_field"
+    assert writer.last_fallback_fields == ("rows",)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "private_value", "expected_code"),
+    [
+        (
+            "entity_id",
+            "private_unknown_entity",
+            StructuredOutputErrorCode.UNKNOWN_ENTITY_ID,
+        ),
+        (
+            "requirement_key",
+            "private_unknown_requirement",
+            StructuredOutputErrorCode.UNKNOWN_REQUIREMENT_KEY,
+        ),
+    ],
+)
+def test_strict_llm_writer_classifies_unknown_binding_ids(
+    field_name: str,
+    private_value: str,
+    expected_code: StructuredOutputErrorCode,
+) -> None:
+    plan, ledger = _two_sided_comparison()
+    payload = _valid_llm_comparison_payload()
+    claims = payload["claims"]
+    assert isinstance(claims, list)
+    claims[0][field_name] = private_value
+    writer = Writer(
+        llm=_FakeWriterLLM(json.dumps(payload)),  # type: ignore[arg-type]
+        strict_llm=True,
+    )
+
+    with pytest.raises(WriterLLMError) as exc_info:
+        writer.write(query=plan.original_query, plan=plan, ledger=ledger)
+
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, StructuredOutputError)
+    assert cause.code == expected_code
+    assert cause.field_paths == (f"claims[0].{field_name}",)
+    assert private_value not in str(cause)
+    assert writer.last_fallback_reason == expected_code.value
 
 
 def test_llm_writer_rejects_evidence_bound_to_wrong_entity_and_subquestion() -> None:
@@ -496,8 +818,10 @@ def test_llm_writer_rejects_evidence_bound_to_wrong_entity_and_subquestion() -> 
     with pytest.raises(WriterLLMError) as exc_info:
         writer.write(query=plan.original_query, plan=plan, ledger=ledger)
 
-    assert isinstance(exc_info.value.__cause__, StructuredOutputError)
-    assert "bound" in str(exc_info.value.__cause__)
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, StructuredOutputError)
+    assert cause.code == StructuredOutputErrorCode.SCHEMA_VALIDATION_FAILED
+    assert cause.field_paths == ("claims[0].evidence_ids",)
 
 
 def test_llm_writer_rejects_claim_count_over_limit_instead_of_truncating() -> None:
@@ -513,8 +837,10 @@ def test_llm_writer_rejects_claim_count_over_limit_instead_of_truncating() -> No
     with pytest.raises(WriterLLMError) as exc_info:
         writer.write(query=plan.original_query, plan=plan, ledger=ledger)
 
-    assert isinstance(exc_info.value.__cause__, StructuredOutputError)
-    assert "max_claims" in str(exc_info.value.__cause__)
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, StructuredOutputError)
+    assert cause.code == StructuredOutputErrorCode.SCHEMA_VALIDATION_FAILED
+    assert cause.field_paths == ("claims",)
 
 
 def test_force_deterministic_skips_llm_and_records_budget_reason() -> None:

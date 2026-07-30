@@ -17,7 +17,11 @@ from scholar_agent.ids import (
     normalize_text,
 )
 from scholar_agent.llm.client import ChatMessage, LLMClient
-from scholar_agent.llm.structured import StructuredOutputError, parse_structured_json
+from scholar_agent.llm.structured import (
+    StructuredOutputError,
+    StructuredOutputErrorCode,
+    parse_structured_json,
+)
 from scholar_agent.logging import get_logger
 from scholar_agent.models.base import QueryType, TokenUsage
 from scholar_agent.models.graph import EntityType
@@ -83,8 +87,52 @@ _DIMENSION_DESCRIPTIONS = {
     "central_methods": "The central methods or systems",
     "open_challenges": "The limitations and open challenges",
 }
-_LLM_PROMPT_VERSION = "planner-plan-draft-v1"
+_LLM_PROMPT_VERSION = "planner-plan-draft-v2"
 _DETERMINISTIC_PROMPT_VERSION = "planner-deterministic-v2"
+_PLANNER_OUTPUT_EXAMPLE = {
+    "answer_type": "comparison",
+    "target_entities": ["Method A", "Method B"],
+    "answer_requirements": [
+        "retrieval trigger",
+        "correction mechanism",
+        "key differences",
+    ],
+    "sub_questions": [
+        {
+            "question": "How does Method A trigger retrieval?",
+            "query_type": "comparison",
+            "target_entities": ["Method A"],
+            "requirements": ["retrieval trigger"],
+            "dimension": "retrieval trigger",
+            "required_evidence": ["Method A retrieval trigger"],
+        },
+        {
+            "question": "How does Method B trigger retrieval?",
+            "query_type": "comparison",
+            "target_entities": ["Method B"],
+            "requirements": ["retrieval trigger"],
+            "dimension": "retrieval trigger",
+            "required_evidence": ["Method B retrieval trigger"],
+        },
+        {
+            "question": "How does Method A correct weak retrieval?",
+            "query_type": "comparison",
+            "target_entities": ["Method A"],
+            "requirements": ["correction mechanism"],
+            "dimension": "correction mechanism",
+            "required_evidence": ["Method A correction mechanism"],
+        },
+        {
+            "question": "How does Method B correct weak retrieval?",
+            "query_type": "comparison",
+            "target_entities": ["Method B"],
+            "requirements": ["correction mechanism"],
+            "dimension": "correction mechanism",
+            "required_evidence": ["Method B correction mechanism"],
+        },
+    ],
+    "expected_source_diversity": 2,
+}
 
 
 class PlannerLLMError(RuntimeError):
@@ -131,6 +179,7 @@ class Planner:
     last_backend: str = field(default="deterministic", init=False)
     last_model: str | None = field(default=None, init=False)
     last_fallback_reason: str | None = field(default=None, init=False)
+    last_fallback_fields: tuple[str, ...] = field(default=(), init=False)
     last_token_usage: TokenUsage = field(default_factory=TokenUsage, init=False)
     last_prompt_version: str = field(default=_DETERMINISTIC_PROMPT_VERSION, init=False)
 
@@ -146,6 +195,9 @@ class Planner:
             except Exception as exc:
                 reason = _safe_failure_reason(exc)
                 self.last_fallback_reason = reason
+                self.last_fallback_fields = (
+                    exc.field_paths if isinstance(exc, StructuredOutputError) else ()
+                )
                 if self.strict_llm:
                     raise PlannerLLMError(f"LLM planner failed: {reason}") from exc
                 self.last_backend = "deterministic"
@@ -157,6 +209,7 @@ class Planner:
         self.last_backend = "deterministic"
         self.last_model = None
         self.last_fallback_reason = None
+        self.last_fallback_fields = ()
         self.last_token_usage = TokenUsage()
         self.last_prompt_version = _DETERMINISTIC_PROMPT_VERSION
 
@@ -172,7 +225,8 @@ class Planner:
                     role="system",
                     content=(
                         "Create a compact academic research plan as one JSON object. "
-                        "Return exactly these fields: answer_type (string), "
+                        "All keys shown in the output contract are required. Return "
+                        "exactly these fields: answer_type (string), "
                         "target_entities (array of user-visible entity names), "
                         "answer_requirements (array of concise dimensions), "
                         "sub_questions (array of objects with question, query_type, "
@@ -180,10 +234,19 @@ class Planner:
                         "and expected_source_diversity (positive integer). "
                         "query_type must be semantic, keyword, comparison, relational, "
                         "or synthesis. For comparisons, include both entities and ensure "
-                        "every requirement is covered for both entities; use separate "
-                        "entity-specific questions where needed. Only include target "
+                        "every evidence-gathering requirement is covered for both "
+                        "entities; use separate entity-specific questions where needed. "
+                        "key differences is a derived synthesis requirement and does not "
+                        "need its own research sub-question. Only include target "
                         "entities explicitly named in the user's query. Do not invent "
-                        "evidence, citations, IDs, entities, or facts."
+                        "evidence, citations, IDs, entities, or facts. References inside "
+                        "sub_questions must exactly match strings in target_entities and "
+                        "answer_requirements. Output contract example: "
+                        + json.dumps(
+                            _PLANNER_OUTPUT_EXAMPLE,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
                     ),
                 ),
                 ChatMessage(
@@ -196,8 +259,22 @@ class Planner:
         )
         self.last_model = response.model
         self.last_token_usage = response.usage.model_copy(deep=True)
-        draft = parse_structured_json(response.content or "", PlanDraft)
-        plan = self._finalize_draft(query, draft)
+        failure: tuple[StructuredOutputErrorCode, tuple[str, ...]] | None = None
+        draft: PlanDraft | None = None
+        plan: QueryPlan | None = None
+        try:
+            draft = parse_structured_json(response.content or "", PlanDraft)
+            plan = self._finalize_draft(query, draft)
+        except StructuredOutputError as exc:
+            failure = (exc.code, exc.field_paths)
+        except (ValidationError, ValueError):
+            failure = (StructuredOutputErrorCode.SCHEMA_VALIDATION_FAILED, ())
+        if failure is not None:
+            del response
+            draft = None
+            code, field_paths = failure
+            raise StructuredOutputError(code, field_paths=field_paths)
+        assert plan is not None
         logger.info(
             "planned backend=llm model=%s sub_questions=%s",
             response.model,
@@ -207,16 +284,27 @@ class Planner:
 
     def _finalize_draft(self, query: str, draft: PlanDraft) -> QueryPlan:
         answer_type = normalize_for_id(draft.answer_type)
+        if not draft.sub_questions:
+            raise StructuredOutputError(
+                StructuredOutputErrorCode.MISSING_REQUIRED_FIELD,
+                field_paths=("sub_questions",),
+            )
+        if not draft.answer_requirements:
+            raise StructuredOutputError(
+                StructuredOutputErrorCode.MISSING_REQUIRED_FIELD,
+                field_paths=("answer_requirements",),
+            )
         entities = _unique_entities(
             [_resolve_planned_entity(surface) for surface in draft.target_entities]
         )
-        entities = _anchor_draft_entities(query, answer_type, entities)
         if answer_type == "comparison" and len(entities) != 2:
-            raise ValueError("comparison PlanDraft must contain exactly two target entities")
-        if not draft.sub_questions:
-            raise ValueError("PlanDraft must contain at least one sub-question")
-        if not draft.answer_requirements:
-            raise ValueError("PlanDraft must contain at least one answer requirement")
+            code = (
+                StructuredOutputErrorCode.MISSING_REQUIRED_FIELD
+                if len(entities) < 2
+                else StructuredOutputErrorCode.SCHEMA_VALIDATION_FAILED
+            )
+            raise StructuredOutputError(code, field_paths=("target_entities",))
+        entities = _anchor_draft_entities(query, answer_type, entities)
 
         all_entity_ids = [entity.id for entity in entities]
         requirements: list[AnswerRequirement] = []
@@ -238,7 +326,9 @@ class Planner:
             requirement_lookup[normalize_text(requirement.key)] = requirement.key
             requirement_lookup[normalize_for_id(requirement.description)] = requirement.key
         for raw_dimension in draft.answer_requirements:
-            requirement_lookup[normalize_for_id(raw_dimension)] = _canonical_dimension(raw_dimension)
+            requirement_lookup[normalize_for_id(raw_dimension)] = _canonical_dimension(
+                raw_dimension
+            )
 
         plan_seed = normalize_text(query)[:64]
         sub_questions: list[SubQuestion] = []
@@ -247,22 +337,32 @@ class Planner:
                 draft_question.target_entities,
                 entity_lookup,
                 reference_kind="entity",
+                field_path=f"sub_questions[{index}].target_entities",
             )
             requirement_keys = _resolve_draft_references(
                 draft_question.requirements,
                 requirement_lookup,
                 reference_kind="requirement",
+                field_path=f"sub_questions[{index}].requirements",
                 normalizer=normalize_for_id,
             )
             dimension = (
-                _canonical_dimension(draft_question.dimension)
-                if draft_question.dimension
-                else None
+                _canonical_dimension(draft_question.dimension) if draft_question.dimension else None
             )
             if dimension is not None and dimension not in {item.key for item in requirements}:
-                raise ValueError(f"sub-question references unknown dimension: {dimension}")
+                raise StructuredOutputError(
+                    StructuredOutputErrorCode.UNKNOWN_REQUIREMENT_KEY,
+                    field_paths=(f"sub_questions[{index}].dimension",),
+                )
             if dimension is not None and dimension not in requirement_keys:
                 requirement_keys.append(dimension)
+            if answer_type == "comparison" and (
+                dimension == "key_differences" or requirement_keys == ["key_differences"]
+            ):
+                # Differences are derived after both sides have verified base
+                # evidence; never turn an LLM-authored synthesis request into
+                # an independent retrieval question.
+                continue
             required_evidence = list(draft_question.required_evidence)
             if not required_evidence:
                 required_evidence = [
@@ -404,43 +504,21 @@ class Planner:
                 answer_requirements=requirements,
             )
 
-        entities = _unique_entities(
-            [_resolve_planned_entity(surface) for surface in surfaces]
-        )
+        entities = _unique_entities([_resolve_planned_entity(surface) for surface in surfaces])
         if len(entities) != 2:
             raise ValueError("comparison entities must resolve to two distinct identities")
         entity_ids = [entity.id for entity in entities]
         dimensions = _comparison_dimensions(query, entities)
-        requirements = [
-            _answer_requirement(dimension, entity_ids) for dimension in dimensions
-        ]
+        requirements = [_answer_requirement(dimension, entity_ids) for dimension in dimensions]
 
         sub_questions: list[SubQuestion] = []
-        # Start with the cross-entity question so even a very small global
-        # budget exercises the comparison retrieval policy. Entity-specific
-        # dimensions follow and carry their own explicit assignments.
-        question_dimensions = list(dimensions)
-        if "key_differences" in question_dimensions:
-            question_dimensions.remove("key_differences")
-            question_dimensions.insert(0, "key_differences")
+        # ``key_differences`` is synthesized only after both entities have
+        # verified evidence for the requested base dimensions. It is an answer
+        # requirement, not an independently retrieved research question.
+        question_dimensions = [
+            dimension for dimension in dimensions if dimension != "key_differences"
+        ]
         for dimension in question_dimensions:
-            if dimension == "key_differences":
-                left, right = (_display_name(entity) for entity in entities)
-                question = f"What are the key differences between {left} and {right}?"
-                sub_questions.append(
-                    SubQuestion(
-                        id=make_sub_question_id(plan_seed, question, len(sub_questions)),
-                        question=question,
-                        query_type=QueryType.COMPARISON,
-                        required_evidence=["comparison", "both sides"],
-                        status=SubQuestionStatus.PENDING,
-                        target_entity_ids=entity_ids,
-                        requirement_keys=[dimension],
-                        dimension=dimension,
-                    )
-                )
-                continue
-
             for entity in entities:
                 label = _display_name(entity)
                 aspect = (
@@ -453,7 +531,7 @@ class Planner:
                     SubQuestion(
                         id=make_sub_question_id(plan_seed, question, len(sub_questions)),
                         question=question,
-                        query_type=QueryType.SEMANTIC,
+                        query_type=QueryType.COMPARISON,
                         required_evidence=[
                             "definition",
                             entity.canonical_name,
@@ -662,19 +740,26 @@ def _anchor_draft_entities(
     comparison_surfaces = _parse_comparison_entities(query)
     if len(comparison_surfaces) == 2:
         if answer_type != "comparison":
-            raise ValueError("PlanDraft answer type disagrees with comparison syntax")
+            raise StructuredOutputError(
+                StructuredOutputErrorCode.SCHEMA_VALIDATION_FAILED,
+                field_paths=("answer_type",),
+            )
         expected = _unique_entities(
             [_resolve_planned_entity(surface) for surface in comparison_surfaces]
         )
-        if len(expected) != 2 or {item.id for item in entities} != {
-            item.id for item in expected
-        }:
-            raise ValueError("PlanDraft comparison entities do not match the query")
+        if len(expected) != 2 or {item.id for item in entities} != {item.id for item in expected}:
+            raise StructuredOutputError(
+                StructuredOutputErrorCode.UNKNOWN_ENTITY_ID,
+                field_paths=("target_entities",),
+            )
         # Preserve query spelling and order rather than LLM-authored surfaces.
         return expected
 
     if answer_type == "comparison":
-        raise ValueError("PlanDraft comparison entities cannot be anchored to the query")
+        raise StructuredOutputError(
+            StructuredOutputErrorCode.UNKNOWN_ENTITY_ID,
+            field_paths=("target_entities",),
+        )
 
     known_query_ids = {entity.id for entity in _extract_known_entities(query)}
     known_entity_ids = {
@@ -694,7 +779,10 @@ def _anchor_draft_entities(
                 ]
             )
         if not anchored:
-            raise ValueError("PlanDraft entity is not anchored in the query")
+            raise StructuredOutputError(
+                StructuredOutputErrorCode.UNKNOWN_ENTITY_ID,
+                field_paths=("target_entities",),
+            )
     return entities
 
 
@@ -781,13 +869,22 @@ def _resolve_draft_references(
     lookup: dict[str, str],
     *,
     reference_kind: str,
+    field_path: str,
     normalizer: Callable[[str], str] = normalize_text,
 ) -> list[str]:
     resolved: list[str] = []
-    for reference in references:
+    for index, reference in enumerate(references):
         key = normalizer(reference)
         if key not in lookup:
-            raise ValueError(f"PlanDraft references unknown {reference_kind}")
+            code = (
+                StructuredOutputErrorCode.UNKNOWN_ENTITY_ID
+                if reference_kind == "entity"
+                else StructuredOutputErrorCode.UNKNOWN_REQUIREMENT_KEY
+            )
+            raise StructuredOutputError(
+                code,
+                field_paths=(f"{field_path}[{index}]",),
+            )
         value = lookup[key]
         if value not in resolved:
             resolved.append(value)
@@ -799,6 +896,9 @@ def _validate_draft_coverage(
     requirements: list[AnswerRequirement],
     sub_questions: list[SubQuestion],
 ) -> None:
+    evidence_requirement_keys = {
+        requirement.key for requirement in requirements if requirement.key != "key_differences"
+    }
     referenced_entities = {
         entity_id for sub_question in sub_questions for entity_id in sub_question.target_entity_ids
     }
@@ -806,9 +906,15 @@ def _validate_draft_coverage(
         key for sub_question in sub_questions for key in sub_question.requirement_keys
     }
     if referenced_entities != {entity.id for entity in entities}:
-        raise ValueError("PlanDraft sub-questions do not cover every target entity")
-    if referenced_requirements != {requirement.key for requirement in requirements}:
-        raise ValueError("PlanDraft sub-questions do not cover every answer requirement")
+        raise StructuredOutputError(
+            StructuredOutputErrorCode.MISSING_REQUIRED_FIELD,
+            field_paths=("sub_questions.target_entities",),
+        )
+    if not evidence_requirement_keys <= referenced_requirements:
+        raise StructuredOutputError(
+            StructuredOutputErrorCode.MISSING_REQUIRED_FIELD,
+            field_paths=("sub_questions.requirements",),
+        )
 
     covered_pairs = {
         (requirement_key, entity_id)
@@ -817,20 +923,23 @@ def _validate_draft_coverage(
         for entity_id in sub_question.target_entity_ids
     }
     for requirement in requirements:
+        if requirement.key == "key_differences":
+            continue
         for entity_id in requirement.target_entity_ids:
             if (requirement.key, entity_id) not in covered_pairs:
-                raise ValueError(
-                    "PlanDraft does not cover every requirement/entity combination"
+                raise StructuredOutputError(
+                    StructuredOutputErrorCode.MISSING_REQUIRED_FIELD,
+                    field_paths=("sub_questions",),
                 )
 
 
 def _safe_failure_reason(exc: Exception) -> str:
     if isinstance(exc, StructuredOutputError):
-        return "invalid_structured_output"
+        return exc.code.value
     if isinstance(exc, ValidationError):
-        return "invalid_plan_draft"
+        return StructuredOutputErrorCode.SCHEMA_VALIDATION_FAILED.value
     if isinstance(exc, TimeoutError):
         return "provider_timeout"
     if isinstance(exc, ValueError):
-        return "invalid_plan_draft"
+        return StructuredOutputErrorCode.SCHEMA_VALIDATION_FAILED.value
     return "provider_error"

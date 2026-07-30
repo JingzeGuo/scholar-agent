@@ -8,6 +8,7 @@ import pytest
 
 from scholar_agent.agents.planner import Planner, PlannerLLMError, extract_answer_anchors
 from scholar_agent.llm.client import ChatResponse
+from scholar_agent.llm.structured import StructuredOutputError, StructuredOutputErrorCode
 from scholar_agent.models.base import QueryType, TokenUsage
 from scholar_agent.models.planning import QueryPlan
 
@@ -22,9 +23,14 @@ class FakePlannerLLM:
         self.content = content
         self.error = error
         self.calls = 0
+        self.messages: list[object] = []
 
-    def chat_json(self, *_args: object, **_kwargs: object) -> ChatResponse:
+    def chat_json(self, *args: object, **_kwargs: object) -> ChatResponse:
         self.calls += 1
+        if args:
+            messages = args[0]
+            if isinstance(messages, list):
+                self.messages = messages
         if self.error is not None:
             raise self.error
         return ChatResponse(
@@ -47,20 +53,36 @@ def _valid_comparison_draft() -> str:
             ],
             "sub_questions": [
                 {
-                    "question": "How does each method trigger retrieval?",
+                    "question": "How does Self-RAG trigger retrieval?",
                     "query_type": "comparison",
-                    "target_entities": ["Self-RAG", "CRAG"],
+                    "target_entities": ["Self-RAG"],
                     "requirements": ["retrieval trigger"],
                     "dimension": "retrieval trigger",
-                    "required_evidence": ["entity-specific retrieval trigger"],
+                    "required_evidence": ["Self-RAG retrieval trigger"],
                 },
                 {
-                    "question": "How does each method correct weak evidence?",
+                    "question": "How does CRAG trigger retrieval?",
                     "query_type": "comparison",
-                    "target_entities": ["Self-RAG", "CRAG"],
+                    "target_entities": ["CRAG"],
+                    "requirements": ["retrieval trigger"],
+                    "dimension": "retrieval trigger",
+                    "required_evidence": ["CRAG retrieval trigger"],
+                },
+                {
+                    "question": "How does Self-RAG correct weak evidence?",
+                    "query_type": "comparison",
+                    "target_entities": ["Self-RAG"],
                     "requirements": ["correction mechanism"],
                     "dimension": "correction mechanism",
-                    "required_evidence": ["entity-specific correction mechanism"],
+                    "required_evidence": ["Self-RAG correction mechanism"],
+                },
+                {
+                    "question": "How does CRAG correct weak evidence?",
+                    "query_type": "comparison",
+                    "target_entities": ["CRAG"],
+                    "requirements": ["correction mechanism"],
+                    "dimension": "correction mechanism",
+                    "required_evidence": ["CRAG correction mechanism"],
                 },
                 {
                     "question": "What are their key differences?",
@@ -81,8 +103,7 @@ def _comparison_draft_with_substituted_entity() -> str:
     payload["target_entities"] = ["Self-RAG", "GraphRAG"]
     for sub_question in payload["sub_questions"]:
         sub_question["target_entities"] = [
-            "GraphRAG" if entity == "CRAG" else entity
-            for entity in sub_question["target_entities"]
+            "GraphRAG" if entity == "CRAG" else entity for entity in sub_question["target_entities"]
         ]
     return json.dumps(payload)
 
@@ -162,24 +183,27 @@ def test_multisentence_comparison_extracts_entities_and_requested_dimensions() -
         "key_differences",
     ]
     assert all(
-        requirement.target_entity_ids
-        == [entity.id for entity in plan.target_entities]
+        requirement.target_entity_ids == [entity.id for entity in plan.target_entities]
         for requirement in plan.answer_requirements
     )
+    assert len(plan.sub_questions) == 4
     assert all("CRAG. Explain" not in sub_question.question for sub_question in plan.sub_questions)
     assert {
         (sub_question.dimension, tuple(sub_question.target_entity_ids))
         for sub_question in plan.sub_questions
-    } >= {
+    } == {
         ("retrieval_trigger", (plan.target_entities[0].id,)),
         ("retrieval_trigger", (plan.target_entities[1].id,)),
         ("correction_mechanism", (plan.target_entities[0].id,)),
         ("correction_mechanism", (plan.target_entities[1].id,)),
-        (
-            "key_differences",
-            (plan.target_entities[0].id, plan.target_entities[1].id),
-        ),
     }
+    assert all(
+        "key_differences" not in sub_question.requirement_keys
+        for sub_question in plan.sub_questions
+    )
+    assert all(
+        sub_question.query_type == QueryType.COMPARISON for sub_question in plan.sub_questions
+    )
 
     repeated = Planner().plan(query)
     assert [entity.id for entity in repeated.target_entities] == [
@@ -191,9 +215,7 @@ def test_multisentence_comparison_extracts_entities_and_requested_dimensions() -
 
 
 def test_comprehensive_rag_benchmark_is_not_resolved_as_corrective_rag() -> None:
-    plan = Planner().plan(
-        "Compare Self-RAG versus CRAG -- Comprehensive RAG Benchmark."
-    )
+    plan = Planner().plan("Compare Self-RAG versus CRAG -- Comprehensive RAG Benchmark.")
     assert [entity.canonical_name for entity in plan.target_entities] == [
         "Self-RAG",
         "Comprehensive RAG Benchmark",
@@ -254,13 +276,23 @@ def test_llm_plan_draft_is_validated_and_ids_are_generated_locally() -> None:
     assert planner.last_model == "fake-fast-planner"
     assert planner.last_fallback_reason is None
     assert planner.last_token_usage.total_tokens == 40
-    assert planner.last_prompt_version == "planner-plan-draft-v1"
+    assert planner.last_prompt_version == "planner-plan-draft-v2"
     assert all(entity.id.startswith("ent_") for entity in plan.target_entities)
     assert all(sub_question.id.startswith("sq_") for sub_question in plan.sub_questions)
     assert [entity.canonical_name for entity in plan.target_entities] == [
         "Self-RAG",
         "Corrective RAG",
     ]
+    assert len(plan.sub_questions) == 4
+    assert all(
+        sub_question.query_type == QueryType.COMPARISON
+        and "key_differences" not in sub_question.requirement_keys
+        for sub_question in plan.sub_questions
+    )
+    system_prompt = str(getattr(fake.messages[0], "content", ""))
+    assert '"sub_questions"' in system_prompt
+    assert '"expected_source_diversity"' in system_prompt
+    assert "All keys shown in the output contract are required" in system_prompt
     assert "private_provider_response" not in str(planner.__dict__)
 
 
@@ -272,9 +304,88 @@ def test_malformed_llm_output_falls_back_without_retaining_raw_response() -> Non
     assert plan.answer_type == "comparison"
     assert planner.last_backend == "deterministic"
     assert planner.last_model == "fake-fast-planner"
-    assert planner.last_fallback_reason == "invalid_structured_output"
+    assert planner.last_fallback_reason == "json_decode_failed"
     assert planner.last_token_usage.total_tokens == 40
     assert "provider-private malformed response" not in str(planner.__dict__)
+
+
+def test_llm_missing_field_has_safe_classification_and_path() -> None:
+    payload = json.loads(_valid_comparison_draft())
+    del payload["sub_questions"][0]["query_type"]
+    private_value = "private-provider-field-value"
+    payload["private_extra"] = private_value
+    planner = Planner(
+        llm=FakePlannerLLM(content=json.dumps(payload)),
+        strict_llm=True,
+    )  # type: ignore[arg-type]
+
+    with pytest.raises(PlannerLLMError) as exc_info:
+        planner.plan("Compare Self-RAG and CRAG")
+
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, StructuredOutputError)
+    assert cause.code == StructuredOutputErrorCode.MISSING_REQUIRED_FIELD
+    assert cause.field_paths == ("sub_questions[0].query_type",)
+    assert private_value not in str(cause)
+    assert planner.last_fallback_reason == "missing_required_field"
+    assert planner.last_fallback_fields == ("sub_questions[0].query_type",)
+
+
+def test_llm_unknown_entity_reference_has_safe_path() -> None:
+    payload = json.loads(_valid_comparison_draft())
+    payload["sub_questions"][0]["target_entities"] = ["GraphRAG"]
+    planner = Planner(
+        llm=FakePlannerLLM(content=json.dumps(payload)),
+        strict_llm=True,
+    )  # type: ignore[arg-type]
+
+    with pytest.raises(PlannerLLMError) as exc_info:
+        planner.plan("Compare Self-RAG and CRAG")
+
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, StructuredOutputError)
+    assert cause.code == StructuredOutputErrorCode.UNKNOWN_ENTITY_ID
+    assert cause.field_paths == ("sub_questions[0].target_entities[0]",)
+    assert planner.last_fallback_reason == "unknown_entity_id"
+
+
+def test_llm_unknown_requirement_reference_has_safe_path() -> None:
+    payload = json.loads(_valid_comparison_draft())
+    payload["sub_questions"][0]["requirements"] = ["private invented dimension"]
+    planner = Planner(
+        llm=FakePlannerLLM(content=json.dumps(payload)),
+        strict_llm=True,
+    )  # type: ignore[arg-type]
+
+    with pytest.raises(PlannerLLMError) as exc_info:
+        planner.plan("Compare Self-RAG and CRAG")
+
+    cause = exc_info.value.__cause__
+    assert isinstance(cause, StructuredOutputError)
+    assert cause.code == StructuredOutputErrorCode.UNKNOWN_REQUIREMENT_KEY
+    assert cause.field_paths == ("sub_questions[0].requirements[0]",)
+    assert "private invented dimension" not in str(cause)
+    assert planner.last_fallback_reason == "unknown_requirement_key"
+
+
+def test_llm_derived_difference_requirement_needs_no_research_subquestion() -> None:
+    payload = json.loads(_valid_comparison_draft())
+    payload["sub_questions"] = [
+        sub_question
+        for sub_question in payload["sub_questions"]
+        if sub_question["dimension"] != "key differences"
+    ]
+    planner = Planner(llm=FakePlannerLLM(content=json.dumps(payload)))  # type: ignore[arg-type]
+
+    plan = planner.plan("Compare Self-RAG and CRAG")
+
+    assert planner.last_backend == "llm"
+    assert planner.last_fallback_reason is None
+    assert {requirement.key for requirement in plan.answer_requirements} == {
+        "retrieval_trigger",
+        "correction_mechanism",
+        "key_differences",
+    }
 
 
 def test_llm_provider_exception_falls_back_deterministically() -> None:
@@ -299,7 +410,7 @@ def test_llm_comparison_entity_substitution_falls_back_to_query_entities() -> No
     ]
     assert all(entity.canonical_name != "GraphRAG" for entity in plan.target_entities)
     assert planner.last_backend == "deterministic"
-    assert planner.last_fallback_reason == "invalid_plan_draft"
+    assert planner.last_fallback_reason == "unknown_entity_id"
 
 
 def test_llm_noncomparison_entity_requires_query_boundary_anchor() -> None:
@@ -309,7 +420,7 @@ def test_llm_noncomparison_entity_requires_query_boundary_anchor() -> None:
 
     assert [entity.canonical_name for entity in plan.target_entities] == ["Corrective RAG"]
     assert planner.last_backend == "deterministic"
-    assert planner.last_fallback_reason == "invalid_plan_draft"
+    assert planner.last_fallback_reason == "unknown_entity_id"
 
 
 def test_llm_known_entity_does_not_match_inside_more_specific_alias() -> None:
@@ -319,17 +430,17 @@ def test_llm_known_entity_does_not_match_inside_more_specific_alias() -> None:
 
     assert [entity.canonical_name for entity in plan.target_entities] == ["GraphRAG"]
     assert planner.last_backend == "deterministic"
-    assert planner.last_fallback_reason == "invalid_plan_draft"
+    assert planner.last_fallback_reason == "unknown_entity_id"
 
 
 def test_strict_llm_rejects_comparison_entity_substitution() -> None:
     fake = FakePlannerLLM(content=_comparison_draft_with_substituted_entity())
     planner = Planner(llm=fake, strict_llm=True)  # type: ignore[arg-type]
 
-    with pytest.raises(PlannerLLMError, match="invalid_plan_draft"):
+    with pytest.raises(PlannerLLMError, match="unknown_entity_id"):
         planner.plan("Compare Self-RAG and CRAG")
     assert planner.last_backend == "llm"
-    assert planner.last_fallback_reason == "invalid_plan_draft"
+    assert planner.last_fallback_reason == "unknown_entity_id"
 
 
 @pytest.mark.parametrize(

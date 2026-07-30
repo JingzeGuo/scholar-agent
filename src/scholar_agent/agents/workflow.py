@@ -212,6 +212,7 @@ class ResearchWorkflow:
                 "model": runtime["model"],
                 "prompt_version": runtime["prompt_version"],
                 "fallback_reason": runtime["fallback_reason"],
+                "fallback_fields": runtime["fallback_fields"],
                 "token_usage": usage.model_dump(mode="json"),
             },
         )
@@ -472,6 +473,24 @@ class ResearchWorkflow:
         max_latency_value = state.get("max_latency_ms")
         max_latency = int(max_latency_value if max_latency_value is not None else 180_000)
         elapsed_ms = self._elapsed_ms(state)
+        termination_conditions = {
+            "latency_budget_exhausted": elapsed_ms >= max_latency,
+            "tool_budget_exhausted": tool_calls >= max_tools,
+            "token_budget_exhausted": (
+                estimated_tokens >= max_tokens
+                or bool(state.get("token_budget_blocked"))
+            ),
+            "no_new_evidence": iteration > 0 and unique_new == 0,
+            "iteration_budget_exhausted": iteration >= max_iter,
+        }
+        event = event.model_copy(
+            update={
+                "payload": {
+                    **event.payload,
+                    "termination_conditions": termination_conditions,
+                }
+            }
+        )
         terminated: str | None = None
 
         if verification.is_sufficient:
@@ -583,6 +602,9 @@ class ResearchWorkflow:
         verification = None
         if state.get("verification"):
             verification = VerificationResult.model_validate(state["verification"])
+        corpus_insufficient = bool(state.get("unanswerable")) or bool(
+            verification and verification.unanswerable
+        )
         max_tokens = int(
             state.get("max_total_tokens") or self.config.max_total_tokens
         )
@@ -603,14 +625,18 @@ class ResearchWorkflow:
             plan=plan,
             ledger=ledger,
             verification=verification,
-            # A stopped-but-incomplete research loop may still contain useful
-            # evidence. It must be rendered as a partial answer rather than a
-            # normal complete answer.
-            corpus_insufficient=not bool(verification and verification.is_sufficient),
+            # Partial coverage and confirmed corpus exhaustion are distinct.
+            # Verification already controls complete/partial status.
+            corpus_insufficient=corpus_insufficient,
             force_deterministic=force_deterministic,
             forced_fallback_reason=(
                 "token_budget_exhausted" if force_deterministic else None
             ),
+        )
+        # Writer status captures answer completeness; this flag is reserved for
+        # confirmed corpus exhaustion and is therefore owned by the workflow.
+        draft = draft.model_copy(
+            update={"corpus_insufficient": corpus_insufficient}
         )
         runtime = _component_runtime(self.writer)
         usage = runtime["token_usage"]
@@ -632,6 +658,7 @@ class ResearchWorkflow:
                 "model": runtime["model"],
                 "prompt_version": runtime["prompt_version"],
                 "fallback_reason": runtime["fallback_reason"],
+                "fallback_fields": runtime["fallback_fields"],
                 "token_usage": usage.model_dump(mode="json"),
             },
         )
@@ -643,12 +670,39 @@ class ResearchWorkflow:
         }
 
     def _node_validate_citations(self, state: WorkflowState) -> dict[str, Any]:
+        plan = QueryPlan.model_validate(state["plan"])
         ledger = EvidenceLedger(
             items=[EvidenceItem.model_validate(e) for e in state.get("evidence") or []]
+        )
+        verification = VerificationResult.model_validate(
+            state.get("verification")
+            or {
+                "is_sufficient": False,
+                "coverage_score": 0.0,
+                "rationale_summary": "verification missing",
+            }
         )
         draft_raw = state.get("draft_answer") or {}
         draft = DraftAnswer.model_validate(draft_raw) if draft_raw else DraftAnswer()
         final = self.citation_validator.validate(draft, ledger)
+        original_terminated_reason = str(
+            state.get("terminated_reason") or "completed"
+        )
+        (
+            plan,
+            verification,
+            final,
+            terminated_reason,
+            reconciliation,
+        ) = self._reconcile_citation_outcome(
+            plan=plan,
+            ledger=ledger,
+            verification=verification,
+            draft=draft,
+            final=final,
+            terminated_reason=original_terminated_reason,
+            state=state,
+        )
         report = final.citation_report
         event = ExecutionEvent(
             run_id=state["run_id"],
@@ -669,13 +723,417 @@ class ResearchWorkflow:
                     [i.model_dump(mode="json") for i in report.issues[:20]] if report else []
                 ),
                 "final_claim_ids": [c.claim_id for c in final.claims],
+                "verification_is_sufficient": verification.is_sufficient,
+                "terminated_reason": terminated_reason,
+                "status_reconciled": reconciliation["status_reconciled"],
             },
         )
+        new_events: list[ExecutionEvent] = [event]
+        budget_reasons = {
+            "tool_budget_exhausted",
+            "iteration_budget_exhausted",
+            "latency_budget_exhausted",
+            "token_budget_exhausted",
+        }
+        if (
+            reconciliation["termination_recovered"]
+            and terminated_reason in budget_reasons
+            and not any(
+                existing.get("event_type") == EventType.BUDGET_HIT.value
+                and existing.get("summary") == terminated_reason
+                for existing in state.get("events") or []
+            )
+        ):
+            new_events.append(
+                ExecutionEvent(
+                    run_id=state["run_id"],
+                    event_type=EventType.BUDGET_HIT,
+                    component="workflow_finalizer",
+                    summary=terminated_reason,
+                    payload={
+                        "iteration": int(state.get("iteration") or 0),
+                        "tool_call_count": int(state.get("tool_call_count") or 0),
+                        "estimated_tokens": int(state.get("estimated_tokens") or 0),
+                        "reconciled_after_final_answer": True,
+                    },
+                )
+            )
+        if reconciliation["state_changed"]:
+            new_events.append(
+                ExecutionEvent(
+                    run_id=state["run_id"],
+                    event_type=EventType.VERIFICATION,
+                    component="workflow_finalizer",
+                    summary=verification.rationale_summary,
+                    payload={
+                        "is_sufficient": verification.is_sufficient,
+                        "coverage_score": verification.coverage_score,
+                        "covered_sub_questions": verification.covered_sub_questions,
+                        "missing_sub_questions": verification.missing_sub_questions,
+                        "answer_status": final.status.value,
+                        "terminated_reason": terminated_reason,
+                        "citation_reconciled": True,
+                    },
+                )
+            )
         return {
+            "plan": plan.model_dump(mode="json"),
+            "verification": verification.model_dump(mode="json"),
             "final_answer": final.model_dump(mode="json"),
             "answer_status": final.status.value,
-            "events": _append_event_dicts(state, [event]),
+            "terminated_reason": terminated_reason,
+            "unanswerable": verification.unanswerable,
+            "events": _append_event_dicts(state, new_events),
         }
+
+    def _reconcile_citation_outcome(
+        self,
+        *,
+        plan: QueryPlan,
+        ledger: EvidenceLedger,
+        verification: VerificationResult,
+        draft: DraftAnswer,
+        final: FinalAnswer,
+        terminated_reason: str,
+        state: WorkflowState,
+    ) -> tuple[
+        QueryPlan,
+        VerificationResult,
+        FinalAnswer,
+        str,
+        dict[str, bool],
+    ]:
+        """Make final citation-validated status authoritative everywhere."""
+        evidence_by_id = {item.evidence_id: item for item in ledger.items}
+        plan_sub_question_ids = {sub_question.id for sub_question in plan.sub_questions}
+
+        def bound_sub_questions(claim: Any) -> set[str]:
+            bound: set[str] = set()
+            if claim.sub_question_id in plan_sub_question_ids:
+                bound.add(claim.sub_question_id)
+            for evidence_id in claim.evidence_ids:
+                item = evidence_by_id.get(evidence_id)
+                if item is not None and item.sub_question_id in plan_sub_question_ids:
+                    bound.add(item.sub_question_id)
+            return bound
+
+        final_claims_by_sq: dict[str, list[Any]] = {
+            sub_question_id: [] for sub_question_id in plan_sub_question_ids
+        }
+        final_evidence_by_sq: dict[str, list[str]] = {
+            sub_question_id: [] for sub_question_id in plan_sub_question_ids
+        }
+        for claim in final.claims:
+            explicitly_bound = (
+                claim.sub_question_id
+                if claim.sub_question_id in plan_sub_question_ids
+                else None
+            )
+            for sub_question_id in bound_sub_questions(claim):
+                final_claims_by_sq[sub_question_id].append(claim)
+                for evidence_id in claim.evidence_ids:
+                    item = evidence_by_id.get(evidence_id)
+                    if (
+                        item is not None
+                        and (
+                            sub_question_id == explicitly_bound
+                            or item.sub_question_id == sub_question_id
+                        )
+                        and evidence_id not in final_evidence_by_sq[sub_question_id]
+                    ):
+                        final_evidence_by_sq[sub_question_id].append(evidence_id)
+
+        final_claim_ids = {claim.claim_id for claim in final.claims}
+        removed_claims = [
+            claim for claim in draft.claims if claim.claim_id not in final_claim_ids
+        ]
+        invalidated_sub_questions = {
+            sub_question_id
+            for claim in removed_claims
+            for sub_question_id in bound_sub_questions(claim)
+        }
+
+        covered: list[str] = []
+        final_gap_aspects: list[str] = []
+        structured_comparison = bool(
+            plan.answer_type == "comparison"
+            and plan.target_entities
+            and plan.answer_requirements
+        )
+        if structured_comparison:
+            all_entity_ids = {entity.id for entity in plan.target_entities}
+            expected_matrix = {
+                (requirement.key, entity_id)
+                for requirement in plan.answer_requirements
+                for entity_id in (
+                    requirement.target_entity_ids
+                    if requirement.target_entity_ids
+                    else all_entity_ids
+                )
+            }
+            claims_by_id = {claim.claim_id: claim for claim in final.claims}
+            supported_matrix: set[tuple[str, str]] = set()
+            for row in final.rows:
+                for cell in row.cells:
+                    cell_claim = claims_by_id.get(cell.claim_id or "")
+                    pair = (row.requirement_key, cell.entity_id)
+                    if (
+                        pair in expected_matrix
+                        and cell.supported
+                        and cell_claim is not None
+                        and cell_claim.entity_id == cell.entity_id
+                        and cell_claim.requirement_key == row.requirement_key
+                        and cell_claim.dimension == row.dimension
+                        and cell_claim.evidence_ids
+                    ):
+                        supported_matrix.add(pair)
+
+            missing_matrix = sorted(expected_matrix - supported_matrix)
+            final_gap_aspects = [
+                f"final_answer:{requirement_key}:{entity_id}"
+                for requirement_key, entity_id in missing_matrix
+            ]
+            for sub_question in plan.sub_questions:
+                expected_for_sub_question = {
+                    (requirement_key, entity_id)
+                    for requirement_key in sub_question.requirement_keys
+                    for entity_id in sub_question.target_entity_ids
+                    if (requirement_key, entity_id) in expected_matrix
+                }
+                if expected_for_sub_question:
+                    sub_question_covered = (
+                        expected_for_sub_question <= supported_matrix
+                    )
+                else:
+                    # Legacy/unstructured sub-questions may coexist with the
+                    # structured answer matrix. Preserve claim-based coverage
+                    # for those questions without treating them as requirements.
+                    sub_question_covered = bool(
+                        final_claims_by_sq.get(sub_question.id)
+                    )
+                if (
+                    sub_question_covered
+                    and final.status != AnswerStatus.INSUFFICIENT
+                ):
+                    covered.append(sub_question.id)
+            computed_coverage = len(supported_matrix) / max(1, len(expected_matrix))
+        else:
+            covered_units = 0
+            total_units = 0
+            for sub_question in plan.sub_questions:
+                sub_question_covered = bool(
+                    final_claims_by_sq.get(sub_question.id)
+                )
+                if sub_question.id in invalidated_sub_questions:
+                    sub_question_covered = False
+                covered_units += int(sub_question_covered)
+                total_units += 1
+                if (
+                    sub_question_covered
+                    and final.status != AnswerStatus.INSUFFICIENT
+                ):
+                    covered.append(sub_question.id)
+            computed_coverage = covered_units / max(1, total_units)
+
+        # Citation validation can only preserve or reduce earlier coverage.
+        original_covered = set(verification.covered_sub_questions)
+        if original_covered:
+            covered = [
+                sub_question_id
+                for sub_question_id in covered
+                if sub_question_id in original_covered
+            ]
+        original_missing = set(verification.missing_sub_questions)
+        covered = [
+            sub_question_id
+            for sub_question_id in covered
+            if sub_question_id not in original_missing
+        ]
+        missing = [
+            sub_question.id
+            for sub_question in plan.sub_questions
+            if (
+                sub_question.id not in covered
+                or sub_question.id in original_missing
+            )
+        ]
+        coverage_score = min(verification.coverage_score, computed_coverage)
+
+        supported_evidence_ids: dict[str, list[str]] = {}
+        for sub_question_id, evidence_ids in final_evidence_by_sq.items():
+            originally_supported = verification.supported_evidence_ids.get(
+                sub_question_id
+            )
+            retained = (
+                [
+                    evidence_id
+                    for evidence_id in evidence_ids
+                    if evidence_id in originally_supported
+                ]
+                if originally_supported is not None
+                else list(evidence_ids)
+            )
+            if retained:
+                supported_evidence_ids[sub_question_id] = retained
+
+        is_sufficient = (
+            verification.is_sufficient
+            and final.status == AnswerStatus.COMPLETE
+            and not missing
+            and not verification.unanswerable
+        )
+        if final.status == AnswerStatus.COMPLETE and not is_sufficient:
+            stricter_status = (
+                AnswerStatus.PARTIAL
+                if final.claims
+                else AnswerStatus.INSUFFICIENT
+            )
+            final = self.citation_validator.restatus(
+                final,
+                status=stricter_status,
+                ledger=ledger,
+            )
+
+        status_reconciled = final.status != draft.status
+        missing_aspects: list[str] = []
+        for aspect in [*final_gap_aspects, *verification.missing_aspects]:
+            if aspect not in missing_aspects:
+                missing_aspects.append(aspect)
+        if final.status != AnswerStatus.COMPLETE and (
+            verification.is_sufficient or status_reconciled
+        ):
+            marker = f"final_answer:{final.status.value}"
+            if marker not in missing_aspects:
+                missing_aspects.append(marker)
+        unsupported_claims = list(verification.unsupported_claims)
+        for claim in removed_claims:
+            snippet = claim.text[:120]
+            if snippet not in unsupported_claims:
+                unsupported_claims.append(snippet)
+
+        if not is_sufficient and (
+            verification.is_sufficient or status_reconciled
+        ):
+            rationale = (
+                "Final answer reconciliation downgraded answer sufficiency "
+                f"(status={final.status.value}; coverage={coverage_score:.2f}; "
+                f"missing={len(missing)})."
+            )
+        else:
+            rationale = verification.rationale_summary
+
+        reconciled_verification = verification.model_copy(
+            update={
+                "is_sufficient": is_sufficient,
+                "coverage_score": round(max(0.0, min(1.0, coverage_score)), 3),
+                "covered_sub_questions": covered,
+                "supported_evidence_ids": supported_evidence_ids,
+                "missing_sub_questions": missing,
+                "unsupported_claims": unsupported_claims[:20],
+                "missing_aspects": missing_aspects[:20],
+                "rationale_summary": rationale,
+            }
+        )
+
+        updated_sub_questions = [
+            sub_question.model_copy(
+                update={
+                    "status": (
+                        SubQuestionStatus.COVERED
+                        if sub_question.id in covered
+                        else SubQuestionStatus.MISSING
+                    )
+                }
+            )
+            for sub_question in plan.sub_questions
+        ]
+        reconciled_plan = plan.model_copy(
+            update={"sub_questions": updated_sub_questions}
+        )
+
+        reconciled_reason = terminated_reason
+        termination_recovered = False
+        if terminated_reason == "evidence_sufficient" and not is_sufficient:
+            reached_reason = self._reached_research_stop_reason(state)
+            reconciled_reason = reached_reason or f"final_answer_{final.status.value}"
+            termination_recovered = reached_reason is not None
+
+        state_changed = (
+            reconciled_verification != verification
+            or reconciled_plan != plan
+            or reconciled_reason != terminated_reason
+            or status_reconciled
+        )
+        return (
+            reconciled_plan,
+            reconciled_verification,
+            final,
+            reconciled_reason,
+            {
+                "state_changed": state_changed,
+                "status_reconciled": status_reconciled,
+                "termination_recovered": termination_recovered,
+            },
+        )
+
+    def _reached_research_stop_reason(
+        self,
+        state: WorkflowState,
+    ) -> str | None:
+        """Recover a stop condition masked by an optimistic verifier result."""
+        precedence = (
+            "latency_budget_exhausted",
+            "tool_budget_exhausted",
+            "token_budget_exhausted",
+            "no_new_evidence",
+            "iteration_budget_exhausted",
+        )
+        for raw_event in reversed(state.get("events") or []):
+            if (
+                raw_event.get("event_type") != EventType.VERIFICATION.value
+                or raw_event.get("component") != "verifier"
+            ):
+                continue
+            conditions = (raw_event.get("payload") or {}).get(
+                "termination_conditions"
+            )
+            if isinstance(conditions, dict):
+                for reason in precedence:
+                    if conditions.get(reason) is True:
+                        return reason
+            break
+
+        # Compatibility fallback for states/replays written before the verifier
+        # began recording the exact condition snapshot. Counter-based limits are
+        # stable after research; latency is intentionally omitted because time
+        # spent writing must not be misattributed to the research stop reason.
+        tool_calls = int(state.get("tool_call_count") or 0)
+        max_tools = int(
+            state.get("max_total_tool_calls") or self.config.max_total_tool_calls
+        )
+        if tool_calls >= max_tools:
+            return "tool_budget_exhausted"
+        estimated_tokens = int(state.get("estimated_tokens") or 0)
+        max_tokens = int(
+            state.get("max_total_tokens") or self.config.max_total_tokens
+        )
+        if (
+            estimated_tokens >= max_tokens
+            or bool(state.get("token_budget_blocked"))
+        ):
+            return "token_budget_exhausted"
+        iteration = int(state.get("iteration") or 0)
+        if iteration > 0 and self._last_unique_new(state) == 0:
+            return "no_new_evidence"
+        configured_iterations = state.get("max_corrective_iterations")
+        max_iterations = int(
+            configured_iterations
+            if configured_iterations is not None
+            else self.config.max_corrective_iterations
+        )
+        if iteration >= max_iterations:
+            return "iteration_budget_exhausted"
+        return None
 
     def _node_finish(self, state: WorkflowState) -> dict[str, Any]:
         reason = state.get("terminated_reason") or "completed"
@@ -870,11 +1328,15 @@ def _component_runtime(component: Any) -> dict[str, Any]:
     fallback_reason = _safe_trace_reason(
         getattr(component, "last_fallback_reason", None)
     )
+    fallback_fields = _safe_trace_fields(
+        getattr(component, "last_fallback_fields", ())
+    )
     return {
         "backend": backend[:40],
         "model": model[:120] if model else None,
         "prompt_version": prompt_version[:120] if prompt_version else None,
         "fallback_reason": fallback_reason,
+        "fallback_fields": fallback_fields,
         "token_usage": _component_token_usage(component),
     }
 
@@ -889,6 +1351,18 @@ def _safe_trace_reason(reason: Any) -> str | None:
     if _SAFE_TRACE_REASON.fullmatch(cleaned):
         return cleaned
     return "component_fallback"
+
+
+def _safe_trace_fields(fields: Any) -> list[str]:
+    """Keep only bounded schema paths, never provider-authored values."""
+    if not isinstance(fields, (list, tuple)):
+        return []
+    safe: list[str] = []
+    for field_path in fields[:8]:
+        cleaned = re.sub(r"[^A-Za-z0-9_.\[\]-]+", "_", str(field_path))[:160]
+        if cleaned and cleaned not in safe:
+            safe.append(cleaned)
+    return safe
 
 
 def _component_token_usage(component: Any) -> TokenUsage:
