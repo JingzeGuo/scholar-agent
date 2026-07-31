@@ -16,9 +16,9 @@ from scholar_agent.retrieval import RetrievalEngine, build_all_indexes
 from scholar_agent.workflow import run_question
 
 app = typer.Typer(
-    help="Compact multi-agent GraphRAG for evidence-grounded academic research.",
-    add_completion=False,
-    no_args_is_help=True,
+    help="Compact multi-agent GraphRAG for evidence-grounded academic research.",  # 项目说明
+    add_completion=False,  # 不生成 shell 自动补全命令
+    no_args_is_help=True,  # 不带参数时自动显示帮助
 )
 LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ class MissingAPIKeyError(RuntimeError):
     pass
 
 
+# 统一初始化
 def _settings() -> Settings:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     logging.basicConfig(level=logging.INFO, format="%(message)s", force=True)
@@ -70,7 +71,12 @@ def _ask(question: str, offline: bool = False) -> str:
     return state["answer"]
 
 
-def _answer_or_exit(question: str, offline: bool) -> None:
+@app.command()
+def ask(
+    question: str,
+    offline: bool = typer.Option(False, "--offline", help="Use deterministic agents."),
+) -> None:
+    """Run the complete four-agent workflow."""
     try:
         typer.echo(_ask(question, offline))
     except MissingAPIKeyError:
@@ -79,23 +85,6 @@ def _answer_or_exit(question: str, offline: bool) -> None:
     except OpenAIError:
         typer.echo("LLM API unavailable. Run with --offline for deterministic mode.", err=True)
         raise typer.Exit(code=1) from None
-
-
-@app.command()
-def ask(
-    question: str,
-    offline: bool = typer.Option(False, "--offline", help="Use deterministic agents."),
-) -> None:
-    """Run the complete four-agent workflow."""
-    _answer_or_exit(question, offline)
-
-
-@app.command()
-def demo(
-    offline: bool = typer.Option(False, "--offline", help="Use deterministic agents."),
-) -> None:
-    """Run the fixed interview demonstration question."""
-    _answer_or_exit("Compare Self-RAG and CRAG", offline)
 
 
 if __name__ == "__main__":
