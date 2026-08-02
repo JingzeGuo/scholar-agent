@@ -1,4 +1,4 @@
-"""The four-command ScholarAgent CLI."""
+"""The three-command ScholarAgent CLI."""
 
 from __future__ import annotations
 

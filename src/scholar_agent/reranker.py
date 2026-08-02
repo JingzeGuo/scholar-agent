@@ -25,11 +25,7 @@ def _lexical_scores(queries: list[str], candidates: list[dict]) -> list[float]:
     scores: list[float] = []
     for candidate in candidates:
         terms = set(tokenize(candidate["text"]))
-        overlaps = [
-            len(query.intersection(terms)) / len(query)
-            for query in query_terms
-            if query
-        ]
+        overlaps = [len(query.intersection(terms)) / len(query) for query in query_terms if query]
         best = max(overlaps, default=0.0)
         scores.append(best if best > 0 else float("-inf"))
     return scores
@@ -46,11 +42,7 @@ def rerank(
     queries = [query.strip() for query in queries if query.strip()]
     if not candidates or not queries:
         return []
-    pairs = [
-        (query, candidate["text"])
-        for candidate in candidates
-        for query in queries
-    ]
+    pairs = [(query, candidate["text"]) for candidate in candidates for query in queries]
     if scorer is not None:
         raw_scores = scorer(pairs)
     else:
@@ -67,10 +59,11 @@ def rerank(
     if raw_scores:
         width = len(queries)
         scores = [
-            max(raw_scores[start : start + width])
-            for start in range(0, len(raw_scores), width)
+            max(raw_scores[start : start + width]) for start in range(0, len(raw_scores), width)
         ]
     else:
         scores = _lexical_scores(queries, candidates)
-    scored = [{**item, "score": float(score)} for item, score in zip(candidates, scores, strict=True)]
+    scored = [
+        {**item, "score": float(score)} for item, score in zip(candidates, scores, strict=True)
+    ]
     return sorted(scored, key=lambda item: item["score"], reverse=True)

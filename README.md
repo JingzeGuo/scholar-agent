@@ -54,8 +54,9 @@ The Planner receives the original question and returns:
 
 Only method names written in the question become targets; open-ended discovery
 keeps `targets=[]` and uses question-level facets. It does not create a
-sub-question DAG or allocate budgets. Invalid JSON falls back to a method-name
-heuristic. Deterministic behavior is explicit through `--offline`.
+sub-question DAG or allocate budgets. Invalid JSON falls back to the original
+question as the retrieval query, without adding inferred requirements.
+Deterministic behavior is explicit through `--offline`.
 
 ### Researcher
 
@@ -73,9 +74,10 @@ interface, provider factory, or dynamic fusion weighting.
 
 ### Verifier
 
-The Verifier maps evidence IDs to target-level facets, or global facets when
-there are no explicit targets. Incomplete evidence can trigger one retry;
-an unchanged evidence set skips the redundant second verification.
+The Verifier checks direct target and facet support. Missing support produces a
+partial or insufficient result rather than benchmark-specific completion.
+Incomplete evidence can trigger one retry; an unchanged evidence set skips the
+redundant second verification.
 
 ### Writer
 
@@ -109,7 +111,7 @@ BM25 tokens are persisted as a small JSON file. Dense embeddings are saved as
 `dense.npy` and searched with cosine similarity. The configured Sentence
 Transformer is downloaded and cached on first use. In an offline environment
 without the model cache, a deterministic hashing encoder keeps tests and the
-demo runnable; the log makes that fallback explicit.
+offline path runnable; the log makes that fallback explicit.
 
 ### Lightweight GraphRAG
 
@@ -133,7 +135,7 @@ scorer is used so the full architecture can still be demonstrated.
 
 Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 The first neural run may download and load model snapshots; report that cold
-start separately from subsequent warm-query latency in benchmarks and demos.
+start separately from subsequent warm-query latency in benchmarks and CLI runs.
 
 ```bash
 uv sync
@@ -147,19 +149,12 @@ The repository includes two tiny, synthetic two-page PDF excerpts for
 deterministic tests. They are not redistributed full papers. To use your own
 corpus, point `ingest` at a directory containing PDFs.
 
-The interview shortcut runs the same fixed question:
-
-```bash
-uv run scholar-agent demo
-```
-
 Supported commands are intentionally limited to:
 
 ```text
 scholar-agent ingest <pdf-directory>
 scholar-agent index
 scholar-agent ask "<question>" [--offline]
-scholar-agent demo [--offline]
 ```
 
 ## Configuration
@@ -222,9 +217,9 @@ src/scholar_agent/
 
 ## Tests and quality
 
-The 30 deterministic tests cover physical page provenance, all retrievers,
+The deterministic tests cover physical page provenance, all retrievers,
 multi-query reranking, target identity, thresholds, coverage, retry bounds,
-strict abstention, page citations, and the four-command CLI.
+strict abstention, page citations, and the three-command CLI.
 
 ```bash
 uv run pytest -q

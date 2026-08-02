@@ -1,4 +1,4 @@
-"""Optional OpenAI-compatible LLM access; the default demo remains offline."""
+"""Optional OpenAI-compatible LLM access with an explicit offline mode."""
 
 from __future__ import annotations
 

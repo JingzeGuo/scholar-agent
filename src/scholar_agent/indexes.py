@@ -113,7 +113,9 @@ class DenseIndex:
             embeddings = _sentence_embeddings(texts, model_name)
             backend = "sentence-transformers"
         except (ImportError, OSError, ValueError) as exc:
-            LOGGER.warning("[index] local embedding model unavailable; using hash fallback: %s", exc)
+            LOGGER.warning(
+                "[index] local embedding model unavailable; using hash fallback: %s", exc
+            )
             embeddings = _hash_embeddings(texts)
             backend = "hash"
         return cls(chunks, embeddings, model_name, backend)

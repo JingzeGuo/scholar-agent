@@ -31,12 +31,25 @@ class FakeCrossEncoder:
         return [5.0] * len(pairs)
 
 
+def _retrieval_plan(state: AgentState, llm: object = None) -> dict:
+    return {
+        "plan": {
+            "queries": [state["question"]],
+            "entities": ["Self-RAG", "CRAG"],
+            "targets": ["Self-RAG", "CRAG"],
+            "facets": ["retrieval"],
+            "output_language": "English",
+        },
+    }
+
+
 def test_langgraph_completes_four_agent_flow(
     sample_chunks: list[dict],
     monkeypatch: Any,
 ) -> None:
     engine = FakeEngine(sample_chunks[:2])
     monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
+    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
 
     result = run_question(
         "Compare Self-RAG and CRAG",
@@ -71,6 +84,7 @@ def test_partial_workflow_retries_exactly_once(
 ) -> None:
     engine = FakeEngine(sample_chunks[:1], sample_chunks[:2])
     monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
+    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
     researcher_calls = 0
     verifier_calls = 0
     original_researcher = workflow_module.researcher_node

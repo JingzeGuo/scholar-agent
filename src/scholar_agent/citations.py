@@ -19,8 +19,7 @@ def validate_citations(answer: str, evidence: list[dict]) -> str:
 
     def replace(match: re.Match[str]) -> str:
         return "".join(
-            citations.get(int(value), "")
-            for value in EVIDENCE_ID_RE.findall(match.group(1))
+            citations.get(int(value), "") for value in EVIDENCE_ID_RE.findall(match.group(1))
         )
 
     answer = EVIDENCE_CITATION_RE.sub(replace, answer)

@@ -5,13 +5,13 @@ import scholar_agent.cli as cli_module
 from scholar_agent.cli import MissingAPIKeyError, app
 
 
-def test_cli_exposes_only_four_commands() -> None:
+def test_cli_exposes_only_three_commands() -> None:
     result = CliRunner().invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    for command in ("ingest", "index", "ask", "demo"):
+    for command in ("ingest", "index", "ask"):
         assert command in result.output
-    for removed in ("retrieve", "evaluate", "ablate", "corpus", "replay"):
+    for removed in ("demo", "retrieve", "evaluate", "ablate", "corpus", "replay"):
         assert removed not in result.output
 
 

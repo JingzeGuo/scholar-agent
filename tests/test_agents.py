@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from scholar_agent.agents.planner import planner_node, target_matches
-from scholar_agent.agents.researcher import researcher_node
+from scholar_agent.agents.researcher import _select_evidence, researcher_node
 from scholar_agent.agents.verifier import verifier_node
 from scholar_agent.agents.writer import writer_node
 from scholar_agent.config import Settings
@@ -63,37 +63,32 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert plan["queries"] == ["q1", "q2", "q3"]
     assert plan["entities"] == ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]
     assert plan["targets"] == ["Alpha", "Beta", "Gamma"]
-    assert plan["facets"] == ["retrieval trigger", "generation control"]
+    assert plan["facets"] == payload["facets"]
     assert plan["output_language"] == "Chinese"
-    assert "Never infer targets" in llm.last_prompt
-    assert "Preserve timing" in llm.last_prompt
+    assert "Do not invent targets" in llm.last_prompt
+    assert "Do not invent requirements" in llm.last_prompt
 
     open_plan = planner_node(
-        initial_state("Which RAG methods evaluate retrieval quality before generation?"),
-        StubLLM({**payload, "targets": ["Self-RAG", "CRAG", "RAG"]}),  # type: ignore[arg-type]
+        initial_state("Which retrieval methods are discussed in the corpus?"),
+        StubLLM({**payload, "targets": ["Self-RAG", "CRAG"]}),  # type: ignore[arg-type]
     )["plan"]
     assert open_plan["targets"] == []
-    assert open_plan["facets"][0] == "timing before generation"
-    assert open_plan["facets"][1] == "method examples"
-    assert open_plan["queries"] == [
-        "runtime retrieval evaluator relevance score corrective actions before generator",
-        "retrieved passage relevance reflection tokens before generation",
-        "confidence threshold trigger additional retrieval before generation",
-    ]
+    assert open_plan["queries"] == ["q1", "q2", "q3"]
+    assert open_plan["facets"] == payload["facets"]
 
 
-def test_planner_fallback_detects_methods_and_chinese() -> None:
-    plan = planner_node(
-        initial_state("用中文比较 DPR 和 ColBERT"),
-        StubLLM(ValueError("bad JSON")),  # type: ignore[arg-type]
+def test_offline_planner_does_not_invent_facets() -> None:
+    question = "Compare MethodA and MethodB"
+    plan = planner_node(initial_state(question))["plan"]
+    invalid_json_plan = planner_node(
+        initial_state(question),
+        StubLLM(ValueError("invalid JSON")),  # type: ignore[arg-type]
     )["plan"]
 
-    assert plan["targets"] == ["DPR", "ColBERT"]
-    assert plan["queries"][1:] == [
-        "DPR academic paper evidence",
-        "ColBERT academic paper evidence",
-    ]
-    assert plan["output_language"] == "Chinese"
+    assert plan["queries"] == [question]
+    assert plan["facets"] == [question]
+    assert plan["targets"] == ["MethodA", "MethodB"]
+    assert invalid_json_plan == plan
 
 
 def test_target_matching_preserves_method_identity() -> None:
@@ -102,7 +97,29 @@ def test_target_matching_preserves_method_identity() -> None:
     assert not target_matches("CRAG", "Self-CRAG combines both methods.")
     assert not target_matches("DPR", "ANCE uses one dense embedding.")
     assert not target_matches("RAG", "CRAG, Self-RAG, and GraphRAG are methods.")
-    assert target_matches("standard RAG", "VectorRAG is the baseline.")
+
+
+def test_researcher_selection_uses_score_not_filename_age() -> None:
+    items = [
+        {
+            "chunk_id": "older",
+            "paper": "2020.1.pdf",
+            "page": 1,
+            "text": "MethodA retrieval evidence.",
+            "score": 0.2,
+        },
+        {
+            "chunk_id": "newer",
+            "paper": "2025.9.pdf",
+            "page": 1,
+            "text": "MethodA retrieval evidence.",
+            "score": 0.9,
+        },
+    ]
+
+    selected = _select_evidence(items, [])
+
+    assert selected[0]["score"] == 0.9
 
 
 def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict]) -> None:
@@ -219,13 +236,13 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     )
 
 
-def test_verifier_computes_coverage_and_rejects_target_mismatch(
+def test_verifier_rejects_target_mismatch_and_invalid_ids(
     sample_chunks: list[dict],
 ) -> None:
     state = initial_state("Compare Self-RAG and CRAG")
     state["plan"].update(
         targets=["Self-RAG", "CRAG"],
-        facets=["mechanism"],
+        facets=["retrieval"],
     )
     state["evidence"] = sample_chunks[:2]
     assert verifier_node(state)["verification"]["status"] == "complete"
@@ -233,8 +250,8 @@ def test_verifier_computes_coverage_and_rejects_target_mismatch(
     mismatched = StubLLM(
         {
             "covered": {
-                "Self-RAG": {"mechanism": ["E2"]},
-                "CRAG": {"mechanism": ["E1", "E99"]},
+                "Self-RAG": {"retrieval": ["E2"]},
+                "CRAG": {"retrieval": ["E1", "E99"]},
             },
             "missing": [],
             "corrective_query": "",
@@ -243,43 +260,11 @@ def test_verifier_computes_coverage_and_rejects_target_mismatch(
     result = verifier_node(state, mismatched)  # type: ignore[arg-type]
     assert result["verification"]["status"] == "insufficient"
 
-    state["question"] = "Use Self-RAG and at least one other method as examples."
-    state["plan"].update(targets=["Self-RAG"], facets=["mechanism"])
-    discovered = verifier_node(state)["verification"]
-    assert discovered["status"] == "complete"
-    assert discovered["covered"]["Self-RAG"]["mechanism"] == ["E1"]
-    assert discovered["covered"]["question"]["mechanism"] == ["E2"]
 
-    state["plan"]["facets"] = ["method examples"]
-    examples = verifier_node(state)["verification"]
-    assert examples["status"] == "complete"
-    assert examples["covered"]["question"]["method examples"] == ["E2"]
-
-    state["question"] = "Which RAG methods evaluate retrieval quality?"
-    state["plan"].update(targets=[], facets=["method examples"])
-    assert verifier_node(state)["verification"]["status"] == "complete"
-
-    state["evidence"] = sample_chunks[:1]
-    open_result = verifier_node(state)["verification"]
-    assert open_result["status"] == "insufficient"
-    assert open_result["missing"] == ["question: method examples"]
-
-    state["question"] = "语料中的 RAG 评估方法有哪些？请举出至少两个框架。"
-    state["plan"].update(targets=[], facets=["framework examples"])
-    state["evidence"] = [
-        {**sample_chunks[0], "paper": "RAGAS.pdf"},
-        {**sample_chunks[1], "paper": "RGB.pdf"},
-    ]
-
-    framework_result = verifier_node(state)["verification"]
-    assert framework_result["status"] == "complete"
-
-    state["evidence"] = state["evidence"][:1]
-    framework_result = verifier_node(state)["verification"]
-    assert framework_result["status"] == "insufficient"
-    assert framework_result["missing"] == ["question: framework examples"]
-
-    state["question"] = "Compare CRAG with Comprehensive RAG Benchmark."
+def test_verifier_rejects_shared_acronym_as_target_substitution(
+    sample_chunks: list[dict],
+) -> None:
+    state = initial_state("Compare CRAG with Comprehensive RAG Benchmark.")
     state["plan"].update(
         targets=["CRAG", "Comprehensive RAG Benchmark"],
         facets=["identity"],
@@ -306,18 +291,46 @@ def test_verifier_computes_coverage_and_rejects_target_mismatch(
     assert ambiguous["status"] == "partial"
     assert ambiguous["covered"]["CRAG"] == {}
 
-    state["question"] = "Summarize three different approaches."
-    state["plan"].update(targets=[], facets=["approach description"])
-    state["evidence"] = sample_chunks
-    three = StubLLM(
-        {
-            "covered": {"question": {"approach description": ["E1", "E2", "E3"]}},
-            "corrective_query": "",
-        },
+
+def test_verifier_returns_partial_for_missing_facet() -> None:
+    state = initial_state("Explain MethodA retrieval and generation")
+    state["plan"].update(
+        targets=["MethodA"],
+        facets=["retrieval", "generation"],
     )
-    assert verifier_node(state, three)["verification"]["status"] == "complete"  # type: ignore[arg-type]
-    three.payload["covered"]["question"]["approach description"] = ["E1", "E2"]  # type: ignore[index]
-    assert verifier_node(state, three)["verification"]["status"] == "insufficient"  # type: ignore[arg-type]
+    state["evidence"] = [
+        {
+            "chunk_id": "method-a",
+            "paper": "MethodA.pdf",
+            "page": 1,
+            "text": "MethodA uses dynamic retrieval of passages.",
+            "score": 1.0,
+        },
+    ]
+
+    verification = verifier_node(state)["verification"]
+
+    assert verification["status"] == "partial"
+    assert verification["missing"] == ["MethodA: generation"]
+
+
+def test_verifier_prefers_insufficient_to_false_coverage() -> None:
+    state = initial_state("Explain MethodA retrieval")
+    state["plan"].update(targets=["MethodA"], facets=["retrieval"])
+    state["evidence"] = [
+        {
+            "chunk_id": "unrelated",
+            "paper": "Other.pdf",
+            "page": 1,
+            "text": "This paragraph is unrelated.",
+            "score": 1.0,
+        },
+    ]
+
+    verification = verifier_node(state)["verification"]
+
+    assert verification["status"] == "insufficient"
+    assert verification["missing"] == ["MethodA: retrieval"]
 
 
 def test_writer_uses_only_covered_ids_and_abstains_without_citations(
