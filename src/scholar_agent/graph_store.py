@@ -32,15 +32,14 @@ def _word_form(name: str) -> str:
 
 
 def extract_entities(text: str, limit: int = 20) -> list[str]:
-    """Extract transparent acronym, hyphenated-method, and title-case entities."""
+    """Extract normalized acronym, hyphenated-method, and title-case entities."""
     entities: list[str] = []
     seen: set[str] = set()
     for match in ENTITY_RE.finditer(text):
-        entity = match.group(0).strip(" ,.;:()[]")
-        key = normalize_entity(entity)
-        if key in STOP_ENTITIES or key in seen:
+        entity = normalize_entity(match.group(0).strip(" ,.;:()[]"))
+        if entity in STOP_ENTITIES or entity in seen:
             continue
-        seen.add(key)
+        seen.add(entity)
         entities.append(entity)
         if len(entities) >= limit:
             break
@@ -52,16 +51,13 @@ def build_graph(chunks: list[dict]) -> nx.Graph:
     graph = nx.Graph()
     for chunk in chunks:
         entities = extract_entities(chunk["text"])
-        keys: list[str] = []
         for entity in entities:
-            key = normalize_entity(entity)
-            keys.append(key)
-            if key not in graph:
-                graph.add_node(key, label=entity, chunks=[])
-            node_chunks: list[str] = graph.nodes[key]["chunks"]
+            if entity not in graph:
+                graph.add_node(entity, chunks=[])
+            node_chunks: list[str] = graph.nodes[entity]["chunks"]
             if chunk["chunk_id"] not in node_chunks:
                 node_chunks.append(chunk["chunk_id"])
-        for left, right in combinations(keys, 2):
+        for left, right in combinations(entities, 2):
             if graph.has_edge(left, right):
                 graph[left][right]["weight"] += 1
             else:

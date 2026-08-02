@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from scholar_agent.graph_store import build_graph, graph_search
+from scholar_agent.graph_store import build_graph, extract_entities, graph_search
 from scholar_agent.indexes import BM25Index, DenseIndex
 from scholar_agent.reranker import rerank
 from scholar_agent.retrieval import reciprocal_rank_fusion
@@ -31,6 +31,8 @@ def test_graph_retrieval_finds_entity_chunk(sample_chunks: list[dict]) -> None:
 
     results = graph_search(["Self-RAG"], graph, sample_chunks)
 
+    assert extract_entities("Self-RAG and SELF-RAG") == ["self-rag"]
+    assert graph.nodes["self-rag"] == {"chunks": ["self-1"]}
     assert results
     assert results[0]["chunk_id"] == "self-1"
     assert results[0]["paper"] == "Self-RAG.pdf"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from scholar_agent.graph_store import extract_entities
+from scholar_agent.graph_store import extract_entities, normalize_entity
 from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
 
@@ -74,7 +74,7 @@ def _heuristic_plan(question: str) -> dict:
     entities = list(
         dict.fromkeys(
             [
-                *methods,
+                *(normalize_entity(method) for method in methods),
                 *extract_entities(question),
             ]
         )

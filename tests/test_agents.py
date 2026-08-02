@@ -88,6 +88,8 @@ def test_offline_planner_does_not_invent_facets() -> None:
     assert plan["queries"] == [question]
     assert plan["facets"] == [question]
     assert plan["targets"] == ["MethodA", "MethodB"]
+    assert plan["entities"][:2] == ["methoda", "methodb"]
+    assert len(plan["entities"]) == len(set(plan["entities"]))
     assert invalid_json_plan == plan
 
 
