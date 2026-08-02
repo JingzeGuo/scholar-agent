@@ -56,7 +56,6 @@ Only method names written in the question become targets; open-ended discovery
 keeps `targets=[]` and uses question-level facets. It does not create a
 sub-question DAG or allocate budgets. Invalid JSON falls back to the original
 question as the retrieval query, without adding inferred requirements.
-Deterministic behavior is explicit through `--offline`.
 
 ### Researcher
 
@@ -109,9 +108,8 @@ hierarchy, cross-page chunk, or cache-invalidation framework is involved.
 
 BM25 tokens are persisted as a small JSON file. Dense embeddings are saved as
 `dense.npy` and searched with cosine similarity. The configured Sentence
-Transformer is downloaded and cached on first use. In an offline environment
-without the model cache, a deterministic hashing encoder keeps tests and the
-offline path runnable; the log makes that fallback explicit.
+Transformer is downloaded and cached on first use. A failed download aborts
+indexing instead of producing a lower-quality fallback index.
 
 ### Lightweight GraphRAG
 
@@ -128,8 +126,8 @@ global summaries, entity resolution, graph embeddings, or multi-hop search.
 
 RRF adds `1 / (60 + rank)` for every appearance of a chunk in a retriever
 ranking. A single Sentence Transformers `CrossEncoder` then reranks the first
-30 fused candidates. When that model is unavailable offline, a logged lexical
-scorer is used so the full architecture can still be demonstrated.
+30 fused candidates. The model is downloaded on first use; loading or download
+failure stops the request instead of switching to lexical scoring.
 
 ## Install and run
 
@@ -142,7 +140,6 @@ uv sync
 uv run scholar-agent ingest tests/fixtures/papers
 uv run scholar-agent index
 uv run scholar-agent ask "Compare Self-RAG and CRAG"
-uv run scholar-agent ask "Compare Self-RAG and CRAG" --offline
 ```
 
 The repository includes two tiny, synthetic two-page PDF excerpts for
@@ -154,7 +151,7 @@ Supported commands are intentionally limited to:
 ```text
 scholar-agent ingest <pdf-directory>
 scholar-agent index
-scholar-agent ask "<question>" [--offline]
+scholar-agent ask "<question>"
 ```
 
 ## Configuration
@@ -170,8 +167,8 @@ Configuration is a single environment-backed dataclass:
 | `SCHOLAR_AGENT_TOP_K` | `20` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
-Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` for online questions. Keys are never
-logged. Without a key, use `--offline`; online mode never silently downgrades.
+Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` before asking questions. Keys are
+never logged, and missing API or local model dependencies fail explicitly.
 
 ## Example
 
@@ -227,17 +224,16 @@ uv run ruff check .
 make quality
 ```
 
-Provider calls are optional. Any future provider-dependent test belongs behind
-the `live` pytest marker so the default suite stays deterministic and free.
+Tests inject deterministic model doubles. Provider-dependent tests belong
+behind the `live` pytest marker so the default suite stays deterministic and
+free.
 
 ## Limitations
 
 - Entity extraction is regex-based and intentionally has no resolution stage.
 - One-hop co-occurrence graphs are useful for local connections, not corpus-wide
   synthesis or deep relationship reasoning.
-- Hash embeddings and lexical reranking are offline fallbacks, not substitutes
-  for the configured neural models in a quality evaluation.
-- The deterministic Writer summarizes retrieved sentences; nuanced synthesis
-  benefits from a configured LLM.
+- First use requires network access to download the configured local models;
+  answering also requires a configured LLM API.
 - Citation validation proves provenance, not semantic entailment of every word.
 - Indexes are rebuilt as a unit and assume a laptop-scale interview corpus.

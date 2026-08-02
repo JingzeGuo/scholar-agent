@@ -45,7 +45,7 @@ def _missing_text(state: AgentState) -> str:
     return "\n".join([heading, *(f"- {item}" for item in missing)])
 
 
-def _offline_draft(state: AgentState, allowed: list[int]) -> str:
+def _safe_draft(state: AgentState, allowed: list[int]) -> str:
     status = state["verification"]["status"]
     if status == "insufficient":
         return (
@@ -94,13 +94,13 @@ def writer_node(state: AgentState, llm: LLMClient | None = None) -> dict:
     status = state["verification"]["status"]
     allowed = _allowed_ids(state)
     if status == "insufficient" or llm is None:
-        draft = _offline_draft(state, allowed)
+        draft = _safe_draft(state, allowed)
     else:
         draft = llm.complete(_writer_prompt(state, allowed))
         used = set(valid_evidence_ids(draft, len(state["evidence"])))
         if not used or not used.issubset(allowed):
             LOGGER.warning("[writer] draft used evidence outside verification; using fallback")
-            draft = _offline_draft(state, allowed)
+            draft = _safe_draft(state, allowed)
         elif status == "partial":
             draft = "\n\n".join([draft.strip(), _missing_text(state)])
 

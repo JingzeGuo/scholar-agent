@@ -10,6 +10,7 @@ import typer
 from openai import OpenAIError
 
 from scholar_agent.config import Settings
+from scholar_agent.indexes import ModelUnavailableError
 from scholar_agent.ingest import ingest_directory
 from scholar_agent.llm import LLMClient
 from scholar_agent.retrieval import RetrievalEngine, build_all_indexes
@@ -48,7 +49,11 @@ def ingest(pdf_directory: Path) -> None:
 def build_indexes() -> None:
     """Build BM25, dense embeddings, and the entity graph."""
     settings = _settings()
-    summary = build_all_indexes(settings)
+    try:
+        summary = build_all_indexes(settings)
+    except ModelUnavailableError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
     LOGGER.info(
         "[index] chunks=%d entities=%d edges=%d dense=%s",
         summary["chunks"],
@@ -59,31 +64,29 @@ def build_indexes() -> None:
     typer.echo("Built BM25, dense, and graph indexes")
 
 
-def _ask(question: str, offline: bool = False) -> str:
+def _ask(question: str) -> str:
     settings = _settings()
-    engine = RetrievalEngine.load(settings)
-    llm = None if offline else LLMClient.from_env(settings)
-    if offline:
-        LOGGER.info("[offline] deterministic planner, verifier, and writer")
-    elif llm is None:
+    llm = LLMClient.from_env(settings)
+    if llm is None:
         raise MissingAPIKeyError
+    engine = RetrievalEngine.load(settings)
     state = run_question(question, engine, settings, llm)
     return state["answer"]
 
 
 @app.command()
-def ask(
-    question: str,
-    offline: bool = typer.Option(False, "--offline", help="Use deterministic agents."),
-) -> None:
+def ask(question: str) -> None:
     """Run the complete four-agent workflow."""
     try:
-        typer.echo(_ask(question, offline))
+        typer.echo(_ask(question))
     except MissingAPIKeyError:
-        typer.echo("LLM API key missing. Run with --offline for deterministic mode.", err=True)
+        typer.echo("LLM API key missing. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.", err=True)
         raise typer.Exit(code=2) from None
     except OpenAIError:
-        typer.echo("LLM API unavailable. Run with --offline for deterministic mode.", err=True)
+        typer.echo("LLM API unavailable.", err=True)
+        raise typer.Exit(code=1) from None
+    except ModelUnavailableError as exc:
+        typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
 
 

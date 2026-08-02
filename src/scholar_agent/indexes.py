@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -13,9 +10,11 @@ from typing import Any
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-LOGGER = logging.getLogger(__name__)
 TOKEN_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)?")
-HASH_DIMENSIONS = 384
+
+
+class ModelUnavailableError(RuntimeError):
+    """Raised when a required local model cannot be resolved or downloaded."""
 
 
 def tokenize(text: str) -> list[str]:
@@ -29,11 +28,12 @@ def resolve_model_path(model_name: str) -> str:
         return str(local_path)
     from huggingface_hub import snapshot_download
 
-    offline = os.getenv("HF_HUB_OFFLINE", "").casefold() in {"1", "true", "yes"}
     try:
-        return snapshot_download(model_name, local_files_only=offline)
+        return snapshot_download(model_name)
     except Exception as exc:
-        raise OSError(f"model is unavailable: {model_name}") from exc
+        raise ModelUnavailableError(
+            f"Model unavailable and download failed: {model_name}",
+        ) from exc
 
 
 class BM25Index:
@@ -68,28 +68,21 @@ class BM25Index:
         return cls(chunks, tokens=tokens)
 
 
-def _hash_embeddings(texts: list[str]) -> np.ndarray:
-    vectors = np.zeros((len(texts), HASH_DIMENSIONS), dtype=np.float32)
-    for row, text in enumerate(texts):
-        for token in tokenize(text):
-            digest = hashlib.blake2b(token.encode(), digest_size=8).digest()
-            index = int.from_bytes(digest[:4], "little") % HASH_DIMENSIONS
-            sign = 1.0 if digest[4] & 1 else -1.0
-            vectors[row, index] += sign
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    return vectors / np.maximum(norms, 1e-12)
-
-
 def _sentence_embeddings(texts: list[str], model_name: str) -> np.ndarray:
-    from sentence_transformers import SentenceTransformer
+    try:
+        from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(resolve_model_path(model_name), local_files_only=True)
-    encoded: Any = model.encode(
-        texts,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
+        model = SentenceTransformer(resolve_model_path(model_name), local_files_only=True)
+        encoded: Any = model.encode(
+            texts,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+    except ModelUnavailableError:
+        raise
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ModelUnavailableError(f"Embedding model failed: {model_name}") from exc
     return np.asarray(encoded, dtype=np.float32)
 
 
@@ -101,6 +94,10 @@ class DenseIndex:
         model_name: str,
         backend: str,
     ) -> None:
+        if backend != "sentence-transformers":
+            raise ModelUnavailableError(
+                "Dense index uses an unsupported fallback backend; run `scholar-agent index`.",
+            )
         self.chunks = chunks
         self.embeddings = embeddings
         self.model_name = model_name
@@ -109,21 +106,11 @@ class DenseIndex:
     @classmethod
     def build(cls, chunks: list[dict], model_name: str) -> DenseIndex:
         texts = [item["text"] for item in chunks]
-        try:
-            embeddings = _sentence_embeddings(texts, model_name)
-            backend = "sentence-transformers"
-        except (ImportError, OSError, ValueError) as exc:
-            LOGGER.warning(
-                "[index] local embedding model unavailable; using hash fallback: %s", exc
-            )
-            embeddings = _hash_embeddings(texts)
-            backend = "hash"
-        return cls(chunks, embeddings, model_name, backend)
+        embeddings = _sentence_embeddings(texts, model_name)
+        return cls(chunks, embeddings, model_name, "sentence-transformers")
 
     def _encode_queries(self, queries: list[str]) -> np.ndarray:
-        if self.backend == "sentence-transformers":
-            return _sentence_embeddings(queries, self.model_name)
-        return _hash_embeddings(queries)
+        return _sentence_embeddings(queries, self.model_name)
 
     def search(self, queries: list[str], top_k: int = 20) -> list[dict]:
         if not queries or not self.chunks:

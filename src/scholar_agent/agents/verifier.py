@@ -15,7 +15,7 @@ EVIDENCE_ID_RE = re.compile(r"E(\d+)")
 
 
 def _facet_matches(facet: str, text: str) -> bool:
-    """Conservative lexical fallback used only without an LLM."""
+    """Conservative lexical coverage used by deterministic unit paths."""
     facet_terms = {term for term in tokenize(facet) if len(term) > 3}
     if not facet_terms:
         return False

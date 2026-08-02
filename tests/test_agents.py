@@ -77,7 +77,7 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert open_plan["facets"] == payload["facets"]
 
 
-def test_offline_planner_does_not_invent_facets() -> None:
+def test_deterministic_planner_does_not_invent_facets() -> None:
     question = "Compare MethodA and MethodB"
     plan = planner_node(initial_state(question))["plan"]
     invalid_json_plan = planner_node(

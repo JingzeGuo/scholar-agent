@@ -1,4 +1,4 @@
-"""Optional OpenAI-compatible LLM access with an explicit offline mode."""
+"""Required OpenAI-compatible LLM access for CLI questions."""
 
 from __future__ import annotations
 

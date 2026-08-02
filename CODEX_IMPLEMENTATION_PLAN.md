@@ -52,18 +52,18 @@ Acceptance:
 - Generate evidence-only drafts with `[E1]` references.
 - Deterministically discard nonexistent evidence IDs and render real
   `[paper.pdf p.N]` citations.
-- Expose only `ingest`, `index`, `ask`, and `demo`.
-- Include small page-aware PDF fixtures for offline demonstration.
+- Expose only `ingest`, `index`, and `ask`.
+- Include small page-aware PDF fixtures for deterministic tests.
 
 Acceptance:
 
 - Fake citations are removed.
 - Final citations use filenames and physical pages found in stored chunks.
-- All four CLI commands run without paid APIs.
+- Ingest and index run without paid APIs; ask requires a configured LLM API.
 
 ## Phase 4 — Focused deterministic tests
 
-- Keep 20–30 behavior-focused tests after adding correctness regressions.
+- Keep behavior-focused tests after adding correctness regressions.
 - Keep any provider-dependent test behind the `live` marker.
 
 Acceptance:
@@ -113,7 +113,7 @@ Acceptance:
 - Filter reranked evidence with a configurable relevance threshold.
 - Balance comparison evidence across named targets and merge retry evidence.
 - Verify target-level facet coverage as complete, partial, or insufficient.
-- Make partial answers and abstention strict, with explicit offline mode.
+- Make partial answers and abstention strict without silent CLI downgrade.
 
 Acceptance:
 
@@ -155,3 +155,17 @@ Acceptance:
 - Q19 distinguishes the two CRAG identities without inapplicable missing facets.
 - Q20 rejects the universal accuracy-and-cost claim without overgeneralization.
 - Source, README, deterministic-test, quality, and lockfile limits still pass.
+
+## Phase 10 — Strict runtime model dependencies
+
+- Remove the CLI `--offline` mode and require an LLM API for questions.
+- Download configured embedding and reranker models when absent.
+- Fail explicitly when model download or loading fails.
+- Reject persisted fallback dense indexes instead of silently using them.
+
+Acceptance:
+
+- The CLI exposes no `--offline` option or fallback guidance.
+- Runtime indexing never creates hash embeddings.
+- Runtime reranking never switches to lexical scoring.
+- Deterministic tests use injected model doubles and require no provider calls.
