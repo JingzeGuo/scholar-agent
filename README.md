@@ -165,6 +165,7 @@ Configuration is a single environment-backed dataclass:
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |
 | `SCHOLAR_AGENT_TOP_K` | `20` |
+| `SCHOLAR_AGENT_MAX_RETRIES` | `1` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
 Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` before asking questions. Keys are

@@ -21,6 +21,7 @@ class Settings:
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     min_rerank_score: float = -1.0
     top_k: int = 20
+    max_retries: int = 1
     data_dir: Path = Path("data")
 
     def __post_init__(self) -> None:
@@ -34,6 +35,8 @@ class Settings:
             raise ValueError("min_rerank_score must be finite")
         if not 1 <= self.top_k <= 100:
             raise ValueError("top_k must be between 1 and 100")
+        if self.max_retries < 0:
+            raise ValueError("max_retries cannot be negative")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -51,6 +54,7 @@ class Settings:
                 os.getenv("SCHOLAR_AGENT_MIN_RERANK_SCORE", str(cls.min_rerank_score)),
             ),
             top_k=int(os.getenv("SCHOLAR_AGENT_TOP_K", str(cls.top_k))),
+            max_retries=int(os.getenv("SCHOLAR_AGENT_MAX_RETRIES", str(cls.max_retries))),
             data_dir=Path(os.getenv("SCHOLAR_AGENT_DATA_DIR", str(cls.data_dir))),
         )
 
@@ -70,5 +74,6 @@ class Settings:
             "reranker_model": self.reranker_model,
             "min_rerank_score": self.min_rerank_score,
             "top_k": self.top_k,
+            "max_retries": self.max_retries,
             "data_dir": str(self.data_dir),
         }

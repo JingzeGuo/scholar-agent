@@ -26,10 +26,10 @@ def route_after_research(state: AgentState) -> str:
     )
 
 
-def route_after_verification(state: AgentState) -> str:
+def route_after_verification(state: AgentState, settings: Settings) -> str:
     if state["verification"]["status"] == "complete":
         return "writer"
-    if state["retry_count"] >= 1:
+    if state["retry_count"] >= settings.max_retries:
         return "writer"
     return "researcher"
 
@@ -56,7 +56,7 @@ def build_workflow(
     )
     workflow.add_conditional_edges(
         "verifier",
-        route_after_verification,
+        lambda state: route_after_verification(state, settings),
         {"researcher": "researcher", "writer": "writer"},
     )
     workflow.add_edge("writer", END)
@@ -94,6 +94,11 @@ def run_question(
 ) -> AgentState:
     result = build_workflow(engine, settings, llm).invoke(
         initial_state(question),
-        config={"recursion_limit": WORKFLOW_RECURSION_LIMIT},
+        config={
+            "recursion_limit": max(
+                WORKFLOW_RECURSION_LIMIT,
+                settings.max_retries * 2 + 4,
+            ),
+        },
     )
     return AgentState(**result)

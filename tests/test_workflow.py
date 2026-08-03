@@ -6,7 +6,7 @@ import scholar_agent.reranker
 import scholar_agent.workflow as workflow_module
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
-from scholar_agent.workflow import initial_state, run_question
+from scholar_agent.workflow import initial_state, route_after_verification, run_question
 
 
 class FakeEngine:
@@ -138,6 +138,16 @@ def test_initial_state_does_not_invent_a_facet() -> None:
     state = initial_state("Compare two methods")
 
     assert state["plan"]["facets"] == []
+
+
+def test_verification_retry_limit_is_configurable() -> None:
+    state = initial_state("question")
+    state["retry_count"] = 1
+
+    assert route_after_verification(state, Settings(max_retries=2)) == "researcher"
+
+    state["retry_count"] = 2
+    assert route_after_verification(state, Settings(max_retries=2)) == "writer"
 
 
 def test_agent_state_has_seven_cross_agent_fields() -> None:
