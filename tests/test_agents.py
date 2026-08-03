@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from scholar_agent.agents.planner import planner_node, target_matches
 from scholar_agent.agents.researcher import _select_evidence, researcher_node
 from scholar_agent.agents.verifier import verifier_node
@@ -11,8 +13,9 @@ from scholar_agent.workflow import initial_state
 
 
 class StubLLM:
-    def __init__(self, payload: object) -> None:
+    def __init__(self, payload: object, text: str = "") -> None:
         self.payload = payload
+        self.text = text
         self.last_prompt = ""
 
     def complete_json(self, prompt: str) -> dict[str, Any]:
@@ -21,6 +24,14 @@ class StubLLM:
             raise self.payload
         assert "Question" in prompt
         return self.payload  # type: ignore[return-value]
+
+    def complete(self, prompt: str) -> str:
+        self.last_prompt = prompt
+        return self.text
+
+
+def verifier_llm(covered: dict, corrective_query: str = "") -> StubLLM:
+    return StubLLM({"covered": covered, "corrective_query": corrective_query})
 
 
 class FakeEngine:
@@ -77,20 +88,42 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert open_plan["facets"] == payload["facets"]
 
 
-def test_deterministic_planner_does_not_invent_facets() -> None:
+def test_planner_rejects_invalid_llm_output() -> None:
     question = "Compare MethodA and MethodB"
-    plan = planner_node(initial_state(question))["plan"]
-    invalid_json_plan = planner_node(
-        initial_state(question),
-        StubLLM(ValueError("invalid JSON")),  # type: ignore[arg-type]
-    )["plan"]
 
-    assert plan["queries"] == [question]
-    assert plan["facets"] == [question]
-    assert plan["targets"] == ["MethodA", "MethodB"]
-    assert plan["entities"][:2] == ["methoda", "methodb"]
-    assert len(plan["entities"]) == len(set(plan["entities"]))
-    assert invalid_json_plan == plan
+    with pytest.raises(ValueError, match="invalid JSON"):
+        planner_node(
+            initial_state(question),
+            StubLLM(ValueError("invalid JSON")),  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="no queries"):
+        planner_node(
+            initial_state(question),
+            StubLLM(
+                {
+                    "queries": [],
+                    "entities": [],
+                    "targets": [],
+                    "facets": [],
+                    "output_language": "English",
+                },
+            ),  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="no facets"):
+        planner_node(
+            initial_state(question),
+            StubLLM(
+                {
+                    "queries": ["MethodA MethodB"],
+                    "entities": [],
+                    "targets": ["MethodA", "MethodB"],
+                    "facets": [],
+                    "output_language": "English",
+                },
+            ),  # type: ignore[arg-type]
+        )
 
 
 def test_target_matching_preserves_method_identity() -> None:
@@ -247,7 +280,13 @@ def test_verifier_rejects_target_mismatch_and_invalid_ids(
         facets=["retrieval"],
     )
     state["evidence"] = sample_chunks[:2]
-    assert verifier_node(state)["verification"]["status"] == "complete"
+    complete = verifier_llm(
+        {
+            "Self-RAG": {"retrieval": ["E1"]},
+            "CRAG": {"retrieval": ["E2"]},
+        },
+    )
+    assert verifier_node(state, complete)["verification"]["status"] == "complete"  # type: ignore[arg-type]
 
     mismatched = StubLLM(
         {
@@ -261,6 +300,9 @@ def test_verifier_rejects_target_mismatch_and_invalid_ids(
     )
     result = verifier_node(state, mismatched)  # type: ignore[arg-type]
     assert result["verification"]["status"] == "insufficient"
+
+    with pytest.raises(ValueError, match="covered must be an object"):
+        verifier_node(state, StubLLM({"covered": None}))  # type: ignore[arg-type]
 
 
 def test_verifier_rejects_shared_acronym_as_target_substitution(
@@ -310,7 +352,10 @@ def test_verifier_returns_partial_for_missing_facet() -> None:
         },
     ]
 
-    verification = verifier_node(state)["verification"]
+    verification = verifier_node(
+        state,
+        verifier_llm({"MethodA": {"retrieval": ["E1"]}}),  # type: ignore[arg-type]
+    )["verification"]
 
     assert verification["status"] == "partial"
     assert verification["missing"] == ["MethodA: generation"]
@@ -329,7 +374,7 @@ def test_verifier_prefers_insufficient_to_false_coverage() -> None:
         },
     ]
 
-    verification = verifier_node(state)["verification"]
+    verification = verifier_node(state, verifier_llm({}))["verification"]  # type: ignore[arg-type]
 
     assert verification["status"] == "insufficient"
     assert verification["missing"] == ["MethodA: retrieval"]
@@ -346,7 +391,10 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "missing": ["CRAG: mechanism"],
         "corrective_query": "",
     }
-    partial = writer_node(state)["answer"]
+    partial = writer_node(
+        state,
+        StubLLM({}, "Self-RAG uses adaptive retrieval [E1]."),  # type: ignore[arg-type]
+    )["answer"]
     assert "[Self-RAG.pdf p.1]" in partial
     assert "[CRAG.pdf p.2]" not in partial
     assert "Missing evidence" in partial
@@ -358,6 +406,20 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "corrective_query": "",
     }
     state["plan"]["output_language"] = "中文"
-    abstention = writer_node(state)["answer"]
+    abstention = writer_node(state, StubLLM({}))["answer"]  # type: ignore[arg-type]
     assert "没有足够相关的证据" in abstention
     assert ".pdf p." not in abstention
+
+
+def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
+    state = initial_state("Explain Self-RAG")
+    state["evidence"] = sample_chunks[:2]
+    state["verification"] = {
+        "status": "complete",
+        "covered": {"Self-RAG": {"mechanism": ["E1"]}},
+        "missing": [],
+        "corrective_query": "",
+    }
+
+    with pytest.raises(ValueError, match="not approved"):
+        writer_node(state, StubLLM({}, "Unsupported [E2]."))  # type: ignore[arg-type]

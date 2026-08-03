@@ -27,6 +27,8 @@ def route_after_research(state: AgentState) -> str:
 def route_after_verification(state: AgentState, settings: Settings) -> str:
     if state["verification"]["status"] == "complete":
         return "writer"
+    if not state["verification"]["corrective_query"]:
+        return "writer"
     if state["retry_count"] >= settings.max_retries:
         return "writer"
     return "researcher"
@@ -35,8 +37,10 @@ def route_after_verification(state: AgentState, settings: Settings) -> str:
 def build_workflow(
     engine: RetrievalEngine,
     settings: Settings,
-    llm: LLMClient | None = None,
+    llm: LLMClient | None,
 ) -> Any:
+    if llm is None:
+        raise ValueError("llm is required")
     workflow = StateGraph(AgentState)
     workflow.add_node("planner", lambda state: planner_node(state, llm))
     workflow.add_node(
@@ -88,7 +92,7 @@ def run_question(
     question: str,
     engine: RetrievalEngine,
     settings: Settings,
-    llm: LLMClient | None = None,
+    llm: LLMClient | None,
 ) -> AgentState:
     result = build_workflow(engine, settings, llm).invoke(initial_state(question))
     return AgentState(**result)

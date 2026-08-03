@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 import scholar_agent.reranker
 import scholar_agent.workflow as workflow_module
 from scholar_agent.config import Settings
@@ -31,7 +33,32 @@ class FakeCrossEncoder:
         return [5.0] * len(pairs)
 
 
-def _retrieval_plan(state: AgentState, llm: object = None) -> dict:
+class FakeLLM:
+    def complete_json(self, prompt: str) -> dict:
+        if "You are the Planner" in prompt:
+            return {
+                "queries": ["Self-RAG CRAG retrieval"],
+                "entities": ["Self-RAG", "CRAG"],
+                "targets": ["Self-RAG", "CRAG"],
+                "facets": ["retrieval"],
+                "output_language": "English",
+            }
+        if "E2:" in prompt:
+            covered = {
+                "Self-RAG": {"retrieval": ["E1"]},
+                "CRAG": {"retrieval": ["E2"]},
+            }
+        else:
+            covered = {"Self-RAG": {"retrieval": ["E1"]}, "CRAG": {}}
+        return {"covered": covered, "corrective_query": "Find CRAG retrieval evidence"}
+
+    def complete(self, prompt: str) -> str:
+        if "Status: complete" in prompt:
+            return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
+        return "Self-RAG uses adaptive retrieval [E1]."
+
+
+def _retrieval_plan(state: AgentState, llm: object) -> dict:
     return {
         "plan": {
             "queries": [state["question"]],
@@ -55,6 +82,7 @@ def test_langgraph_completes_four_agent_flow(
         "Compare Self-RAG and CRAG",
         engine,  # type: ignore[arg-type]
         Settings(),
+        FakeLLM(),  # type: ignore[arg-type]
     )
 
     assert result["verification"]["status"] == "complete"
@@ -69,6 +97,7 @@ def test_no_relevant_evidence_abstains_without_retry() -> None:
         "Evidence that does not exist",
         engine,  # type: ignore[arg-type]
         Settings(),
+        FakeLLM(),  # type: ignore[arg-type]
     )
 
     assert result["verification"]["status"] == "insufficient"
@@ -107,6 +136,7 @@ def test_partial_workflow_retries_exactly_once(
         "Compare Self-RAG and CRAG",
         engine,  # type: ignore[arg-type]
         Settings(),
+        FakeLLM(),  # type: ignore[arg-type]
     )
 
     assert result["verification"]["status"] == "partial"
@@ -128,7 +158,12 @@ def test_run_question_starts_with_initial_state(monkeypatch: Any) -> None:
     compiled = CapturingWorkflow()
     monkeypatch.setattr(workflow_module, "build_workflow", lambda *args: compiled)
 
-    result = run_question("question", FakeEngine([]), Settings())  # type: ignore[arg-type]
+    result = run_question(
+        "question",
+        FakeEngine([]),  # type: ignore[arg-type]
+        Settings(),
+        FakeLLM(),  # type: ignore[arg-type]
+    )
 
     assert result == initial_state("question")
     assert compiled.state == initial_state("question")
@@ -140,13 +175,23 @@ def test_initial_state_does_not_invent_a_facet() -> None:
     assert state["plan"]["facets"] == []
 
 
+def test_workflow_requires_an_llm() -> None:
+    with pytest.raises(ValueError, match="llm is required"):
+        workflow_module.build_workflow(FakeEngine([]), Settings(), None)  # type: ignore[arg-type]
+
+
 def test_verification_retry_limit_is_configurable() -> None:
     state = initial_state("question")
+    state["verification"]["corrective_query"] = "Find missing evidence"
     state["retry_count"] = 1
 
     assert route_after_verification(state, Settings(max_retries=2)) == "researcher"
 
     state["retry_count"] = 2
+    assert route_after_verification(state, Settings(max_retries=2)) == "writer"
+
+    state["retry_count"] = 0
+    state["verification"]["corrective_query"] = ""
     assert route_after_verification(state, Settings(max_retries=2)) == "writer"
 
 

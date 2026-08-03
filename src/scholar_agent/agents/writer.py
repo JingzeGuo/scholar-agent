@@ -89,19 +89,20 @@ Evidence:
 """
 
 
-def writer_node(state: AgentState, llm: LLMClient | None = None) -> dict:
-    """Write only from verifier-approved evidence, or abstain without an LLM."""
+def writer_node(state: AgentState, llm: LLMClient) -> dict:
+    """Write only from verifier-approved evidence, or abstain."""
     status = state["verification"]["status"]
     allowed = _allowed_ids(state)
-    if status == "insufficient" or llm is None:
+    if status == "insufficient":
         draft = _safe_draft(state, allowed)
     else:
         draft = llm.complete(_writer_prompt(state, allowed))
         used = set(valid_evidence_ids(draft, len(state["evidence"])))
-        if not used or not used.issubset(allowed):
-            LOGGER.warning("[writer] draft used evidence outside verification; using fallback")
-            draft = _safe_draft(state, allowed)
-        elif status == "partial":
+        if not used:
+            raise ValueError("Writer returned no valid evidence citations")
+        if not used.issubset(allowed):
+            raise ValueError("Writer cited evidence not approved by the Verifier")
+        if status == "partial":
             draft = "\n\n".join([draft.strip(), _missing_text(state)])
 
     draft = PAGE_CITATION_RE.sub("", draft)

@@ -5,16 +5,10 @@ from __future__ import annotations
 import logging
 import re
 
-from scholar_agent.graph_store import extract_entities, normalize_entity
 from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
-METHOD_RE = re.compile(
-    r"(?<![\w-])(?:[A-Z][a-z]+-[A-Z][A-Z0-9-]*|[A-Z]{2,10}|"
-    r"[A-Z][a-z]+[A-Z][A-Za-z0-9]*)(?![\w-])",
-)
-CJK_RE = re.compile(r"[\u3400-\u9fff]")
 GENERIC_TARGET_SUFFIXES = {"method", "methods", "approach", "approaches", "frameworks"}
 
 
@@ -65,30 +59,6 @@ def _explicit_targets(values: object, question: str) -> list[str]:
     return targets
 
 
-def _heuristic_plan(question: str) -> dict:
-    methods = _explicit_targets(
-        list(dict.fromkeys(METHOD_RE.findall(question))),
-        question,
-    )
-
-    entities = list(
-        dict.fromkeys(
-            [
-                *(normalize_entity(method) for method in methods),
-                *extract_entities(question),
-            ]
-        )
-    )
-
-    return {
-        "queries": [question],
-        "entities": entities[:5],
-        "targets": methods[:3],
-        "facets": [question],
-        "output_language": "Chinese" if CJK_RE.search(question) else "English",
-    }
-
-
 def _planner_prompt(question: str) -> str:
     return f"""You are the Planner in an academic retrieval workflow.
 
@@ -111,36 +81,28 @@ Question:
 """
 
 
-def planner_node(state: AgentState, llm: LLMClient | None = None) -> dict:
+def planner_node(state: AgentState, llm: LLMClient) -> dict:
     """Return one compact retrieval and answer plan."""
     question = state["question"].strip()
-    fallback = _heuristic_plan(question)
-    if llm is None:
-        plan = fallback
-    else:
-        try:
-            payload = llm.complete_json(_planner_prompt(question))
-            queries = _unique_strings(payload.get("queries"), 3)
-            entities = _unique_strings(payload.get("entities"), 5)
-            if not queries:
-                raise ValueError("Planner returned no queries")
-            language = payload.get("output_language")
-            targets = _explicit_targets(payload.get("targets"), question)
-            facets = _unique_strings(payload.get("facets"), 5) or [question]
+    payload = llm.complete_json(_planner_prompt(question))
+    queries = _unique_strings(payload.get("queries"), 3)
+    entities = _unique_strings(payload.get("entities"), 5)
+    if not queries:
+        raise ValueError("Planner returned no queries")
+    facets = _unique_strings(payload.get("facets"), 5)
+    if not facets:
+        raise ValueError("Planner returned no facets")
+    language = payload.get("output_language")
+    if not isinstance(language, str) or not 0 < len(language.strip()) <= 30:
+        raise ValueError("Planner returned an invalid output language")
 
-            plan = {
-                "queries": queries,
-                "entities": entities,
-                "targets": targets,
-                "facets": facets,
-                "output_language": (
-                    language.strip()
-                    if isinstance(language, str) and 0 < len(language.strip()) <= 30
-                    else fallback["output_language"]
-                ),
-            }
-        except (KeyError, TypeError, ValueError):
-            plan = fallback
+    plan = {
+        "queries": queries,
+        "entities": entities,
+        "targets": _explicit_targets(payload.get("targets"), question),
+        "facets": facets,
+        "output_language": language.strip(),
+    }
     LOGGER.info(
         "[planner] queries=%d targets=%d facets=%d language=%s",
         len(plan["queries"]),

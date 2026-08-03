@@ -14,17 +14,6 @@ LOGGER = logging.getLogger(__name__)
 EVIDENCE_ID_RE = re.compile(r"E(\d+)")
 
 
-def _facet_matches(facet: str, text: str) -> bool:
-    """Conservative lexical coverage used by deterministic unit paths."""
-    facet_terms = {term for term in tokenize(facet) if len(term) > 3}
-    if not facet_terms:
-        return False
-
-    overlap = facet_terms.intersection(tokenize(text))
-    required_overlap = 1 if len(facet_terms) <= 2 else 2
-    return len(overlap) >= required_overlap
-
-
 def _coverage_targets(state: AgentState) -> list[str]:
     targets = list(state["plan"]["targets"])
     return targets or ["question"]
@@ -46,27 +35,6 @@ def _matches_coverage_target(
         other != target and len(tokenize(other)) > target_length and target_matches(other, text)
         for other in named_targets
     )
-
-
-def _deterministic_coverage(state: AgentState) -> dict[str, dict[str, list[str]]]:
-    plan = state["plan"]
-    targets = _coverage_targets(state)
-    covered: dict[str, dict[str, list[str]]] = {}
-    for target in targets:
-        covered[target] = {}
-        for facet in plan["facets"]:
-            ids = []
-            for index, item in enumerate(state["evidence"], start=1):
-                target_ok = _matches_coverage_target(
-                    target,
-                    plan["targets"],
-                    item["text"],
-                )
-                if target_ok and _facet_matches(facet, item["text"]):
-                    ids.append(f"E{index}")
-            if ids:
-                covered[target][facet] = ids[:2]
-    return covered
 
 
 def _verifier_prompt(state: AgentState) -> str:
@@ -142,31 +110,16 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, dict[str, 
     return covered
 
 
-def verifier_node(state: AgentState, llm: LLMClient | None = None) -> dict:
+def verifier_node(state: AgentState, llm: LLMClient) -> dict:
     """Return complete, partial, or insufficient evidence coverage."""
     plan = state["plan"]
     coverage_targets = _coverage_targets(state)
-    corrective_query = ""
-
-    if llm is None:
-        covered = _deterministic_coverage(state)
-    else:
-        try:
-            payload = llm.complete_json(_verifier_prompt(state))
-            covered = _sanitize_coverage(
-                state,
-                payload.get("covered"),
-            )
-
-            raw_query = payload.get("corrective_query", "")
-            if isinstance(raw_query, str):
-                corrective_query = raw_query.strip()
-
-        except (KeyError, TypeError, ValueError):
-            LOGGER.warning(
-                "[verifier] invalid LLM response; using deterministic coverage",
-            )
-            covered = _deterministic_coverage(state)
+    payload = llm.complete_json(_verifier_prompt(state))
+    covered = _sanitize_coverage(state, payload.get("covered"))
+    raw_query = payload.get("corrective_query", "")
+    if not isinstance(raw_query, str):
+        raise ValueError("Verifier returned an invalid corrective query")
+    corrective_query = raw_query.strip()
 
     required = [(target, facet) for target in coverage_targets for facet in plan["facets"]]
 
@@ -182,9 +135,6 @@ def verifier_node(state: AgentState, llm: LLMClient | None = None) -> dict:
         status = "complete"
     else:
         status = "partial"
-
-    if missing and not corrective_query:
-        corrective_query = "Find direct evidence for " + "; ".join(missing)
 
     verification = {
         "status": status,
