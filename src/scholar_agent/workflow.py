@@ -15,8 +15,6 @@ from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
 from scholar_agent.retrieval import RetrievalEngine
 
-WORKFLOW_RECURSION_LIMIT = 10
-
 
 def route_after_research(state: AgentState) -> str:
     return (
@@ -92,13 +90,5 @@ def run_question(
     settings: Settings,
     llm: LLMClient | None = None,
 ) -> AgentState:
-    result = build_workflow(engine, settings, llm).invoke(
-        initial_state(question),
-        config={
-            "recursion_limit": max(
-                WORKFLOW_RECURSION_LIMIT,
-                settings.max_retries * 2 + 4,
-            ),
-        },
-    )
+    result = build_workflow(engine, settings, llm).invoke(initial_state(question))
     return AgentState(**result)

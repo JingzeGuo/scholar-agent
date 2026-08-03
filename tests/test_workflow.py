@@ -117,12 +117,12 @@ def test_partial_workflow_retries_exactly_once(
     assert "Missing evidence" in result["answer"]
 
 
-def test_run_question_sets_recursion_limit(monkeypatch: Any) -> None:
+def test_run_question_starts_with_initial_state(monkeypatch: Any) -> None:
     class CapturingWorkflow:
-        config: dict | None = None
+        state: AgentState | None = None
 
-        def invoke(self, state: AgentState, config: dict) -> AgentState:
-            self.config = config
+        def invoke(self, state: AgentState) -> AgentState:
+            self.state = state
             return state
 
     compiled = CapturingWorkflow()
@@ -131,7 +131,7 @@ def test_run_question_sets_recursion_limit(monkeypatch: Any) -> None:
     result = run_question("question", FakeEngine([]), Settings())  # type: ignore[arg-type]
 
     assert result == initial_state("question")
-    assert compiled.config == {"recursion_limit": 10}
+    assert compiled.state == initial_state("question")
 
 
 def test_initial_state_does_not_invent_a_facet() -> None:
