@@ -60,24 +60,38 @@ def _explicit_targets(values: object, question: str) -> list[str]:
 
 
 def _planner_prompt(question: str) -> str:
-    return f"""You are the Planner in an academic retrieval workflow.
+    return f"""You plan retrieval and verification for an evidence-grounded academic
+question-answering workflow. Transform the user's question into a compact retrieval plan;
+do not answer the question.
+
+The plan is consumed as follows:
+- "queries" are sent to lexical and dense retrievers.
+- "entities" seed one-hop academic entity-graph retrieval.
+- Every "target" x "facet" pair becomes an evidence-coverage check for the Verifier.
+- "output_language" controls the language used by the Writer.
 
 Return one JSON object with exactly these fields:
-- "queries": one to three concise English retrieval queries
-- "entities": zero to five important methods, papers, datasets, or authors
-- "targets": zero to three method or paper names explicitly written in the question
-- "facets": one to five aspects explicitly requested by the user
-- "output_language": the language expected by the user
+- "queries": one to three concise English search queries; preserve proper names and constraints
+- "entities": zero to five important method, paper, dataset, or author names for graph retrieval
+- "targets": zero to three method or paper names explicitly written in the question and requiring
+  separate evidence coverage
+- "facets": one to five minimal aspects required to answer the question; include only aspects
+  explicitly requested or directly implied by the question type
+- "output_language": the language explicitly requested by the user, otherwise the language of
+  the question
 
 Rules:
 - Do not invent targets that are absent from the question.
 - Do not invent requirements that the user did not ask for.
 - Preserve names and temporal constraints from the original question.
 - Open-ended discovery questions may have an empty targets list.
+- Queries must retrieve evidence rather than state conclusions or answer the question.
 - Keep the plan compact and directly grounded in the question.
 
-Question:
+User question:
+<user_question>
 {question}
+</user_question>
 """
 
 

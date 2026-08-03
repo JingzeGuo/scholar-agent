@@ -35,7 +35,7 @@ class FakeCrossEncoder:
 
 class FakeLLM:
     def complete_json(self, prompt: str) -> dict:
-        if "You are the Planner" in prompt:
+        if "<user_question>" in prompt:
             return {
                 "queries": ["Self-RAG CRAG retrieval"],
                 "entities": ["Self-RAG", "CRAG"],

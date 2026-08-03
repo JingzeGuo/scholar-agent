@@ -22,7 +22,6 @@ class StubLLM:
         self.last_prompt = prompt
         if isinstance(self.payload, Exception):
             raise self.payload
-        assert "Question" in prompt
         return self.payload  # type: ignore[return-value]
 
     def complete(self, prompt: str) -> str:
@@ -76,8 +75,13 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert plan["targets"] == ["Alpha", "Beta", "Gamma"]
     assert plan["facets"] == payload["facets"]
     assert plan["output_language"] == "Chinese"
+    assert "plan retrieval and verification" in llm.last_prompt
+    assert "do not answer the question" in llm.last_prompt
+    assert 'Every "target" x "facet" pair' in llm.last_prompt
+    assert "lexical and dense retrievers" in llm.last_prompt
     assert "Do not invent targets" in llm.last_prompt
     assert "Do not invent requirements" in llm.last_prompt
+    assert "<user_question>" in llm.last_prompt
 
     open_plan = planner_node(
         initial_state("Which retrieval methods are discussed in the corpus?"),
