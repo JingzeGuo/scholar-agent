@@ -134,6 +134,12 @@ def test_run_question_sets_recursion_limit(monkeypatch: Any) -> None:
     assert compiled.config == {"recursion_limit": 10}
 
 
+def test_initial_state_does_not_invent_a_facet() -> None:
+    state = initial_state("Compare two methods")
+
+    assert state["plan"]["facets"] == []
+
+
 def test_agent_state_has_seven_cross_agent_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
