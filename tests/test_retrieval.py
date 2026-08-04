@@ -10,6 +10,8 @@ from scholar_agent.indexes import (
     BM25Index,
     DenseIndex,
     ModelUnavailableError,
+    _embedding_model,
+    _sentence_embeddings,
     resolve_model_path,
 )
 from scholar_agent.reranker import rerank
@@ -32,6 +34,51 @@ def test_dense_retrieval_uses_cosine_similarity(sample_chunks: list[dict]) -> No
 
     assert results[0]["chunk_id"] == "crag-1"
     assert results[0]["score"] == 1.0
+
+
+def test_dense_retrieval_encodes_query_batch_once(sample_chunks: list[dict]) -> None:
+    embeddings = np.eye(3, dtype=np.float32)
+    dense = DenseIndex(sample_chunks, embeddings, "test", "sentence-transformers")
+    encoded: list[list[str]] = []
+
+    def encode(queries: list[str]) -> np.ndarray:
+        encoded.append(queries)
+        return np.asarray(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float32,
+        )
+
+    dense._encode_queries = encode  # type: ignore[method-assign]
+
+    rankings = dense.search_many(["reflection", "corrective"], top_k=2)
+
+    assert encoded == [["reflection", "corrective"]]
+    assert [ranking[0]["chunk_id"] for ranking in rankings] == ["self-1", "crag-1"]
+
+
+def test_embedding_model_is_cached_by_name(monkeypatch) -> None:
+    constructed: list[tuple[str, bool]] = []
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_path: str, *, local_files_only: bool) -> None:
+            constructed.append((model_path, local_files_only))
+
+        def encode(self, texts: list[str], **kwargs: object) -> np.ndarray:
+            return np.ones((len(texts), 2), dtype=np.float32)
+
+    monkeypatch.setattr(indexes_module, "resolve_model_path", lambda name: f"/models/{name}")
+    monkeypatch.setattr(
+        "sentence_transformers.SentenceTransformer",
+        FakeSentenceTransformer,
+    )
+    _embedding_model.cache_clear()
+    try:
+        _sentence_embeddings(["first"], "org/model")
+        _sentence_embeddings(["second"], "org/model")
+    finally:
+        _embedding_model.cache_clear()
+
+    assert constructed == [("/models/org/model", True)]
 
 
 def test_dense_index_does_not_fall_back_when_model_is_unavailable(

@@ -41,6 +41,9 @@ class RetrievalEngine:
     def dense_search(self, queries: list[str]) -> list[dict]:
         return self.dense.search(queries, self.top_k)
 
+    def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
+        return self.dense.search_many(queries, self.top_k)
+
     def graph_search(self, entities: list[str]) -> list[dict]:
         return graph_search(entities, self.graph, self.chunks, self.top_k)
 

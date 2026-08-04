@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from openai import OpenAIError
 from typer.testing import CliRunner
 
@@ -14,6 +16,13 @@ def test_cli_exposes_only_three_commands() -> None:
         assert command in result.output
     for removed in ("demo", "retrieve", "evaluate", "ablate", "corpus", "replay"):
         assert removed not in result.output
+
+
+def test_makefile_has_no_removed_demo_target() -> None:
+    makefile = (Path(__file__).parents[1] / "Makefile").read_text(encoding="utf-8")
+
+    assert " demo" not in makefile.splitlines()[0]
+    assert "\ndemo:" not in makefile
 
 
 def test_cli_requires_online_dependencies_and_reports_failures(monkeypatch) -> None:

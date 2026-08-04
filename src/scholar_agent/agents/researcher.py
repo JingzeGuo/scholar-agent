@@ -82,13 +82,14 @@ def _query_rankings(
     fallback_entities: list[str],
 ) -> tuple[list[list[dict]], list[list[dict]], list[list[dict]]]:
     sparse: list[list[dict]] = []
-    dense: list[list[dict]] = []
     graph: list[list[dict]] = []
     for query in queries:
         sparse.append(engine.sparse_search([query])[:PER_QUERY_CANDIDATES])
-        dense.append(engine.dense_search([query])[:PER_QUERY_CANDIDATES])
         entities = extract_entities(query) or fallback_entities
         graph.append(engine.graph_search(entities)[:PER_QUERY_CANDIDATES])
+    dense = [
+        ranking[:PER_QUERY_CANDIDATES] for ranking in engine.dense_search_many(queries)
+    ]
     return sparse, dense, graph
 
 

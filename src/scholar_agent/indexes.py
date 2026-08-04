@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -68,12 +69,21 @@ class BM25Index:
         return cls(chunks, tokens=tokens)
 
 
-def _sentence_embeddings(texts: list[str], model_name: str) -> np.ndarray:
+@lru_cache(maxsize=2)
+def _embedding_model(model_name: str) -> Any:
     try:
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer(resolve_model_path(model_name), local_files_only=True)
-        encoded: Any = model.encode(
+        return SentenceTransformer(resolve_model_path(model_name), local_files_only=True)
+    except ModelUnavailableError:
+        raise
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ModelUnavailableError(f"Embedding model failed: {model_name}") from exc
+
+
+def _sentence_embeddings(texts: list[str], model_name: str) -> np.ndarray:
+    try:
+        encoded: Any = _embedding_model(model_name).encode(
             texts,
             convert_to_numpy=True,
             normalize_embeddings=True,
@@ -111,6 +121,26 @@ class DenseIndex:
 
     def _encode_queries(self, queries: list[str]) -> np.ndarray:
         return _sentence_embeddings(queries, self.model_name)
+
+    def search_many(self, queries: list[str], top_k: int = 20) -> list[list[dict]]:
+        """Return one dense ranking per query after encoding the query batch once."""
+        if not queries:
+            return []
+        if not self.chunks:
+            return [[] for _ in queries]
+        query_vectors = self._encode_queries(queries)
+        score_rows = query_vectors @ self.embeddings.T
+        rankings: list[list[dict]] = []
+        for scores in score_rows:
+            ranked = np.argsort(-scores, kind="stable")[:top_k]
+            rankings.append(
+                [
+                    {**self.chunks[int(i)], "score": float(scores[int(i)])}
+                    for i in ranked
+                    if scores[int(i)] > 0
+                ],
+            )
+        return rankings
 
     def search(self, queries: list[str], top_k: int = 20) -> list[dict]:
         if not queries or not self.chunks:

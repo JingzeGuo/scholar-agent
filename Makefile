@@ -1,4 +1,4 @@
-.PHONY: sync test lint quality ingest index ask demo
+.PHONY: sync test lint quality ingest index ask
 
 sync:
 	UV_CACHE_DIR=/tmp/scholar-agent-uv-cache uv sync
@@ -19,6 +19,3 @@ index:
 
 ask:
 	UV_CACHE_DIR=/tmp/scholar-agent-uv-cache uv run scholar-agent ask "Compare Self-RAG and CRAG"
-
-demo:
-	UV_CACHE_DIR=/tmp/scholar-agent-uv-cache uv run scholar-agent demo

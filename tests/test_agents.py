@@ -47,6 +47,10 @@ class FakeEngine:
         self.dense_calls.append(queries)
         return self.chunks
 
+    def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
+        self.dense_calls.append(queries)
+        return [self.chunks for _ in queries]
+
     def graph_search(self, entities: list[str]) -> list[dict]:
         return self.chunks
 
@@ -265,11 +269,12 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     assert sum(target_matches("CRAG", item["text"]) for item in result["evidence"]) >= 2
     assert sum(item["paper"] == "2310.11511.pdf" for item in result["evidence"]) == 2
     assert result["retry_count"] == 1
-    assert all(len(call) == 1 for call in engine.sparse_calls + engine.dense_calls)
+    assert all(len(call) == 1 for call in engine.sparse_calls)
     assert {tuple(call) for call in engine.sparse_calls} == {
         ("Self-RAG CRAG",),
         ("CRAG correction mechanism",),
     }
+    assert engine.dense_calls == [["Self-RAG CRAG", "CRAG correction mechanism"]]
     assert len({(item["paper"], item["page"]) for item in result["evidence"]}) == len(
         result["evidence"],
     )

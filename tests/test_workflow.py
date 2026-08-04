@@ -24,6 +24,9 @@ class FakeEngine:
     def dense_search(self, queries: list[str]) -> list[dict]:
         return self.results
 
+    def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
+        return [self.results for _ in queries]
+
     def graph_search(self, entities: list[str]) -> list[dict]:
         return self.results
 
