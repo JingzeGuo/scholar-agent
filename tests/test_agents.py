@@ -44,10 +44,6 @@ class FakeEngine:
         self.sparse_calls.append(queries)
         return self.chunks
 
-    def dense_search(self, queries: list[str]) -> list[dict]:
-        self.dense_calls.append(queries)
-        return self.chunks
-
     def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
         self.dense_calls.append(queries)
         return [self.chunks for _ in queries]

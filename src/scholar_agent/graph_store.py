@@ -84,11 +84,6 @@ def _matching_nodes(graph: nx.Graph, entity: str) -> list[str]:
     if exact:
         return exact
 
-    if len(word_form.split()) > 1:
-        normalized = [node for node in graph if _word_form(node) == word_form]
-        if normalized:
-            return normalized
-
     compact = word_form.replace(" ", "")
     if len(compact) < 5:
         return []

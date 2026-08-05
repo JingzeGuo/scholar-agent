@@ -142,18 +142,6 @@ class DenseIndex:
             )
         return rankings
 
-    def search(self, queries: list[str], top_k: int = 20) -> list[dict]:
-        if not queries or not self.chunks:
-            return []
-        query_vectors = self._encode_queries(queries)
-        scores = np.max(query_vectors @ self.embeddings.T, axis=0)
-        ranked = np.argsort(-scores, kind="stable")[:top_k]
-        return [
-            {**self.chunks[int(i)], "score": float(scores[int(i)])}
-            for i in ranked
-            if scores[int(i)] > 0
-        ]
-
     def save(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         np.save(directory / "dense.npy", self.embeddings)

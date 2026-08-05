@@ -25,17 +25,6 @@ def test_bm25_returns_relevant_result(sample_chunks: list[dict]) -> None:
     assert results[0]["score"] > 0
 
 
-def test_dense_retrieval_uses_cosine_similarity(sample_chunks: list[dict]) -> None:
-    embeddings = np.eye(3, dtype=np.float32)
-    dense = DenseIndex(sample_chunks, embeddings, "test", "sentence-transformers")
-    dense._encode_queries = lambda queries: np.asarray([[0.0, 1.0, 0.0]], dtype=np.float32)  # type: ignore[method-assign]
-
-    results = dense.search(["corrective retrieval"], top_k=2)
-
-    assert results[0]["chunk_id"] == "crag-1"
-    assert results[0]["score"] == 1.0
-
-
 def test_dense_retrieval_encodes_query_batch_once(sample_chunks: list[dict]) -> None:
     embeddings = np.eye(3, dtype=np.float32)
     dense = DenseIndex(sample_chunks, embeddings, "test", "sentence-transformers")
@@ -54,6 +43,7 @@ def test_dense_retrieval_encodes_query_batch_once(sample_chunks: list[dict]) -> 
 
     assert encoded == [["reflection", "corrective"]]
     assert [ranking[0]["chunk_id"] for ranking in rankings] == ["self-1", "crag-1"]
+    assert rankings[1][0]["score"] == 1.0
 
 
 def test_embedding_model_is_cached_by_name(monkeypatch) -> None:

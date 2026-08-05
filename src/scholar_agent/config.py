@@ -16,7 +16,7 @@ load_dotenv()
 class Settings:
     """Only settings needed by the compact research path."""
 
-    llm_model: str = "deepseek-chat"
+    llm_model: str | None = None
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     min_rerank_score: float = -1.0
@@ -25,7 +25,7 @@ class Settings:
     data_dir: Path = Path("data")
 
     def __post_init__(self) -> None:
-        if not self.llm_model.strip():
+        if self.llm_model is not None and not self.llm_model.strip():
             raise ValueError("llm_model cannot be empty")
         if not self.embedding_model.strip():
             raise ValueError("embedding_model cannot be empty")
@@ -41,7 +41,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
-            llm_model=os.getenv("SCHOLAR_AGENT_LLM_MODEL", cls.llm_model),
+            llm_model=os.getenv("SCHOLAR_AGENT_LLM_MODEL"),
             embedding_model=os.getenv(
                 "SCHOLAR_AGENT_EMBEDDING_MODEL",
                 cls.embedding_model,
@@ -65,15 +65,3 @@ class Settings:
     @property
     def index_dir(self) -> Path:
         return self.data_dir / "indexes"
-
-    def describe(self) -> dict[str, str | int | float]:
-        """Return a secret-free configuration summary suitable for diagnostics."""
-        return {
-            "llm_model": self.llm_model,
-            "embedding_model": self.embedding_model,
-            "reranker_model": self.reranker_model,
-            "min_rerank_score": self.min_rerank_score,
-            "top_k": self.top_k,
-            "max_retries": self.max_retries,
-            "data_dir": str(self.data_dir),
-        }

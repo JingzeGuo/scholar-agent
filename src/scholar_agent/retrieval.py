@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from scholar_agent.config import Settings
 from scholar_agent.graph_store import build_graph, graph_search, load_graph, save_graph
 from scholar_agent.indexes import BM25Index, DenseIndex
@@ -38,9 +36,6 @@ class RetrievalEngine:
     def sparse_search(self, queries: list[str]) -> list[dict]:
         return self.bm25.search(queries, self.top_k)
 
-    def dense_search(self, queries: list[str]) -> list[dict]:
-        return self.dense.search(queries, self.top_k)
-
     def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
         return self.dense.search_many(queries, self.top_k)
 
@@ -62,11 +57,6 @@ def reciprocal_rank_fusion(*result_lists: list[dict], k: int = 60) -> list[dict]
         key=lambda item: scores[item["chunk_id"]],
         reverse=True,
     )
-
-
-def index_paths(data_dir: Path) -> tuple[Path, Path, Path]:
-    index_dir = data_dir / "indexes"
-    return index_dir / "bm25.json", index_dir / "dense.npy", index_dir / "graph.json"
 
 
 def build_all_indexes(settings: Settings) -> dict[str, object]:

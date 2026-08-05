@@ -164,7 +164,7 @@ Configuration is a single environment-backed dataclass:
 
 | Variable | Default |
 |---|---|
-| `SCHOLAR_AGENT_LLM_MODEL` | `deepseek-chat` |
+| `SCHOLAR_AGENT_LLM_MODEL` | provider default: `deepseek-chat` or `gpt-4.1-mini` |
 | `SCHOLAR_AGENT_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |

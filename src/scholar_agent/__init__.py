@@ -2,5 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+from importlib.metadata import version
+
+__version__ = version("scholar-agent")
 __all__ = ["__version__"]

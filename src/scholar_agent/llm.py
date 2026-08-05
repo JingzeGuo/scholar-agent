@@ -25,10 +25,10 @@ class LLMClient:
         if deepseek_key:
             return cls(
                 OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com"),
-                settings.llm_model,
+                settings.llm_model or "deepseek-chat",
             )
         if openai_key:
-            return cls(OpenAI(api_key=openai_key), settings.llm_model)
+            return cls(OpenAI(api_key=openai_key), settings.llm_model or "gpt-4.1-mini")
         return None
 
     def complete(self, prompt: str) -> str:
