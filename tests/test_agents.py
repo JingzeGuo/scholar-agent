@@ -402,7 +402,10 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
     }
     partial = writer_node(
         state,
-        StubLLM({}, "Self-RAG uses adaptive retrieval [E1]."),  # type: ignore[arg-type]
+        StubLLM(
+            {},
+            "Self-RAG uses adaptive retrieval [E1]. Missing evidence: CRAG mechanism.",
+        ),  # type: ignore[arg-type]
     )["answer"]
     assert "[Self-RAG.pdf p.1]" in partial
     assert "[CRAG.pdf p.2]" not in partial
@@ -415,9 +418,23 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "corrective_query": "",
     }
     state["plan"]["output_language"] = "中文"
-    abstention = writer_node(state, StubLLM({}))["answer"]  # type: ignore[arg-type]
+    llm = StubLLM({}, "当前语料库没有足够相关的证据来回答这个问题。")
+    abstention = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
     assert "没有足够相关的证据" in abstention
     assert ".pdf p." not in abstention
+    assert "Answer in 中文" in llm.last_prompt
+
+
+def test_writer_handles_output_languages_without_language_specific_code() -> None:
+    state = initial_state("Cette preuve existe-t-elle ?")
+    state["plan"]["output_language"] = "French"
+    llm = StubLLM({}, "Le corpus ne contient pas suffisamment de preuves pertinentes.")
+
+    answer = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
+
+    assert answer == "Le corpus ne contient pas suffisamment de preuves pertinentes."
+    assert "Answer in French" in llm.last_prompt
+    assert "Status: insufficient" in llm.last_prompt
 
 
 def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
@@ -432,3 +449,12 @@ def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
 
     with pytest.raises(ValueError, match="not approved"):
         writer_node(state, StubLLM({}, "Unsupported [E2]."))  # type: ignore[arg-type]
+
+    state["verification"] = {
+        "status": "insufficient",
+        "covered": {},
+        "missing": ["Self-RAG: mechanism"],
+        "corrective_query": "",
+    }
+    with pytest.raises(ValueError, match="while abstaining"):
+        writer_node(state, StubLLM({}, "Unsupported [E1]."))  # type: ignore[arg-type]

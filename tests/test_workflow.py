@@ -58,7 +58,9 @@ class FakeLLM:
     def complete(self, prompt: str) -> str:
         if "Status: complete" in prompt:
             return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
-        return "Self-RAG uses adaptive retrieval [E1]."
+        if "Status: partial" in prompt:
+            return "Self-RAG uses adaptive retrieval [E1]. Missing evidence: CRAG retrieval."
+        return "The corpus does not contain sufficiently relevant evidence."
 
 
 def _retrieval_plan(state: AgentState, llm: object) -> dict:
