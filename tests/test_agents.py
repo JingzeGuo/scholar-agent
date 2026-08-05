@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from scholar_agent.agents.planner import planner_node, target_matches
+from scholar_agent.agents.planner import _sanitize_retrievers, planner_node, target_matches
 from scholar_agent.agents.researcher import _select_evidence, researcher_node
 from scholar_agent.agents.verifier import verifier_node
 from scholar_agent.agents.writer import writer_node
@@ -38,6 +38,7 @@ class FakeEngine:
         self.chunks = chunks
         self.sparse_calls: list[list[str]] = []
         self.dense_calls: list[list[str]] = []
+        self.graph_calls: list[list[str]] = []
 
     def sparse_search(self, queries: list[str]) -> list[dict]:
         self.sparse_calls.append(queries)
@@ -52,6 +53,7 @@ class FakeEngine:
         return [self.chunks for _ in queries]
 
     def graph_search(self, entities: list[str]) -> list[dict]:
+        self.graph_calls.append(entities)
         return self.chunks
 
 
@@ -66,6 +68,7 @@ def test_planner_returns_compact_bounded_plan() -> None:
             "generation control",
             "evaluation results",
         ],
+        "retrievers": ["sparse", "dense", "graph"],
         "output_language": "Chinese",
     }
     llm = StubLLM(payload)
@@ -78,11 +81,13 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert plan["entities"] == ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]
     assert plan["targets"] == ["Alpha", "Beta", "Gamma"]
     assert plan["facets"] == payload["facets"]
+    assert plan["retrievers"] == ["sparse", "dense", "graph"]
     assert plan["output_language"] == "Chinese"
     assert "plan retrieval and verification" in llm.last_prompt
     assert "do not answer the question" in llm.last_prompt
     assert 'Every "target" x "facet" pair' in llm.last_prompt
-    assert "lexical and dense retrievers" in llm.last_prompt
+    assert "smallest sufficient subset" in llm.last_prompt
+    assert "lightweight entity co-occurrence retrieval" in llm.last_prompt
     assert "Do not invent targets" in llm.last_prompt
     assert "Do not invent requirements" in llm.last_prompt
     assert "<user_question>" in llm.last_prompt
@@ -94,6 +99,22 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert open_plan["targets"] == []
     assert open_plan["queries"] == ["q1", "q2", "q3"]
     assert open_plan["facets"] == payload["facets"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (["dense"], ["dense"]),
+        (["dense", "invalid", "dense", "sparse"], ["sparse", "dense"]),
+        (None, ["sparse", "dense"]),
+        ("dense", ["sparse", "dense"]),
+        ([], ["sparse", "dense"]),
+        (["invalid"], ["sparse", "dense"]),
+        (["graph"], ["dense", "graph"]),
+    ],
+)
+def test_planner_sanitizes_retriever_routes(raw: object, expected: list[str]) -> None:
+    assert _sanitize_retrievers(raw) == expected
 
 
 def test_planner_rejects_invalid_llm_output() -> None:
@@ -165,6 +186,50 @@ def test_researcher_selection_uses_score_not_filename_age() -> None:
     assert selected[0]["score"] == 0.9
 
 
+@pytest.mark.parametrize(
+    ("retrievers", "sparse_calls", "dense_calls", "graph_calls"),
+    [
+        (["sparse"], 1, 0, 0),
+        (["dense"], 0, 1, 0),
+        (["dense", "graph"], 0, 1, 1),
+    ],
+)
+def test_researcher_executes_only_selected_retrievers(
+    sample_chunks: list[dict],
+    retrievers: list[str],
+    sparse_calls: int,
+    dense_calls: int,
+    graph_calls: int,
+) -> None:
+    state = initial_state("Explain Self-RAG")
+    state["plan"].update(
+        queries=["Self-RAG retrieval"],
+        entities=["Self-RAG"],
+        targets=["Self-RAG"],
+        facets=["mechanism"],
+        retrievers=retrievers,
+    )
+    rerank_inputs: list[list[str]] = []
+
+    def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
+        rerank_inputs.append([item["chunk_id"] for item in candidates])
+        return [{**item, "score": 1.0} for item in candidates]
+
+    engine = FakeEngine(sample_chunks[:1])
+    result = researcher_node(
+        state,
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        scored,
+    )
+
+    assert len(engine.sparse_calls) == sparse_calls
+    assert len(engine.dense_calls) == dense_calls
+    assert len(engine.graph_calls) == graph_calls
+    assert rerank_inputs == [[sample_chunks[0]["chunk_id"]]]
+    assert [item["chunk_id"] for item in result["evidence"]] == [sample_chunks[0]["chunk_id"]]
+
+
 def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict]) -> None:
     state = initial_state("Compare Self-RAG and CRAG")
     state["plan"] = {
@@ -172,6 +237,7 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
         "entities": ["Self-RAG", "CRAG"],
         "targets": ["Self-RAG", "CRAG"],
         "facets": ["mechanism"],
+        "retrievers": ["sparse", "dense"],
         "output_language": "English",
     }
 
@@ -249,6 +315,7 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
         "entities": ["Self-RAG", "CRAG"],
         "targets": ["Self-RAG", "CRAG"],
         "facets": ["mechanism"],
+        "retrievers": ["dense", "graph"],
         "output_language": "English",
     }
     state["evidence"] = old
@@ -269,12 +336,9 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     assert sum(target_matches("CRAG", item["text"]) for item in result["evidence"]) >= 2
     assert sum(item["paper"] == "2310.11511.pdf" for item in result["evidence"]) == 2
     assert result["retry_count"] == 1
-    assert all(len(call) == 1 for call in engine.sparse_calls)
-    assert {tuple(call) for call in engine.sparse_calls} == {
-        ("Self-RAG CRAG",),
-        ("CRAG correction mechanism",),
-    }
+    assert engine.sparse_calls == []
     assert engine.dense_calls == [["Self-RAG CRAG", "CRAG correction mechanism"]]
+    assert len(engine.graph_calls) == 2
     assert len({(item["paper"], item["page"]) for item in result["evidence"]}) == len(
         result["evidence"],
     )

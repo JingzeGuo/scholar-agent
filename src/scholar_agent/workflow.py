@@ -73,6 +73,7 @@ def initial_state(question: str) -> AgentState:
             "entities": [],
             "targets": [],
             "facets": [],
+            "retrievers": ["sparse", "dense"],
             "output_language": "English",
         },
         "evidence": [],

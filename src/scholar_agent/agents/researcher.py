@@ -80,17 +80,24 @@ def _query_rankings(
     engine: RetrievalEngine,
     queries: list[str],
     fallback_entities: list[str],
-) -> tuple[list[list[dict]], list[list[dict]], list[list[dict]]]:
-    sparse: list[list[dict]] = []
-    graph: list[list[dict]] = []
+    retrievers: list[str],
+) -> dict[str, list[list[dict]]]:
+    rankings = {name: [] for name in retrievers}
     for query in queries:
-        sparse.append(engine.sparse_search([query])[:PER_QUERY_CANDIDATES])
-        entities = extract_entities(query) or fallback_entities
-        graph.append(engine.graph_search(entities)[:PER_QUERY_CANDIDATES])
-    dense = [
-        ranking[:PER_QUERY_CANDIDATES] for ranking in engine.dense_search_many(queries)
-    ]
-    return sparse, dense, graph
+        if "sparse" in retrievers:
+            rankings["sparse"].append(
+                engine.sparse_search([query])[:PER_QUERY_CANDIDATES],
+            )
+        if "graph" in retrievers:
+            entities = extract_entities(query) or fallback_entities
+            rankings["graph"].append(
+                engine.graph_search(entities)[:PER_QUERY_CANDIDATES],
+            )
+    if "dense" in retrievers:
+        rankings["dense"] = [
+            ranking[:PER_QUERY_CANDIDATES] for ranking in engine.dense_search_many(queries)
+        ]
+    return rankings
 
 
 def _unique_count(rankings: list[list[dict]]) -> int:
@@ -103,22 +110,26 @@ def researcher_node(
     settings: Settings,
     rerank_function: RerankFunction = rerank,
 ) -> dict:
-    """Run BM25, dense, graph, RRF, and reranking in a visible straight line."""
+    """Run the planned retrievers, RRF, and reranking in a visible straight line."""
     plan = state["plan"]
     queries = list(plan["queries"])
+    retrievers = plan["retrievers"]
     corrective_query = state["verification"].get("corrective_query", "")
     if corrective_query:
         queries.append(corrective_query)
 
-    sparse, dense, graph = _query_rankings(engine, queries, plan["entities"])
+    rankings = _query_rankings(engine, queries, plan["entities"], retrievers)
     LOGGER.info(
-        "[researcher] sparse=%d dense=%d graph=%d",
-        _unique_count(sparse),
-        _unique_count(dense),
-        _unique_count(graph),
+        "[researcher] retrievers=%s sparse=%d dense=%d graph=%d",
+        ",".join(retrievers),
+        _unique_count(rankings.get("sparse", [])),
+        _unique_count(rankings.get("dense", [])),
+        _unique_count(rankings.get("graph", [])),
     )
 
-    candidates = reciprocal_rank_fusion(*sparse, *dense, *graph)
+    candidates = reciprocal_rank_fusion(
+        *(ranking for retriever in retrievers for ranking in rankings[retriever]),
+    )
     LOGGER.info("[fusion] %d unique candidates", len(candidates))
     reranked = rerank_function(
         queries,

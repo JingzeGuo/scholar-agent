@@ -44,6 +44,7 @@ class FakeLLM:
                 "entities": ["Self-RAG", "CRAG"],
                 "targets": ["Self-RAG", "CRAG"],
                 "facets": ["retrieval"],
+                "retrievers": ["sparse", "dense", "graph"],
                 "output_language": "English",
             }
         if "E2:" in prompt:
@@ -70,6 +71,7 @@ def _retrieval_plan(state: AgentState, llm: object) -> dict:
             "entities": ["Self-RAG", "CRAG"],
             "targets": ["Self-RAG", "CRAG"],
             "facets": ["retrieval"],
+            "retrievers": ["sparse", "dense", "graph"],
             "output_language": "English",
         },
     }
@@ -178,6 +180,7 @@ def test_initial_state_does_not_invent_a_facet() -> None:
     state = initial_state("Compare two methods")
 
     assert state["plan"]["facets"] == []
+    assert state["plan"]["retrievers"] == ["sparse", "dense"]
 
 
 def test_workflow_requires_an_llm() -> None:

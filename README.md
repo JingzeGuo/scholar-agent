@@ -4,7 +4,7 @@
 
 ScholarAgent is an interview-sized research system that keeps the interesting
 parts of agentic retrieval visible. Four LangGraph agents plan a search, run
-three complementary retrievers, verify the evidence, and write a page-cited
+the selected complementary retrievers, verify the evidence, and write a page-cited
 answer. The implementation deliberately avoids production wrappers, provider
 factories, vector databases, registries, event ledgers, and speculative APIs.
 
@@ -12,7 +12,7 @@ factories, vector databases, registries, event ledgers, and speculative APIs.
 
 ```text
 Planner
-  │  queries + explicit targets + shared facets
+  │  queries + selected retrievers + explicit targets + shared facets
   ▼
 Researcher
   ├── BM25 sparse retrieval
@@ -48,35 +48,39 @@ The Planner receives the original question and returns:
     "entities": list[str],  # maximum 5
     "targets": list[str],   # maximum 3
     "facets": list[str],    # target-level coverage
+    "retrievers": list[str],  # sparse, dense, and/or graph
     "output_language": str,
 }
 ```
 
 Only method names written in the question become targets; open-ended discovery
 keeps `targets=[]` and uses question-level facets. It does not create a
-sub-question DAG or allocate budgets. Invalid JSON falls back to the original
-question as the retrieval query, without adding inferred requirements.
+sub-question DAG or allocate budgets. The Planner selects the smallest sufficient
+retriever set once per question; missing or unusable routes conservatively fall
+back to sparse plus dense retrieval.
 
 ### Researcher
 
-The Researcher always executes the core retrieval pipeline directly:
+The Researcher executes only the Planner-selected routes in the core pipeline:
 
-1. Per-query BM25, dense cosine, and entity-graph retrieval.
-2. Eight candidates retained from each query/retriever route.
+1. Per-query BM25, dense cosine, and/or entity-graph retrieval.
+2. Eight candidates retained from each selected query/retriever route.
 3. Reciprocal Rank Fusion across the independent rankings.
 4. Up to 30 fused candidates retained for neural scoring.
 5. Multi-query cross-encoder reranking of at most 30 candidates.
 6. Relevance filtering, page deduplication, and named-target balance.
 
 There is no tool registry, retrieval toolkit, async task queue, vector-store
-interface, provider factory, or dynamic fusion weighting.
+interface, provider factory, or dynamic fusion weighting. This is bounded adaptive
+routing, not an unrestricted autonomous tool loop.
 
 ### Verifier
 
 The Verifier checks direct target and facet support. Missing support produces a
 partial or insufficient result rather than benchmark-specific completion.
 Incomplete evidence can trigger one retry; an unchanged evidence set skips the
-redundant second verification.
+redundant second verification. A corrective query reuses the Planner's original
+retriever set.
 
 ### Writer
 
@@ -114,7 +118,7 @@ indexing instead of producing a lower-quality fallback index.
 ### Lightweight GraphRAG
 
 Lightweight GraphRAG using entity co-occurrence and one-hop neighborhood
-expansion.
+expansion. It is a supplemental route rather than a standalone source of evidence.
 
 Each extracted entity is a NetworkX node whose `chunks` attribute contains the
 supporting chunk IDs. Entities in the same chunk are connected. Retrieval
@@ -174,8 +178,8 @@ never logged, and missing API or local model dependencies fail explicitly.
 ## Example
 
 ```text
-[planner] queries=3 targets=2 facets=3 language=English
-[researcher] sparse=4 dense=4 graph=4
+[planner] queries=3 targets=2 facets=3 retrievers=sparse,dense,graph language=English
+[researcher] retrievers=sparse,dense,graph sparse=4 dense=4 graph=4
 [fusion] 4 unique candidates
 [reranker] retained=4 rejected=0 threshold=-1.000
 [reranker] selected 4 evidence chunks
@@ -217,7 +221,7 @@ src/scholar_agent/
 
 The deterministic tests cover physical page provenance, all retrievers,
 multi-query reranking, target identity, thresholds, coverage, retry bounds,
-strict abstention, page citations, and the three-command CLI.
+adaptive retriever calls, strict abstention, page citations, and the three-command CLI.
 
 ```bash
 uv run pytest -q

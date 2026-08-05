@@ -10,6 +10,8 @@ from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
 GENERIC_TARGET_SUFFIXES = {"method", "methods", "approach", "approaches", "frameworks"}
+RETRIEVER_ORDER = ("sparse", "dense", "graph")
+DEFAULT_RETRIEVERS = ["sparse", "dense"]
 
 
 def _unique_strings(values: object, limit: int) -> list[str]:
@@ -20,6 +22,18 @@ def _unique_strings(values: object, limit: int) -> list[str]:
         if isinstance(value, str) and value.strip() and value.strip() not in result:
             result.append(value.strip())
     return result[:limit]
+
+
+def _sanitize_retrievers(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return DEFAULT_RETRIEVERS.copy()
+    selected = {item for item in value if isinstance(item, str) and item in RETRIEVER_ORDER}
+    retrievers = [name for name in RETRIEVER_ORDER if name in selected]
+    if not retrievers:
+        return DEFAULT_RETRIEVERS.copy()
+    if retrievers == ["graph"]:
+        return ["dense", "graph"]
+    return retrievers
 
 
 def target_matches(target: str, text: str) -> bool:
@@ -65,7 +79,7 @@ question-answering workflow. Transform the user's question into a compact retrie
 do not answer the question.
 
 The plan is consumed as follows:
-- "queries" are sent to lexical and dense retrievers.
+- All "queries" use the same question-level set of selected "retrievers".
 - "entities" seed one-hop academic entity-graph retrieval.
 - Every "target" x "facet" pair becomes an evidence-coverage check for the Verifier.
 - "output_language" controls the language used by the Writer.
@@ -77,8 +91,25 @@ Return one JSON object with exactly these fields:
   separate evidence coverage
 - "facets": one to five minimal aspects required to answer the question; include only aspects
   explicitly requested or directly implied by the question type
+- "retrievers": the smallest sufficient subset of "sparse", "dense", and "graph"
 - "output_language": the language explicitly requested by the user, otherwise the language of
   the question
+
+Retriever selection guidelines:
+- Use "sparse" for exact paper titles, method names, acronyms, author names, dataset names,
+  exact terminology, identifiers, numbers, or quoted phrases.
+- Use "dense" for conceptual or semantic questions, paraphrases, synonyms, descriptions where
+  exact terminology may be unknown, mechanisms, advantages, limitations, or high-level comparisons.
+- Use "graph" to supplement other retrieval for relationships between explicitly named entities,
+  such as method-to-method or method-to-paper associations, when one-hop expansion may improve
+  recall. This graph is only lightweight entity co-occurrence retrieval, not standalone evidence.
+- Select the smallest sufficient set. Do not select every retriever by default.
+
+Examples:
+- "What is Self-RAG?" -> ["sparse", "dense"]
+- "Which methods detect retrieval failures?" -> ["dense"]
+- "Compare Self-RAG and CRAG" -> ["sparse", "dense", "graph"]
+- "Who authored the Self-RAG paper?" -> ["sparse"]
 
 Rules:
 - Do not invent targets that are absent from the question.
@@ -115,13 +146,15 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
         "entities": entities,
         "targets": _explicit_targets(payload.get("targets"), question),
         "facets": facets,
+        "retrievers": _sanitize_retrievers(payload.get("retrievers")),
         "output_language": language.strip(),
     }
     LOGGER.info(
-        "[planner] queries=%d targets=%d facets=%d language=%s",
+        "[planner] queries=%d targets=%d facets=%d retrievers=%s language=%s",
         len(plan["queries"]),
         len(plan["targets"]),
         len(plan["facets"]),
+        ",".join(plan["retrievers"]),
         plan["output_language"],
     )
     return {"plan": plan}
