@@ -1,4 +1,4 @@
-"""Researcher Agent node."""
+"""Deterministic retrieval, fusion, reranking, and evidence-selection node."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from collections.abc import Callable
 
 from scholar_agent.agents.planner import target_matches
 from scholar_agent.config import Settings
-from scholar_agent.graph_store import extract_entities
 from scholar_agent.models import AgentState
 from scholar_agent.reranker import rerank
 from scholar_agent.retrieval import RetrievalEngine, reciprocal_rank_fusion
@@ -79,25 +78,12 @@ def _select_evidence(
 def _query_rankings(
     engine: RetrievalEngine,
     queries: list[str],
-    fallback_entities: list[str],
-    retrievers: list[str],
-) -> dict[str, list[list[dict]]]:
-    rankings = {name: [] for name in retrievers}
-    for query in queries:
-        if "sparse" in retrievers:
-            rankings["sparse"].append(
-                engine.sparse_search([query])[:PER_QUERY_CANDIDATES],
-            )
-        if "graph" in retrievers:
-            entities = extract_entities(query) or fallback_entities
-            rankings["graph"].append(
-                engine.graph_search(entities)[:PER_QUERY_CANDIDATES],
-            )
-    if "dense" in retrievers:
-        rankings["dense"] = [
-            ranking[:PER_QUERY_CANDIDATES] for ranking in engine.dense_search_many(queries)
-        ]
-    return rankings
+) -> tuple[list[list[dict]], list[list[dict]]]:
+    sparse = [engine.sparse_search([query])[:PER_QUERY_CANDIDATES] for query in queries]
+    dense = [
+        ranking[:PER_QUERY_CANDIDATES] for ranking in engine.dense_search_many(queries)
+    ]
+    return sparse, dense
 
 
 def _unique_count(rankings: list[list[dict]]) -> int:
@@ -110,30 +96,27 @@ def researcher_node(
     settings: Settings,
     rerank_function: RerankFunction = rerank,
 ) -> dict:
-    """Run the planned retrievers, RRF, and reranking in a visible straight line."""
+    """Run fixed hybrid retrieval, RRF, reranking, and evidence selection."""
     plan = state["plan"]
-    queries = list(plan["queries"])
-    retrievers = plan["retrievers"]
     corrective_query = state["verification"].get("corrective_query", "")
-    if corrective_query:
-        queries.append(corrective_query)
+    queries = [corrective_query] if corrective_query else list(plan["queries"])
 
-    rankings = _query_rankings(engine, queries, plan["entities"], retrievers)
+    sparse_rankings, dense_rankings = _query_rankings(engine, queries)
     LOGGER.info(
-        "[researcher] retrievers=%s sparse=%d dense=%d graph=%d",
-        ",".join(retrievers),
-        _unique_count(rankings.get("sparse", [])),
-        _unique_count(rankings.get("dense", [])),
-        _unique_count(rankings.get("graph", [])),
+        "[researcher] queries=%d sparse_candidates=%d dense_candidates=%d",
+        len(queries),
+        _unique_count(sparse_rankings),
+        _unique_count(dense_rankings),
     )
 
     candidates = reciprocal_rank_fusion(
-        *(ranking for retriever in retrievers for ranking in rankings[retriever]),
+        *(ranking for pair in zip(sparse_rankings, dense_rankings, strict=True) for ranking in pair),
     )
-    LOGGER.info("[fusion] %d unique candidates", len(candidates))
+    candidates = candidates[:MAX_RERANK_CANDIDATES]
+    LOGGER.info("[fusion] %d candidates for reranking", len(candidates))
     reranked = rerank_function(
         queries,
-        candidates[:MAX_RERANK_CANDIDATES],
+        candidates,
         settings.reranker_model,
     )
     retained = [item for item in reranked if item["score"] >= settings.min_rerank_score]

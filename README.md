@@ -1,170 +1,188 @@
 # ScholarAgent
 
-> A compact multi-agent GraphRAG system for evidence-grounded academic research.
+A compact agentic RAG workflow for evidence-grounded academic research.
 
-ScholarAgent is an interview-sized research system that keeps the interesting
-parts of agentic retrieval visible. Four LangGraph agents plan a search, run
-the selected complementary retrievers, verify the evidence, and write a page-cited
-answer. The implementation deliberately avoids production wrappers, provider
-factories, vector databases, registries, event ledgers, and speculative APIs.
+ScholarAgent answers questions over a small collection of academic PDFs while
+keeping the full retrieval and grounding path easy to inspect. It combines
+lexical and semantic search, reranks the fused candidates, checks whether the
+evidence covers the question, and renders only validated physical-page
+citations.
+
+## Problem
+
+Academic question answering needs more than a plausible response. The system
+must retrieve evidence for each requested method and aspect, detect incomplete
+support, restrict generation to approved passages, and preserve page-level
+provenance. ScholarAgent implements that path without a vector database,
+dynamic routing, or an open-ended tool loop.
 
 ## Architecture
 
 ```text
+Question
+   ↓
 Planner
-  │  queries + selected retrievers + explicit targets + shared facets
-  ▼
+   ↓
 Researcher
-  ├── BM25 sparse retrieval
-  ├── Sentence Transformer dense retrieval
-  ├── Lightweight GraphRAG
-  ├── Reciprocal Rank Fusion
-  └── Per-query candidates + reranking + target balance
-  ▼
+   ├── BM25
+   ├── Dense retrieval
+   ├── Reciprocal Rank Fusion
+   └── Cross-encoder reranking
+   ↓
 Verifier
-  ├── complete ────────────────────────────────┐
-  └── partial/insufficient → Researcher once  │
-                                               ▼
-Writer → deterministic citation validation → answer
+   ├── complete ───────────────────────────────┐
+   ├── partial + corrective query → Researcher once → Verifier
+   └── insufficient ──────────────────────────┤
+                                               ↓
+                                             Writer
+   ↓
+Deterministic physical-page citation validation
+   ↓
+Answer
 ```
 
-The compiled graph has exactly four nodes:
+LangGraph connects four workflow nodes:
 
-```text
-planner → researcher ─┬→ verifier ─┬→ writer → END
-                      │      ▲      │
-                      └──────┴──────┘  (abstain or retry once)
-```
+- Planner: LLM-based planning node.
+- Researcher: deterministic retrieval, fusion, reranking, and
+  evidence-selection node.
+- Verifier: LLM-based evidence-coverage node.
+- Writer: LLM-based grounded-answer node.
 
-## The four agents
+The Researcher is a deterministic workflow node, not an autonomous LLM agent.
+The only bounded loop is a single corrective retrieval requested by the
+Verifier.
 
-### Planner
+## Planner
 
-The Planner receives the original question and returns:
+The Planner decomposes the question into this compact plan:
 
 ```python
 {
-    "queries": list[str],   # maximum 3
-    "entities": list[str],  # maximum 5
-    "targets": list[str],   # maximum 3
-    "facets": list[str],    # target-level coverage
-    "retrievers": list[str],  # sparse, dense, and/or graph
+    "queries": list[str],          # 1–3 evidence-seeking queries
+    "targets": list[str],          # 0–3 methods or papers named in the question
+    "facets": list[str],           # 1–5 requested coverage aspects
     "output_language": str,
 }
 ```
 
-Only method names written in the question become targets; open-ended discovery
-keeps `targets=[]` and uses question-level facets. It does not create a
-sub-question DAG or allocate budgets. The Planner selects the smallest sufficient
-retriever set once per question; missing or unusable routes conservatively fall
-back to sparse plus dense retrieval.
+Targets must be explicitly present in the question. Open-ended discovery
+questions use `targets=[]`. Queries preserve names and constraints but retrieve
+evidence instead of proposing an answer.
 
-### Researcher
+## Hybrid retrieval
 
-The Researcher executes only the Planner-selected routes in the core pipeline:
+Every query always follows the same readable path:
 
-1. Per-query BM25, dense cosine, and/or entity-graph retrieval.
-2. Eight candidates retained from each selected query/retriever route.
-3. Reciprocal Rank Fusion across the independent rankings.
-4. Up to 30 fused candidates retained for neural scoring.
-5. Multi-query cross-encoder reranking of at most 30 candidates.
-6. Relevance filtering, page deduplication, and named-target balance.
-
-There is no tool registry, retrieval toolkit, async task queue, vector-store
-interface, provider factory, or dynamic fusion weighting. This is bounded adaptive
-routing, not an unrestricted autonomous tool loop.
-
-### Verifier
-
-The Verifier checks direct target and facet support. Missing support produces a
-partial or insufficient result rather than benchmark-specific completion.
-Incomplete evidence can trigger one retry; an unchanged evidence set skips the
-redundant second verification. A corrective query reuses the Planner's original
-retriever set.
-
-### Writer
-
-The Writer sees only verifier-approved evidence IDs. It answers covered facets,
-lists missing evidence for partial results, and abstains without citations when
-evidence is insufficient. Valid IDs become `[paper.pdf p.N]`.
-
-## Retrieval
-
-### Page-aware ingestion
-
-PyMuPDF extracts each physical page independently. Character chunks are about
-1,200 characters with about 150 characters of overlap. A chunk never crosses
-a page boundary and stores only:
-
-```python
-{
-    "chunk_id": str,
-    "paper": str,
-    "page": int,
-    "text": str,
-}
+```text
+BM25(query) ───┐
+               ├── RRF ──→ at most 30 candidates ──→ cross-encoder
+Dense(query) ──┘
 ```
 
-No corpus manifest, tokenizer fingerprint, header-frequency model, section
-hierarchy, cross-page chunk, or cache-invalidation framework is involved.
+For multiple queries, each BM25 and dense result remains an independent ranking
+before fusion. Dense queries are encoded together in one batch.
 
-### BM25 and dense indexes
+BM25 supplies exact lexical matching for titles, acronyms, and technical terms.
+Dense retrieval uses normalized Sentence Transformer embeddings and cosine
+similarity for semantic matches.
 
-BM25 tokens are persisted as a small JSON file. Dense embeddings are saved as
-`dense.npy` and searched with cosine similarity. The configured Sentence
-Transformer is downloaded and cached on first use. A failed download aborts
-indexing instead of producing a lower-quality fallback index.
+## Reciprocal Rank Fusion
 
-### Lightweight GraphRAG
+Reciprocal Rank Fusion (RRF) combines rankings without learned or dynamic
+weights. Each appearance contributes:
 
-Lightweight GraphRAG using entity co-occurrence and one-hop neighborhood
-expansion. It is a supplemental route rather than a standalone source of evidence.
+```text
+1 / (60 + rank)
+```
 
-Each extracted entity is a NetworkX node whose `chunks` attribute contains the
-supporting chunk IDs. Entities in the same chunk are connected. Retrieval
-matches the Planner's entities, expands one hop, collects supporting chunks,
-and ranks them by entity-hit score. It does not perform community detection,
-global summaries, entity resolution, graph embeddings, or multi-hop search.
+A chunk found by both BM25 and dense retrieval therefore receives more support
+than a chunk found in only one ranking. The fused list is capped at 30 candidates.
 
-### Fusion and reranking
+## Cross-encoder reranking and evidence selection
 
-RRF adds `1 / (60 + rank)` for every appearance of a chunk in a retriever
-ranking. A single Sentence Transformers `CrossEncoder` then reranks the first
-30 fused candidates. The model is downloaded on first use; loading or download
-failure stops the request instead of switching to lexical scoring.
+The cross-encoder scores each query/chunk pair, and each chunk keeps its best
+query score. Candidates below the configured relevance threshold are removed.
+The remaining evidence is selected with explicit, deterministic bounds:
 
-## Install and run
+- at most eight evidence chunks;
+- at most four chunks per paper;
+- no duplicate physical page;
+- up to two early slots per explicitly named target when matching evidence exists.
+
+During corrective retrieval, useful new evidence is merged with the existing
+selection. If the retry produces the same evidence IDs, the workflow terminates
+without repeating verification.
+
+## Verifier
+
+The Verifier checks every target × facet pair against supplied evidence IDs. It
+rejects unknown IDs, evidence for the wrong named target, and unsupported
+coverage. Its result is one of:
+
+- `complete`: every required pair has direct support;
+- `partial`: some requested coverage is supported;
+- `insufficient`: none of the required coverage is supported.
+
+For missing coverage it may return one concise corrective query. The default
+retry budget is one, so the workflow cannot become an unrestricted loop. If no
+useful query exists or the budget is exhausted, processing continues to the
+Writer.
+
+## Writer and citation validation
+
+The Writer sees only evidence approved by the Verifier. It cites temporary IDs
+such as `[E1]`; citing an unknown or unapproved ID is an error. Partial answers
+must name the missing coverage. Insufficient evidence produces a concise
+abstention with no citations.
+
+After writing, deterministic validation converts known IDs to citations copied
+from stored metadata:
+
+```text
+[E1] → [Self-RAG.pdf p.1]
+```
+
+Invented IDs and fabricated page citations are removed. This establishes
+provenance to a retrieved physical page; it does not prove that every generated
+claim is semantically true.
+
+## Page-aware ingestion and indexes
+
+PyMuPDF extracts each physical page independently. Character chunks are about
+1,200 characters with about 150 characters of overlap and never cross a page
+boundary. Every stored chunk has `chunk_id`, `paper`, `page`, and `text`.
+
+Indexing writes a small BM25 token file plus a NumPy dense-embedding matrix and
+metadata. The configured local embedding and reranker models download on first
+use and fail explicitly if unavailable.
+
+## Installation
 
 Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
-The first neural run may download and load model snapshots; report that cold
-start separately from subsequent warm-query latency in benchmarks and CLI runs.
 
 ```bash
 uv sync
+```
+
+Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` before asking a question. Ingestion
+and indexing do not require a paid API.
+
+## CLI
+
+```bash
 uv run scholar-agent ingest tests/fixtures/papers
 uv run scholar-agent index
 uv run scholar-agent ask "Compare Self-RAG and CRAG"
 ```
 
-The repository includes two tiny, synthetic two-page PDF excerpts for
-deterministic tests. They are not redistributed full papers. To use your own
-corpus, point `ingest` at a directory containing PDFs.
+The public CLI intentionally contains only `ingest`, `index`, and `ask`.
 
-Supported commands are intentionally limited to:
-
-```text
-scholar-agent ingest <pdf-directory>
-scholar-agent index
-scholar-agent ask "<question>"
-```
-
-## Configuration
-
-Configuration is a single environment-backed dataclass:
+Configuration uses environment variables:
 
 | Variable | Default |
 |---|---|
-| `SCHOLAR_AGENT_LLM_MODEL` | provider default: `deepseek-chat` or `gpt-4.1-mini` |
+| `SCHOLAR_AGENT_LLM_MODEL` | provider default |
 | `SCHOLAR_AGENT_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |
@@ -172,73 +190,26 @@ Configuration is a single environment-backed dataclass:
 | `SCHOLAR_AGENT_MAX_RETRIES` | `1` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
-Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` before asking questions. Keys are
-never logged, and missing API or local model dependencies fail explicitly.
+## Tests
 
-## Example
-
-```text
-[planner] queries=3 targets=2 facets=3 retrievers=sparse,dense,graph language=English
-[researcher] retrievers=sparse,dense,graph sparse=4 dense=4 graph=4
-[fusion] 4 unique candidates
-[reranker] retained=4 rejected=0 threshold=-1.000
-[reranker] selected 4 evidence chunks
-[reranker] E1 CRAG.pdf p.2 score=5.354
-[verifier] status=complete covered=6/6 missing=0
-[writer] status=complete citations=4 sources=2
-
-The retrieved evidence supports this comparison:
-- CRAG applies correction after initial retrieval ... [CRAG.pdf p.2]
-- Self-RAG ... generate reflection tokens. [Self-RAG.pdf p.1]
-```
-
-Every displayed filename and page is copied from the evidence chunk. A draft
-reference such as `[E99]` or `[Fake.pdf p.999]` is removed.
-
-## Project layout
-
-```text
-src/scholar_agent/
-├── agents/
-│   ├── planner.py
-│   ├── researcher.py
-│   ├── verifier.py
-│   └── writer.py
-├── citations.py
-├── cli.py
-├── config.py
-├── graph_store.py
-├── indexes.py
-├── ingest.py
-├── llm.py
-├── models.py
-├── reranker.py
-├── retrieval.py
-└── workflow.py
-```
-
-## Tests and quality
-
-The deterministic tests cover physical page provenance, all retrievers,
-multi-query reranking, target identity, thresholds, coverage, retry bounds,
-adaptive retriever calls, strict abstention, page citations, and the three-command CLI.
+The default suite is deterministic and makes no paid provider calls. It covers
+page provenance, BM25 and dense retrieval, batched query encoding, RRF,
+reranking, evidence selection, target/facet verification, retry bounds, strict
+abstention, and physical-page citation validation.
 
 ```bash
-uv run pytest -q
 uv run ruff check .
+uv run pytest -q
 make quality
 ```
 
-Tests inject deterministic model doubles. Provider-dependent tests belong
-behind the `live` pytest marker so the default suite stays deterministic and
-free.
+Provider-dependent tests belong behind the `live` pytest marker.
 
 ## Limitations
 
-- Entity extraction is regex-based and intentionally has no resolution stage.
-- One-hop co-occurrence graphs are useful for local connections, not corpus-wide
-  synthesis or deep relationship reasoning.
-- First use requires network access to download the configured local models;
-  answering also requires a configured LLM API.
-- Citation validation proves provenance, not semantic entailment of every word.
-- Indexes are rebuilt as a unit and assume a laptop-scale interview corpus.
+- The corpus and NumPy indexes are intended for laptop-scale use.
+- Retrieval is always BM25 plus dense search rather than adaptive routing.
+- The Verifier relies on an LLM and is not a formal entailment checker.
+- Citation validation establishes provenance, not semantic truth.
+- Indexes are rebuilt as a unit rather than updated incrementally.
+- Local embedding and reranker models require a download on first use.

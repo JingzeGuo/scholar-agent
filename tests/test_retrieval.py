@@ -5,7 +5,6 @@ import pytest
 
 import scholar_agent.indexes as indexes_module
 import scholar_agent.reranker as reranker_module
-from scholar_agent.graph_store import build_graph, extract_entities, graph_search
 from scholar_agent.indexes import (
     BM25Index,
     DenseIndex,
@@ -25,7 +24,9 @@ def test_bm25_returns_relevant_result(sample_chunks: list[dict]) -> None:
     assert results[0]["score"] > 0
 
 
-def test_dense_retrieval_encodes_query_batch_once(sample_chunks: list[dict]) -> None:
+def test_dense_search_returns_semantic_matches_and_encodes_query_batch_once(
+    sample_chunks: list[dict],
+) -> None:
     embeddings = np.eye(3, dtype=np.float32)
     dense = DenseIndex(sample_chunks, embeddings, "test", "sentence-transformers")
     encoded: list[list[str]] = []
@@ -106,39 +107,11 @@ def test_model_resolution_downloads_or_raises(monkeypatch) -> None:
         resolve_model_path("org/missing-model")
 
 
-def test_graph_retrieval_finds_entity_chunk(sample_chunks: list[dict]) -> None:
-    graph = build_graph(sample_chunks)
-
-    results = graph_search(["Self-RAG"], graph, sample_chunks)
-
-    assert extract_entities("Self-RAG and SELF-RAG") == ["self-rag"]
-    assert graph.nodes["self-rag"] == {"chunks": ["self-1"]}
-    assert results
-    assert results[0]["chunk_id"] == "self-1"
-    assert results[0]["paper"] == "Self-RAG.pdf"
-
-
-def test_graph_short_substring_does_not_match_crag(sample_chunks: list[dict]) -> None:
-    graph = build_graph(sample_chunks)
-
-    assert graph_search(["RAG"], graph, sample_chunks) == []
-
-
-def test_graph_normalizes_multiword_entity_alias(sample_chunks: list[dict]) -> None:
-    graph = build_graph(sample_chunks)
-
-    results = graph_search(["Self RAG"], graph, sample_chunks)
-
-    assert results
-    assert results[0]["chunk_id"] == "self-1"
-
-
-def test_rrf_rewards_results_found_by_multiple_retrievers(sample_chunks: list[dict]) -> None:
+def test_rrf_rewards_chunks_found_by_both_rankings(sample_chunks: list[dict]) -> None:
     sparse = [sample_chunks[0], sample_chunks[1]]
     dense = [sample_chunks[1], sample_chunks[2]]
-    graph = [sample_chunks[1]]
 
-    fused = reciprocal_rank_fusion(sparse, dense, graph)
+    fused = reciprocal_rank_fusion(sparse, dense)
 
     assert [item["chunk_id"] for item in fused] == ["crag-1", "self-1", "other-1"]
 

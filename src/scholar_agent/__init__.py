@@ -1,4 +1,4 @@
-"""A compact multi-agent GraphRAG system for academic research."""
+"""A compact agentic RAG workflow for evidence-grounded academic research."""
 
 from __future__ import annotations
 

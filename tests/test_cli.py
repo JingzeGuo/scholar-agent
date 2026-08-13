@@ -18,6 +18,19 @@ def test_cli_exposes_only_three_commands() -> None:
         assert removed not in result.output
 
 
+def test_index_command_reports_only_bm25_and_dense(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "build_all_indexes",
+        lambda settings: {"chunks": 4, "dense_backend": "sentence-transformers"},
+    )
+
+    result = CliRunner().invoke(app, ["index"])
+
+    assert result.exit_code == 0
+    assert "Built BM25 and dense indexes" in result.output
+
+
 def test_makefile_has_no_removed_demo_target() -> None:
     makefile = (Path(__file__).parents[1] / "Makefile").read_text(encoding="utf-8")
 

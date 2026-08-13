@@ -24,9 +24,6 @@ class FakeEngine:
     def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
         return [self.results for _ in queries]
 
-    def graph_search(self, entities: list[str]) -> list[dict]:
-        return self.results
-
 
 class FakeCrossEncoder:
     def predict(self, pairs: list[tuple[str, str]], show_progress_bar: bool) -> list[float]:
@@ -38,10 +35,8 @@ class FakeLLM:
         if "<user_question>" in prompt:
             return {
                 "queries": ["Self-RAG CRAG retrieval"],
-                "entities": ["Self-RAG", "CRAG"],
                 "targets": ["Self-RAG", "CRAG"],
                 "facets": ["retrieval"],
-                "retrievers": ["sparse", "dense", "graph"],
                 "output_language": "English",
             }
         if "E2:" in prompt:
@@ -65,16 +60,14 @@ def _retrieval_plan(state: AgentState, llm: object) -> dict:
     return {
         "plan": {
             "queries": [state["question"]],
-            "entities": ["Self-RAG", "CRAG"],
             "targets": ["Self-RAG", "CRAG"],
             "facets": ["retrieval"],
-            "retrievers": ["sparse", "dense", "graph"],
             "output_language": "English",
         },
     }
 
 
-def test_langgraph_completes_four_agent_flow(
+def test_complete_evidence_reaches_writer(
     sample_chunks: list[dict],
     monkeypatch: Any,
 ) -> None:
@@ -176,8 +169,12 @@ def test_run_question_starts_with_initial_state(monkeypatch: Any) -> None:
 def test_initial_state_does_not_invent_a_facet() -> None:
     state = initial_state("Compare two methods")
 
-    assert state["plan"]["facets"] == []
-    assert state["plan"]["retrievers"] == ["sparse", "dense"]
+    assert state["plan"] == {
+        "queries": [],
+        "targets": [],
+        "facets": [],
+        "output_language": "English",
+    }
 
 
 def test_workflow_requires_an_llm() -> None:

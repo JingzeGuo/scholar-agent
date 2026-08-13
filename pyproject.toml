@@ -1,15 +1,14 @@
 [project]
 name = "scholar-agent"
 version = "0.2.0"
-description = "A compact multi-agent GraphRAG system for evidence-grounded academic research"
+description = "A compact agentic RAG workflow for evidence-grounded academic research"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "ScholarAgent" }]
-keywords = ["rag", "agents", "literature", "graphrag", "langgraph"]
+keywords = ["rag", "agentic-workflow", "literature", "retrieval", "langgraph"]
 dependencies = [
     "langgraph>=0.2",
-    "networkx>=3.3",
     "numpy>=1.26",
     "openai>=1.40",
     "pydantic>=2.7",

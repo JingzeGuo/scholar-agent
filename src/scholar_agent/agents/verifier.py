@@ -1,4 +1,4 @@
-"""Verifier Agent node."""
+"""LLM-based evidence-coverage node."""
 
 from __future__ import annotations
 

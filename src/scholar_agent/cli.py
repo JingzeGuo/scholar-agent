@@ -17,7 +17,7 @@ from scholar_agent.retrieval import RetrievalEngine, build_all_indexes
 from scholar_agent.workflow import run_question
 
 app = typer.Typer(
-    help="Compact multi-agent GraphRAG for evidence-grounded academic research.",  # 项目说明
+    help="Compact agentic RAG for evidence-grounded academic research.",  # 项目说明
     add_completion=False,  # 不生成 shell 自动补全命令
     no_args_is_help=True,  # 不带参数时自动显示帮助
 )
@@ -47,7 +47,7 @@ def ingest(pdf_directory: Path) -> None:
 
 @app.command("index")
 def build_indexes() -> None:
-    """Build BM25, dense embeddings, and the entity graph."""
+    """Build BM25 and dense indexes."""
     settings = _settings()
     try:
         summary = build_all_indexes(settings)
@@ -55,13 +55,11 @@ def build_indexes() -> None:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
     LOGGER.info(
-        "[index] chunks=%d entities=%d edges=%d dense=%s",
+        "[index] chunks=%d dense=%s",
         summary["chunks"],
-        summary["entities"],
-        summary["edges"],
         summary["dense_backend"],
     )
-    typer.echo("Built BM25, dense, and graph indexes")
+    typer.echo("Built BM25 and dense indexes")
 
 
 def _ask(question: str) -> str:
@@ -76,7 +74,7 @@ def _ask(question: str) -> str:
 
 @app.command()
 def ask(question: str) -> None:
-    """Run the complete four-agent workflow."""
+    """Run the evidence-grounded research workflow."""
     try:
         typer.echo(_ask(question))
     except MissingAPIKeyError:

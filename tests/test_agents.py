@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from scholar_agent.agents.planner import _sanitize_retrievers, planner_node, target_matches
+from scholar_agent.agents.planner import planner_node, target_matches
 from scholar_agent.agents.researcher import _select_evidence, researcher_node
 from scholar_agent.agents.verifier import verifier_node
 from scholar_agent.agents.writer import writer_node
@@ -38,7 +38,6 @@ class FakeEngine:
         self.chunks = chunks
         self.sparse_calls: list[list[str]] = []
         self.dense_calls: list[list[str]] = []
-        self.graph_calls: list[list[str]] = []
 
     def sparse_search(self, queries: list[str]) -> list[dict]:
         self.sparse_calls.append(queries)
@@ -48,23 +47,19 @@ class FakeEngine:
         self.dense_calls.append(queries)
         return [self.chunks for _ in queries]
 
-    def graph_search(self, entities: list[str]) -> list[dict]:
-        self.graph_calls.append(entities)
-        return self.chunks
-
 
 def test_planner_returns_compact_bounded_plan() -> None:
     payload = {
         "queries": ["q1", "q2", "q3", "q4"],
-        "entities": ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"],
         "targets": ["Alpha", "Beta", "Gamma", "Delta"],
         "facets": [
             "retrieval trigger",
             "key differences",
             "generation control",
             "evaluation results",
+            "limitations",
+            "deployment",
         ],
-        "retrievers": ["sparse", "dense", "graph"],
         "output_language": "Chinese",
     }
     llm = StubLLM(payload)
@@ -74,16 +69,14 @@ def test_planner_returns_compact_bounded_plan() -> None:
     )["plan"]
 
     assert plan["queries"] == ["q1", "q2", "q3"]
-    assert plan["entities"] == ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]
     assert plan["targets"] == ["Alpha", "Beta", "Gamma"]
-    assert plan["facets"] == payload["facets"]
-    assert plan["retrievers"] == ["sparse", "dense", "graph"]
+    assert plan["facets"] == payload["facets"][:5]
     assert plan["output_language"] == "Chinese"
+    assert set(plan) == {"queries", "targets", "facets", "output_language"}
     assert "plan retrieval and verification" in llm.last_prompt
     assert "do not answer the question" in llm.last_prompt
     assert 'Every "target" x "facet" pair' in llm.last_prompt
-    assert "smallest sufficient subset" in llm.last_prompt
-    assert "lightweight entity co-occurrence retrieval" in llm.last_prompt
+    assert "both BM25 and dense retrieval" in llm.last_prompt
     assert "Do not invent targets" in llm.last_prompt
     assert "Do not invent requirements" in llm.last_prompt
     assert "<user_question>" in llm.last_prompt
@@ -94,23 +87,7 @@ def test_planner_returns_compact_bounded_plan() -> None:
     )["plan"]
     assert open_plan["targets"] == []
     assert open_plan["queries"] == ["q1", "q2", "q3"]
-    assert open_plan["facets"] == payload["facets"]
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        (["dense"], ["dense"]),
-        (["dense", "invalid", "dense", "sparse"], ["sparse", "dense"]),
-        (None, ["sparse", "dense"]),
-        ("dense", ["sparse", "dense"]),
-        ([], ["sparse", "dense"]),
-        (["invalid"], ["sparse", "dense"]),
-        (["graph"], ["dense", "graph"]),
-    ],
-)
-def test_planner_sanitizes_retriever_routes(raw: object, expected: list[str]) -> None:
-    assert _sanitize_retrievers(raw) == expected
+    assert open_plan["facets"] == payload["facets"][:5]
 
 
 def test_planner_rejects_invalid_llm_output() -> None:
@@ -128,7 +105,6 @@ def test_planner_rejects_invalid_llm_output() -> None:
             StubLLM(
                 {
                     "queries": [],
-                    "entities": [],
                     "targets": [],
                     "facets": [],
                     "output_language": "English",
@@ -142,7 +118,6 @@ def test_planner_rejects_invalid_llm_output() -> None:
             StubLLM(
                 {
                     "queries": ["MethodA MethodB"],
-                    "entities": [],
                     "targets": ["MethodA", "MethodB"],
                     "facets": [],
                     "output_language": "English",
@@ -156,7 +131,7 @@ def test_target_matching_preserves_method_identity() -> None:
     assert target_matches("CRAG", "CRAG uses a retrieval evaluator.")
     assert not target_matches("CRAG", "Self-CRAG combines both methods.")
     assert not target_matches("DPR", "ANCE uses one dense embedding.")
-    assert not target_matches("RAG", "CRAG, Self-RAG, and GraphRAG are methods.")
+    assert not target_matches("RAG", "CRAG and Self-RAG are methods.")
 
 
 def test_researcher_selection_uses_score_not_filename_age() -> None:
@@ -182,28 +157,12 @@ def test_researcher_selection_uses_score_not_filename_age() -> None:
     assert selected[0]["score"] == 0.9
 
 
-@pytest.mark.parametrize(
-    ("retrievers", "sparse_calls", "dense_calls", "graph_calls"),
-    [
-        (["sparse"], 1, 0, 0),
-        (["dense"], 0, 1, 0),
-        (["dense", "graph"], 0, 1, 1),
-    ],
-)
-def test_researcher_executes_only_selected_retrievers(
-    sample_chunks: list[dict],
-    retrievers: list[str],
-    sparse_calls: int,
-    dense_calls: int,
-    graph_calls: int,
-) -> None:
+def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict]) -> None:
     state = initial_state("Explain Self-RAG")
     state["plan"].update(
-        queries=["Self-RAG retrieval"],
-        entities=["Self-RAG"],
+        queries=["Self-RAG retrieval", "reflection tokens"],
         targets=["Self-RAG"],
         facets=["mechanism"],
-        retrievers=retrievers,
     )
     rerank_inputs: list[list[str]] = []
 
@@ -211,7 +170,7 @@ def test_researcher_executes_only_selected_retrievers(
         rerank_inputs.append([item["chunk_id"] for item in candidates])
         return [{**item, "score": 1.0} for item in candidates]
 
-    engine = FakeEngine(sample_chunks[:1])
+    engine = FakeEngine(sample_chunks[:2])
     result = researcher_node(
         state,
         engine,  # type: ignore[arg-type]
@@ -219,21 +178,34 @@ def test_researcher_executes_only_selected_retrievers(
         scored,
     )
 
-    assert len(engine.sparse_calls) == sparse_calls
-    assert len(engine.dense_calls) == dense_calls
-    assert len(engine.graph_calls) == graph_calls
-    assert rerank_inputs == [[sample_chunks[0]["chunk_id"]]]
-    assert [item["chunk_id"] for item in result["evidence"]] == [sample_chunks[0]["chunk_id"]]
+    assert engine.sparse_calls == [["Self-RAG retrieval"], ["reflection tokens"]]
+    assert engine.dense_calls == [["Self-RAG retrieval", "reflection tokens"]]
+    assert rerank_inputs == [["self-1", "crag-1"]]
+    assert [item["chunk_id"] for item in result["evidence"]] == ["self-1", "crag-1"]
+
+
+def test_researcher_deduplicates_physical_pages(sample_chunks: list[dict]) -> None:
+    duplicate_page = {
+        **sample_chunks[0],
+        "chunk_id": "self-2",
+        "text": "Self-RAG also uses reflection tokens.",
+        "score": 0.8,
+    }
+
+    selected = _select_evidence(
+        [{**sample_chunks[0], "score": 0.9}, duplicate_page, sample_chunks[1]],
+        [],
+    )
+
+    assert [item["chunk_id"] for item in selected] == ["self-1", "crag-1"]
 
 
 def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict]) -> None:
     state = initial_state("Compare Self-RAG and CRAG")
     state["plan"] = {
         "queries": ["Self-RAG CRAG"],
-        "entities": ["Self-RAG", "CRAG"],
         "targets": ["Self-RAG", "CRAG"],
         "facets": ["mechanism"],
-        "retrievers": ["sparse", "dense"],
         "output_language": "English",
     }
 
@@ -308,10 +280,8 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     state = initial_state("Compare Self-RAG and CRAG")
     state["plan"] = {
         "queries": ["Self-RAG CRAG"],
-        "entities": ["Self-RAG", "CRAG"],
         "targets": ["Self-RAG", "CRAG"],
         "facets": ["mechanism"],
-        "retrievers": ["dense", "graph"],
         "output_language": "English",
     }
     state["evidence"] = old
@@ -332,12 +302,36 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     assert sum(target_matches("CRAG", item["text"]) for item in result["evidence"]) >= 2
     assert sum(item["paper"] == "2310.11511.pdf" for item in result["evidence"]) == 2
     assert result["retry_count"] == 1
-    assert engine.sparse_calls == []
-    assert engine.dense_calls == [["Self-RAG CRAG", "CRAG correction mechanism"]]
-    assert len(engine.graph_calls) == 2
+    assert engine.sparse_calls == [["CRAG correction mechanism"]]
+    assert engine.dense_calls == [["CRAG correction mechanism"]]
     assert len({(item["paper"], item["page"]) for item in result["evidence"]}) == len(
         result["evidence"],
     )
+
+
+def test_researcher_marks_identical_retry_evidence(sample_chunks: list[dict]) -> None:
+    state = initial_state("Explain Self-RAG")
+    state["plan"].update(
+        queries=["Self-RAG"],
+        targets=["Self-RAG"],
+        facets=["mechanism"],
+    )
+    state["evidence"] = [{**sample_chunks[0], "score": 1.0}]
+    state["verification"]["corrective_query"] = "Self-RAG mechanism"
+
+    def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
+        return [{**item, "score": 1.0} for item in candidates]
+
+    result = researcher_node(
+        state,
+        FakeEngine(sample_chunks[:1]),  # type: ignore[arg-type]
+        Settings(),
+        scored,
+    )
+
+    assert result["evidence"] == state["evidence"]
+    assert result["retry_count"] == 1
+    assert result["stop_reason"] == "no_new_evidence"
 
 
 def test_verifier_rejects_target_mismatch_and_invalid_ids(

@@ -1,4 +1,4 @@
-"""Writer Agent node."""
+"""LLM-based grounded-answer node."""
 
 from __future__ import annotations
 
