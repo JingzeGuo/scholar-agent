@@ -81,7 +81,8 @@ Dense(query) ──┘
 ```
 
 For multiple queries, each BM25 and dense result remains an independent ranking
-before fusion. Dense queries are encoded together in one batch.
+of at most eight candidates before fusion. Dense queries are encoded together
+in one batch.
 
 BM25 supplies exact lexical matching for titles, acronyms, and technical terms.
 Dense retrieval uses normalized Sentence Transformer embeddings and cosine
@@ -154,8 +155,9 @@ PyMuPDF extracts each physical page independently. Character chunks are about
 boundary. Every stored chunk has `chunk_id`, `paper`, `page`, and `text`.
 
 Indexing writes a small BM25 token file plus a NumPy dense-embedding matrix and
-metadata. The configured local embedding and reranker models download on first
-use and fail explicitly if unavailable.
+metadata. Both indexes store an ordered corpus fingerprint and refuse to load
+after the chunks change. The configured local embedding and reranker models
+download on first use and fail explicitly if unavailable.
 
 ## Installation
 
@@ -186,7 +188,6 @@ Configuration uses environment variables:
 | `SCHOLAR_AGENT_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |
-| `SCHOLAR_AGENT_TOP_K` | `20` |
 | `SCHOLAR_AGENT_MAX_RETRIES` | `1` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 

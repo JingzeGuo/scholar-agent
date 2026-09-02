@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from functools import lru_cache
@@ -20,6 +21,13 @@ class ModelUnavailableError(RuntimeError):
 
 def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.casefold())
+
+
+def corpus_fingerprint(chunks: list[dict]) -> str:
+    """Hash ordered chunk IDs because persisted index rows are position-aligned."""
+    chunk_ids = [item["chunk_id"] for item in chunks]
+    payload = json.dumps(chunk_ids, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def resolve_model_path(model_name: str) -> str:
@@ -58,11 +66,17 @@ class BM25Index:
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"tokens": self.tokens}), encoding="utf-8")
+        metadata = {
+            "corpus_hash": corpus_fingerprint(self.chunks),
+            "tokens": self.tokens,
+        }
+        path.write_text(json.dumps(metadata), encoding="utf-8")
 
     @classmethod
     def load(cls, chunks: list[dict], path: Path) -> BM25Index:
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("corpus_hash") != corpus_fingerprint(chunks):
+            raise ValueError("BM25 index does not match the corpus; rebuild the index")
         tokens = payload["tokens"]
         if len(chunks) != len(tokens):
             raise ValueError("BM25 tokens do not align with chunks; rebuild the index")
@@ -145,12 +159,18 @@ class DenseIndex:
     def save(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         np.save(directory / "dense.npy", self.embeddings)
-        metadata = {"model": self.model_name, "backend": self.backend}
+        metadata = {
+            "model": self.model_name,
+            "backend": self.backend,
+            "corpus_hash": corpus_fingerprint(self.chunks),
+        }
         (directory / "dense.json").write_text(json.dumps(metadata), encoding="utf-8")
 
     @classmethod
     def load(cls, chunks: list[dict], directory: Path) -> DenseIndex:
         metadata = json.loads((directory / "dense.json").read_text(encoding="utf-8"))
+        if metadata.get("corpus_hash") != corpus_fingerprint(chunks):
+            raise ValueError("Dense index does not match the corpus; rebuild the index")
         embeddings = np.load(directory / "dense.npy")
         if len(chunks) != len(embeddings):
             raise ValueError("Dense embeddings do not align with chunks; rebuild the index")

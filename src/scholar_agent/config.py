@@ -20,7 +20,6 @@ class Settings:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     min_rerank_score: float = -1.0
-    top_k: int = 20
     max_retries: int = 1
     data_dir: Path = Path("data")
 
@@ -33,8 +32,6 @@ class Settings:
             raise ValueError("reranker_model cannot be empty")
         if not math.isfinite(self.min_rerank_score):
             raise ValueError("min_rerank_score must be finite")
-        if not 1 <= self.top_k <= 100:
-            raise ValueError("top_k must be between 1 and 100")
         if self.max_retries < 0:
             raise ValueError("max_retries cannot be negative")
 
@@ -53,7 +50,6 @@ class Settings:
             min_rerank_score=float(
                 os.getenv("SCHOLAR_AGENT_MIN_RERANK_SCORE", str(cls.min_rerank_score)),
             ),
-            top_k=int(os.getenv("SCHOLAR_AGENT_TOP_K", str(cls.top_k))),
             max_retries=int(os.getenv("SCHOLAR_AGENT_MAX_RETRIES", str(cls.max_retries))),
             data_dir=Path(os.getenv("SCHOLAR_AGENT_DATA_DIR", str(cls.data_dir))),
         )

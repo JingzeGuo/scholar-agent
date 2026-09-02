@@ -16,7 +16,6 @@ LOGGER = logging.getLogger(__name__)
 RerankFunction = Callable[[list[str], list[dict], str], list[dict]]
 MAX_EVIDENCE = 8
 MAX_RERANK_CANDIDATES = 30
-PER_QUERY_CANDIDATES = 8
 PER_TARGET = 2
 PER_PAPER = 4
 
@@ -79,10 +78,8 @@ def _query_rankings(
     engine: RetrievalEngine,
     queries: list[str],
 ) -> tuple[list[list[dict]], list[list[dict]]]:
-    sparse = [engine.sparse_search([query])[:PER_QUERY_CANDIDATES] for query in queries]
-    dense = [
-        ranking[:PER_QUERY_CANDIDATES] for ranking in engine.dense_search_many(queries)
-    ]
+    sparse = [engine.sparse_search([query]) for query in queries]
+    dense = engine.dense_search_many(queries)
     return sparse, dense
 
 

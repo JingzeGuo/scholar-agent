@@ -6,6 +6,8 @@ from scholar_agent.config import Settings
 from scholar_agent.indexes import BM25Index, DenseIndex
 from scholar_agent.models import load_chunks
 
+PER_QUERY_CANDIDATES = 8
+
 
 class RetrievalEngine:
     """Load and call the two indexes used by the fixed hybrid retrieval path."""
@@ -15,25 +17,23 @@ class RetrievalEngine:
         chunks: list[dict],
         bm25: BM25Index,
         dense: DenseIndex,
-        top_k: int = 20,
     ) -> None:
         self.chunks = chunks
         self.bm25 = bm25
         self.dense = dense
-        self.top_k = top_k
 
     @classmethod
     def load(cls, settings: Settings) -> RetrievalEngine:
         chunks = load_chunks(settings.chunks_path)
         bm25 = BM25Index.load(chunks, settings.index_dir / "bm25.json")
         dense = DenseIndex.load(chunks, settings.index_dir)
-        return cls(chunks, bm25, dense, settings.top_k)
+        return cls(chunks, bm25, dense)
 
     def sparse_search(self, queries: list[str]) -> list[dict]:
-        return self.bm25.search(queries, self.top_k)
+        return self.bm25.search(queries, PER_QUERY_CANDIDATES)
 
     def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
-        return self.dense.search_many(queries, self.top_k)
+        return self.dense.search_many(queries, PER_QUERY_CANDIDATES)
 
 
 def reciprocal_rank_fusion(*result_lists: list[dict], k: int = 60) -> list[dict]:

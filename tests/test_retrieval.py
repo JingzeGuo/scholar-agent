@@ -14,7 +14,7 @@ from scholar_agent.indexes import (
     resolve_model_path,
 )
 from scholar_agent.reranker import rerank
-from scholar_agent.retrieval import reciprocal_rank_fusion
+from scholar_agent.retrieval import RetrievalEngine, reciprocal_rank_fusion
 
 
 def test_bm25_returns_relevant_result(sample_chunks: list[dict]) -> None:
@@ -45,6 +45,62 @@ def test_dense_search_returns_semantic_matches_and_encodes_query_batch_once(
     assert encoded == [["reflection", "corrective"]]
     assert [ranking[0]["chunk_id"] for ranking in rankings] == ["self-1", "crag-1"]
     assert rankings[1][0]["score"] == 1.0
+
+
+def test_indexes_reject_a_different_same_size_corpus(
+    sample_chunks: list[dict],
+    tmp_path,
+) -> None:
+    bm25 = BM25Index(sample_chunks)
+    bm25.save(tmp_path / "bm25.json")
+    dense = DenseIndex(
+        sample_chunks,
+        np.eye(len(sample_chunks), dtype=np.float32),
+        "test",
+        "sentence-transformers",
+    )
+    dense.save(tmp_path)
+
+    changed_chunks = [
+        {**chunk, "chunk_id": f"replacement-{index}"}
+        for index, chunk in enumerate(sample_chunks)
+    ]
+
+    with pytest.raises(ValueError, match="BM25 index does not match the corpus"):
+        BM25Index.load(changed_chunks, tmp_path / "bm25.json")
+    with pytest.raises(ValueError, match="Dense index does not match the corpus"):
+        DenseIndex.load(changed_chunks, tmp_path)
+
+
+def test_retrieval_engine_uses_fixed_per_query_candidate_limit(
+    sample_chunks: list[dict],
+    monkeypatch,
+) -> None:
+    bm25 = BM25Index(sample_chunks)
+    dense = DenseIndex(
+        sample_chunks,
+        np.eye(len(sample_chunks), dtype=np.float32),
+        "test",
+        "sentence-transformers",
+    )
+    limits: list[int] = []
+
+    def sparse_search(queries: list[str], top_k: int) -> list[dict]:
+        limits.append(top_k)
+        return []
+
+    def dense_search(queries: list[str], top_k: int) -> list[list[dict]]:
+        limits.append(top_k)
+        return [[] for _ in queries]
+
+    monkeypatch.setattr(bm25, "search", sparse_search)
+    monkeypatch.setattr(dense, "search_many", dense_search)
+    engine = RetrievalEngine(sample_chunks, bm25, dense)
+
+    engine.sparse_search(["reflection"])
+    engine.dense_search_many(["reflection"])
+
+    assert limits == [8, 8]
 
 
 def test_embedding_model_is_cached_by_name(monkeypatch) -> None:
