@@ -6,6 +6,7 @@ import pytest
 
 from scholar_agent.agents.planner import planner_node, target_matches
 from scholar_agent.agents.researcher import (
+    _planned_queries,
     _rerank_candidates,
     _select_evidence,
     researcher_node,
@@ -236,7 +237,20 @@ def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict
     state = initial_state("Explain Self-RAG")
     state["plan"].update(
         queries=["Self-RAG retrieval", "reflection tokens"],
-        requirements=[requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"])],
+        requirements=[
+            requirement(
+                "R1",
+                "Explain Self-RAG's retrieval",
+                ["Self-RAG"],
+                "Self-RAG retrieval",
+            ),
+            requirement(
+                "R2",
+                "Explain Self-RAG's reflection tokens",
+                ["Self-RAG"],
+                "reflection tokens",
+            ),
+        ],
     )
     rerank_inputs: list[list[str]] = []
 
@@ -256,6 +270,31 @@ def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict
     assert engine.dense_calls == [["Self-RAG retrieval", "reflection tokens"]]
     assert rerank_inputs == [["self-1", "crag-1"]]
     assert [item["chunk_id"] for item in result["evidence"]] == ["self-1", "crag-1"]
+
+
+def test_researcher_groups_normalized_queries_by_requirement() -> None:
+    plan = {
+        "queries": ["Self-RAG retrieval mechanism"],
+        "requirements": [
+            requirement(
+                "R1",
+                "Explain Self-RAG's retrieval mechanism",
+                ["Self-RAG"],
+                "Self-RAG retrieval mechanism",
+            ),
+            requirement(
+                "R2",
+                "Describe when Self-RAG retrieves",
+                ["Self-RAG"],
+                "  self-rag   retrieval mechanism  ",
+            ),
+        ],
+    }
+
+    queries, query_requirement_ids = _planned_queries(plan)
+
+    assert queries == ["Self-RAG retrieval mechanism"]
+    assert query_requirement_ids == [["R1", "R2"]]
 
 
 def test_researcher_deduplicates_physical_pages(sample_chunks: list[dict]) -> None:
@@ -360,8 +399,13 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
     state["plan"] = {
         "queries": ["Self-RAG CRAG"],
         "requirements": [
-            requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
-            requirement("R2", "Explain CRAG's mechanism", ["CRAG"]),
+            requirement(
+                "R1",
+                "Explain Self-RAG's mechanism",
+                ["Self-RAG"],
+                "Self-RAG CRAG",
+            ),
+            requirement("R2", "Explain CRAG's mechanism", ["CRAG"], "Self-RAG CRAG"),
         ],
     }
 
@@ -383,6 +427,7 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
             "R1",
             "Explain RoseTTAFold All-Atom",
             ["RoseTTAFold All-Atom"],
+            "RoseTTAFold All-Atom",
         ),
     ]
 
@@ -399,11 +444,12 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
     assert absent_target["stop_reason"] == "no_relevant_evidence"
 
     state["plan"]["requirements"] = [
-        requirement("R1", "Explain Self-RAG", ["Self-RAG"]),
+        requirement("R1", "Explain Self-RAG", ["Self-RAG"], "Self-RAG CRAG"),
         requirement(
             "R2",
             "Explain RoseTTAFold All-Atom",
             ["RoseTTAFold All-Atom"],
+            "Self-RAG CRAG",
         ),
     ]
     partial_target = researcher_node(
@@ -416,7 +462,7 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
     assert partial_target["stop_reason"] == ""
 
     state["plan"]["requirements"] = [
-        requirement("R1", "Identify relevant methods", []),
+        requirement("R1", "Identify relevant methods", [], "Self-RAG CRAG"),
     ]
     open_question = researcher_node(
         state,

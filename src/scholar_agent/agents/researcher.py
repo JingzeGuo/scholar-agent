@@ -127,20 +127,20 @@ def _select_evidence(
 
 
 def _planned_queries(plan: dict) -> tuple[list[str], list[list[str]]]:
-    requirements = plan["requirements"]
-    if requirements and all(
-        isinstance(requirement.get("query"), str) and requirement["query"].strip()
-        for requirement in requirements
-    ):
-        return (
-            [requirement["query"].strip() for requirement in requirements],
-            [[requirement["id"]] for requirement in requirements],
-        )
-
-    # Accept older or hand-built plans while the persisted plan contract migrates.
-    requirement_ids = [requirement["id"] for requirement in requirements]
-    queries = list(plan["queries"])
-    return queries, [requirement_ids for _ in queries]
+    queries: list[str] = []
+    query_requirement_ids: list[list[str]] = []
+    query_indexes: dict[str, int] = {}
+    for requirement in plan["requirements"]:
+        query = requirement["query"].strip()
+        normalized_query = " ".join(query.casefold().split())
+        query_index = query_indexes.get(normalized_query)
+        if query_index is None:
+            query_indexes[normalized_query] = len(queries)
+            queries.append(query)
+            query_requirement_ids.append([])
+            query_index = len(queries) - 1
+        query_requirement_ids[query_index].append(requirement["id"])
+    return queries, query_requirement_ids
 
 
 def _attach_requirement_scores(
