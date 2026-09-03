@@ -52,8 +52,16 @@ def rerank(
     if len(raw_scores) != len(pairs):
         raise ValueError("Reranker returned an unexpected number of scores")
     width = len(queries)
-    scores = [max(raw_scores[start : start + width]) for start in range(0, len(raw_scores), width)]
+    query_scores = [
+        [float(score) for score in raw_scores[start : start + width]]
+        for start in range(0, len(raw_scores), width)
+    ]
     scored = [
-        {**item, "score": float(score)} for item, score in zip(candidates, scores, strict=True)
+        {
+            **item,
+            "score": max(scores),
+            "_query_scores": scores,
+        }
+        for item, scores in zip(candidates, query_scores, strict=True)
     ]
     return sorted(scored, key=lambda item: item["score"], reverse=True)

@@ -34,11 +34,11 @@ class FakeLLM:
     def complete_json(self, prompt: str) -> dict:
         if "<user_question>" in prompt:
             return {
-                "queries": ["Self-RAG CRAG retrieval"],
                 "requirements": [
                     {
                         "description": "Answer the requested evidence question",
                         "targets": [],
+                        "query": "Self-RAG CRAG retrieval",
                     },
                 ],
             }
@@ -62,11 +62,13 @@ def _retrieval_plan(state: AgentState, llm: object) -> dict:
                     "id": "R1",
                     "description": "Explain Self-RAG retrieval",
                     "targets": ["Self-RAG"],
+                    "query": "Self-RAG retrieval",
                 },
                 {
                     "id": "R2",
                     "description": "Explain CRAG retrieval",
                     "targets": ["CRAG"],
+                    "query": "CRAG retrieval",
                 },
             ],
         },

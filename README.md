@@ -59,22 +59,25 @@ The Planner decomposes the question into this compact plan:
 
 ```python
 {
-    "queries": list[str],          # 1–5 evidence-seeking queries
+    "queries": list[str],          # derived from requirement queries
     "requirements": [             # 1–5 independent coverage checks
         {
             "id": str,            # assigned by code: R1, R2, ...
             "description": str,
             "targets": list[str], # 0–3 methods or papers named in the question
+            "query": str,         # evidence query dedicated to this requirement
         },
     ],
 }
 ```
 
-Each requirement is verified independently, so asymmetric questions do not
-create unrequested target/aspect combinations. Targets must be explicitly
-present in the question; open-ended requirements use `targets=[]`. Queries
-preserve names and constraints but retrieve evidence instead of proposing an
-answer. Retrieval plans and final answers are always in English.
+Each requirement owns its retrieval query and is verified independently, so
+asymmetric questions do not create unrequested target/aspect combinations and
+different aspects of the same target retain separate retrieval signals. Targets
+must be explicitly present in the question; open-ended requirements use
+`targets=[]`. Queries preserve names and constraints but retrieve evidence
+instead of proposing an answer. Retrieval plans and final answers are always in
+English.
 
 ## Hybrid retrieval
 
@@ -87,8 +90,9 @@ Dense(query) ──┘
 ```
 
 For multiple queries, each BM25 and dense result remains an independent ranking
-of at most eight candidates before fusion. Dense queries are encoded together
-in one batch.
+of at most eight candidates before fusion. Up to four reranking candidates are
+reserved per requirement query before the 30-candidate pool is filled by global
+RRF rank. Dense queries are encoded together in one batch.
 
 BM25 supplies exact lexical matching for titles, acronyms, and technical terms.
 Dense retrieval uses normalized Sentence Transformer embeddings and cosine
@@ -109,12 +113,16 @@ than a chunk found in only one ranking. The fused list is capped at 30 candidate
 ## Cross-encoder reranking and evidence selection
 
 The cross-encoder scores each query/chunk pair, and each chunk keeps its best
-query score. Candidates below the configured relevance threshold are removed.
-The remaining evidence is selected with explicit, deterministic bounds:
+query score for global ranking while retaining its per-requirement scores for
+coverage selection. Candidates below the configured relevance threshold are
+removed. The remaining evidence is selected with explicit, deterministic
+bounds:
 
 - at most eight evidence chunks;
 - at most four chunks per paper;
 - no duplicate physical page;
+- one relevant slot per requirement when matching evidence exists;
+- comparison requirements receive evidence for each named target when possible;
 - up to two early slots per explicitly named target when matching evidence exists.
 
 During corrective retrieval, useful new evidence is merged with the existing

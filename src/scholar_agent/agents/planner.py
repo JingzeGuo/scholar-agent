@@ -76,8 +76,11 @@ def _requirements(values: object, question: str, limit: int = 5) -> list[dict]:
         if not isinstance(value, dict):
             continue
         description = value.get("description")
+        query = value.get("query")
         raw_targets = value.get("targets")
         if not isinstance(description, str) or not description.strip():
+            continue
+        if not isinstance(query, str) or not query.strip():
             continue
         if not isinstance(raw_targets, list):
             continue
@@ -97,6 +100,7 @@ def _requirements(values: object, question: str, limit: int = 5) -> list[dict]:
                 "id": f"R{len(requirements) + 1}",
                 "description": description,
                 "targets": targets,
+                "query": query.strip(),
             },
         )
         if len(requirements) >= limit:
@@ -110,16 +114,17 @@ question-answering workflow. Transform the user's question into a compact retrie
 do not answer the question.
 
 The plan is consumed as follows:
-- Every "query" is run through both BM25 and dense retrieval.
+- Every requirement query is run through both BM25 and dense retrieval.
 - Every "requirement" is one independent evidence-coverage check for the Verifier.
-- Requirement targets are used to balance evidence selection and prevent method substitution.
+- Requirement queries and targets are used to balance evidence selection and prevent method
+  or aspect substitution.
 
-Return one JSON object with exactly these fields:
-- "queries": one to five concise English search queries; preserve proper names and constraints
-- "requirements": one to five objects, each with exactly:
+Return one JSON object with exactly one field:
+- "requirements": one to five objects, each with exactly these fields:
   - "description": one concise English statement of an independently verifiable answer requirement
   - "targets": zero to three method or paper names explicitly written in the question that this
     requirement concerns
+  - "query": one concise English evidence-seeking search query for this requirement
 
 Rules:
 - Keep asymmetric requests separate instead of applying every aspect to every target.
@@ -127,7 +132,7 @@ Rules:
 - Do not invent targets or requirements that are absent from the question.
 - Preserve names and temporal constraints from the original question.
 - Open-ended discovery requirements may have an empty targets list.
-- Queries must retrieve evidence rather than state conclusions or answer the question.
+- Each query must target its own requirement rather than state a conclusion or answer the question.
 - Keep the plan compact and directly grounded in the question.
 
 User question:
@@ -141,12 +146,10 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
     """Return one compact retrieval and answer plan."""
     question = state["question"].strip()
     payload = llm.complete_json(_planner_prompt(question))
-    queries = _unique_strings(payload.get("queries"), 5)
-    if not queries:
-        raise ValueError("Planner returned no queries")
     requirements = _requirements(payload.get("requirements"), question)
     if not requirements:
         raise ValueError("Planner returned no valid requirements")
+    queries = _unique_strings([requirement["query"] for requirement in requirements], 5)
 
     plan = {
         "queries": queries,

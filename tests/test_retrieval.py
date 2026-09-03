@@ -181,6 +181,7 @@ def test_reranker_reorders_candidates(sample_chunks: list[dict]) -> None:
 
     assert ranked[0]["chunk_id"] == "crag-1"
     assert ranked[0]["score"] == 0.9
+    assert ranked[0]["_query_scores"] == [0.9, 0.1]
 
 
 def test_reranker_does_not_fall_back_when_model_is_unavailable(

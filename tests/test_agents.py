@@ -5,7 +5,11 @@ from typing import Any
 import pytest
 
 from scholar_agent.agents.planner import planner_node, target_matches
-from scholar_agent.agents.researcher import _select_evidence, researcher_node
+from scholar_agent.agents.researcher import (
+    _rerank_candidates,
+    _select_evidence,
+    researcher_node,
+)
 from scholar_agent.agents.verifier import verifier_node
 from scholar_agent.agents.writer import writer_node
 from scholar_agent.config import Settings
@@ -33,8 +37,16 @@ def verifier_llm(covered: dict, corrective_query: str = "") -> StubLLM:
     return StubLLM({"covered": covered, "corrective_query": corrective_query})
 
 
-def requirement(requirement_id: str, description: str, targets: list[str]) -> dict:
-    return {"id": requirement_id, "description": description, "targets": targets}
+def requirement(
+    requirement_id: str,
+    description: str,
+    targets: list[str],
+    query: str | None = None,
+) -> dict:
+    result = {"id": requirement_id, "description": description, "targets": targets}
+    if query is not None:
+        result["query"] = query
+    return result
 
 
 class FakeEngine:
@@ -54,14 +66,21 @@ class FakeEngine:
 
 def test_planner_returns_compact_bounded_plan() -> None:
     payload = {
-        "queries": ["q1", "q2", "q3", "q4", "q5", "q6"],
         "requirements": [
-            {"description": "Explain Alpha's retrieval trigger", "targets": ["Alpha"]},
-            {"description": "Identify Beta's limitations", "targets": ["Beta"]},
-            {"description": "Compare Gamma and Delta", "targets": ["Gamma", "Delta"]},
-            {"description": "Report Alpha's evaluation", "targets": ["Alpha"]},
-            {"description": "Describe Beta's deployment", "targets": ["Beta"]},
-            {"description": "Explain Gamma's generation", "targets": ["Gamma"]},
+            {
+                "description": "Explain Alpha's retrieval trigger",
+                "targets": ["Alpha"],
+                "query": "q1",
+            },
+            {"description": "Identify Beta's limitations", "targets": ["Beta"], "query": "q2"},
+            {
+                "description": "Compare Gamma and Delta",
+                "targets": ["Gamma", "Delta"],
+                "query": "q3",
+            },
+            {"description": "Report Alpha's evaluation", "targets": ["Alpha"], "query": "q4"},
+            {"description": "Describe Beta's deployment", "targets": ["Beta"], "query": "q5"},
+            {"description": "Explain Gamma's generation", "targets": ["Gamma"], "query": "q6"},
         ],
     }
     llm = StubLLM(payload)
@@ -72,11 +91,11 @@ def test_planner_returns_compact_bounded_plan() -> None:
 
     assert plan["queries"] == ["q1", "q2", "q3", "q4", "q5"]
     assert plan["requirements"] == [
-        requirement("R1", "Explain Alpha's retrieval trigger", ["Alpha"]),
-        requirement("R2", "Identify Beta's limitations", ["Beta"]),
-        requirement("R3", "Compare Gamma and Delta", ["Gamma", "Delta"]),
-        requirement("R4", "Report Alpha's evaluation", ["Alpha"]),
-        requirement("R5", "Describe Beta's deployment", ["Beta"]),
+        requirement("R1", "Explain Alpha's retrieval trigger", ["Alpha"], "q1"),
+        requirement("R2", "Identify Beta's limitations", ["Beta"], "q2"),
+        requirement("R3", "Compare Gamma and Delta", ["Gamma", "Delta"], "q3"),
+        requirement("R4", "Report Alpha's evaluation", ["Alpha"], "q4"),
+        requirement("R5", "Describe Beta's deployment", ["Beta"], "q5"),
     ]
     assert set(plan) == {"queries", "requirements"}
     assert "plan retrieval and verification" in llm.last_prompt
@@ -96,14 +115,20 @@ def test_planner_returns_compact_bounded_plan() -> None:
                     {
                         "description": "Identify the retrieval methods discussed",
                         "targets": [],
+                        "query": "retrieval methods discussed in the corpus",
                     },
                 ],
             },
         ),  # type: ignore[arg-type]
     )["plan"]
-    assert open_plan["queries"] == ["q1", "q2", "q3", "q4", "q5"]
+    assert open_plan["queries"] == ["retrieval methods discussed in the corpus"]
     assert open_plan["requirements"] == [
-        requirement("R1", "Identify the retrieval methods discussed", []),
+        requirement(
+            "R1",
+            "Identify the retrieval methods discussed",
+            [],
+            "retrieval methods discussed in the corpus",
+        ),
     ]
 
 
@@ -116,14 +141,17 @@ def test_planner_rejects_invalid_llm_output() -> None:
             StubLLM(ValueError("invalid JSON")),  # type: ignore[arg-type]
         )
 
-    with pytest.raises(ValueError, match="no queries"):
+    with pytest.raises(ValueError, match="no valid requirements"):
         planner_node(
             initial_state(question),
             StubLLM(
                 {
-                    "queries": [],
                     "requirements": [
-                        {"description": "Compare the methods", "targets": ["MethodA", "MethodB"]},
+                        {
+                            "description": "Compare the methods",
+                            "targets": ["MethodA", "MethodB"],
+                            "query": "",
+                        },
                     ],
                 },
             ),  # type: ignore[arg-type]
@@ -134,7 +162,6 @@ def test_planner_rejects_invalid_llm_output() -> None:
             initial_state(question),
             StubLLM(
                 {
-                    "queries": ["MethodA MethodB"],
                     "requirements": [],
                 },
             ),  # type: ignore[arg-type]
@@ -147,15 +174,16 @@ def test_planner_preserves_asymmetric_atomic_requirements() -> None:
         state,
         StubLLM(
             {
-                "queries": ["Self-RAG retrieval triggers", "CRAG limitations"],
                 "requirements": [
                     {
                         "description": "Explain Self-RAG retrieval triggers",
                         "targets": ["Self-RAG"],
+                        "query": "Self-RAG retrieval triggers",
                     },
                     {
                         "description": "Identify CRAG limitations",
                         "targets": ["CRAG"],
+                        "query": "CRAG limitations",
                     },
                 ],
             },
@@ -163,8 +191,13 @@ def test_planner_preserves_asymmetric_atomic_requirements() -> None:
     )["plan"]
 
     assert plan["requirements"] == [
-        requirement("R1", "Explain Self-RAG retrieval triggers", ["Self-RAG"]),
-        requirement("R2", "Identify CRAG limitations", ["CRAG"]),
+        requirement(
+            "R1",
+            "Explain Self-RAG retrieval triggers",
+            ["Self-RAG"],
+            "Self-RAG retrieval triggers",
+        ),
+        requirement("R2", "Identify CRAG limitations", ["CRAG"], "CRAG limitations"),
     ]
 
 
@@ -239,6 +272,87 @@ def test_researcher_deduplicates_physical_pages(sample_chunks: list[dict]) -> No
     )
 
     assert [item["chunk_id"] for item in selected] == ["self-1", "crag-1"]
+
+
+def test_researcher_reserves_evidence_for_requirements_with_the_same_target() -> None:
+    requirements = [
+        requirement(
+            "R1",
+            "Explain Self-RAG's retrieval mechanism",
+            ["Self-RAG"],
+            "Self-RAG retrieval mechanism",
+        ),
+        requirement(
+            "R2",
+            "Identify Self-RAG's limitations",
+            ["Self-RAG"],
+            "Self-RAG limitations",
+        ),
+    ]
+    mechanism_items = [
+        {
+            "chunk_id": f"mechanism-{index}",
+            "paper": f"Mechanism-{index}.pdf",
+            "page": 1,
+            "text": f"Self-RAG retrieval mechanism detail {index}.",
+            "score": 0.99 - index / 100,
+            "_requirement_scores": {
+                "R1": 0.99 - index / 100,
+                "R2": 0.1,
+            },
+        }
+        for index in range(8)
+    ]
+    limitation = {
+        "chunk_id": "limitation",
+        "paper": "Limitations.pdf",
+        "page": 1,
+        "text": "Self-RAG limitations and failure cases.",
+        "score": 0.9,
+        "_requirement_scores": {"R1": 0.1, "R2": 0.9},
+    }
+
+    selected = _select_evidence(mechanism_items + [limitation], requirements, min_score=0.5)
+
+    assert len(selected) == 8
+    assert "limitation" in {item["chunk_id"] for item in selected}
+
+
+def test_researcher_reserves_rerank_candidates_for_every_query() -> None:
+    sparse_rankings: list[list[dict]] = []
+    dense_rankings: list[list[dict]] = []
+    for query_index in range(4):
+        shared = [
+            {
+                "chunk_id": f"frequent-{query_index}-{rank}",
+                "paper": "Frequent.pdf",
+                "page": rank + 1,
+                "text": "frequent evidence",
+                "score": 0.0,
+            }
+            for rank in range(8)
+        ]
+        sparse_rankings.append(shared)
+        dense_rankings.append(shared)
+
+    sparse_rankings.append(
+        [
+            {
+                "chunk_id": f"rare-{rank}",
+                "paper": "Rare.pdf",
+                "page": rank + 1,
+                "text": "rare requirement evidence",
+                "score": 0.0,
+            }
+            for rank in range(8)
+        ],
+    )
+    dense_rankings.append([])
+
+    candidates = _rerank_candidates(sparse_rankings, dense_rankings)
+
+    assert len(candidates) == 30
+    assert "rare-0" in {item["chunk_id"] for item in candidates}
 
 
 def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict]) -> None:
