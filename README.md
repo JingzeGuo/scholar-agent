@@ -62,13 +62,13 @@ The Planner decomposes the question into this compact plan:
     "queries": list[str],          # 1–3 evidence-seeking queries
     "targets": list[str],          # 0–3 methods or papers named in the question
     "facets": list[str],           # 1–5 requested coverage aspects
-    "output_language": str,
 }
 ```
 
 Targets must be explicitly present in the question. Open-ended discovery
 questions use `targets=[]`. Queries preserve names and constraints but retrieve
-evidence instead of proposing an answer.
+evidence instead of proposing an answer. Retrieval plans and final answers are
+always in English.
 
 ## Hybrid retrieval
 

@@ -67,7 +67,6 @@ do not answer the question.
 The plan is consumed as follows:
 - Every "query" is run through both BM25 and dense retrieval.
 - Every "target" x "facet" pair becomes an evidence-coverage check for the Verifier.
-- "output_language" controls the language used by the Writer.
 
 Return one JSON object with exactly these fields:
 - "queries": one to three concise English search queries; preserve proper names and constraints
@@ -75,8 +74,6 @@ Return one JSON object with exactly these fields:
   separate evidence coverage
 - "facets": one to five minimal aspects required to answer the question; include only aspects
   explicitly requested or directly implied by the question type
-- "output_language": the language explicitly requested by the user, otherwise the language of
-  the question
 
 Rules:
 - Do not invent targets that are absent from the question.
@@ -103,21 +100,16 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
     facets = _unique_strings(payload.get("facets"), 5)
     if not facets:
         raise ValueError("Planner returned no facets")
-    language = payload.get("output_language")
-    if not isinstance(language, str) or not 0 < len(language.strip()) <= 30:
-        raise ValueError("Planner returned an invalid output language")
 
     plan = {
         "queries": queries,
         "targets": _explicit_targets(payload.get("targets"), question),
         "facets": facets,
-        "output_language": language.strip(),
     }
     LOGGER.info(
-        "[planner] queries=%d targets=%d facets=%d language=%s",
+        "[planner] queries=%d targets=%d facets=%d",
         len(plan["queries"]),
         len(plan["targets"]),
         len(plan["facets"]),
-        plan["output_language"],
     )
     return {"plan": plan}

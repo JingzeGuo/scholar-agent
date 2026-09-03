@@ -37,7 +37,6 @@ class FakeLLM:
                 "queries": ["Self-RAG CRAG retrieval"],
                 "targets": ["Self-RAG", "CRAG"],
                 "facets": ["retrieval"],
-                "output_language": "English",
             }
         if "E2:" in prompt:
             covered = {
@@ -62,7 +61,6 @@ def _retrieval_plan(state: AgentState, llm: object) -> dict:
             "queries": [state["question"]],
             "targets": ["Self-RAG", "CRAG"],
             "facets": ["retrieval"],
-            "output_language": "English",
         },
     }
 
@@ -173,7 +171,6 @@ def test_initial_state_does_not_invent_a_facet() -> None:
         "queries": [],
         "targets": [],
         "facets": [],
-        "output_language": "English",
     }
 
 

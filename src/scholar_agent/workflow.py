@@ -68,7 +68,6 @@ def initial_state(question: str) -> AgentState:
             "queries": [],
             "targets": [],
             "facets": [],
-            "output_language": "English",
         },
         "evidence": [],
         "verification": {

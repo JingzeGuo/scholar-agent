@@ -60,7 +60,6 @@ def test_planner_returns_compact_bounded_plan() -> None:
             "limitations",
             "deployment",
         ],
-        "output_language": "Chinese",
     }
     llm = StubLLM(payload)
     plan = planner_node(
@@ -71,8 +70,7 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert plan["queries"] == ["q1", "q2", "q3"]
     assert plan["targets"] == ["Alpha", "Beta", "Gamma"]
     assert plan["facets"] == payload["facets"][:5]
-    assert plan["output_language"] == "Chinese"
-    assert set(plan) == {"queries", "targets", "facets", "output_language"}
+    assert set(plan) == {"queries", "targets", "facets"}
     assert "plan retrieval and verification" in llm.last_prompt
     assert "do not answer the question" in llm.last_prompt
     assert 'Every "target" x "facet" pair' in llm.last_prompt
@@ -107,7 +105,6 @@ def test_planner_rejects_invalid_llm_output() -> None:
                     "queries": [],
                     "targets": [],
                     "facets": [],
-                    "output_language": "English",
                 },
             ),  # type: ignore[arg-type]
         )
@@ -120,7 +117,6 @@ def test_planner_rejects_invalid_llm_output() -> None:
                     "queries": ["MethodA MethodB"],
                     "targets": ["MethodA", "MethodB"],
                     "facets": [],
-                    "output_language": "English",
                 },
             ),  # type: ignore[arg-type]
         )
@@ -206,7 +202,6 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
         "queries": ["Self-RAG CRAG"],
         "targets": ["Self-RAG", "CRAG"],
         "facets": ["mechanism"],
-        "output_language": "English",
     }
 
     def low_scores(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
@@ -282,7 +277,6 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
         "queries": ["Self-RAG CRAG"],
         "targets": ["Self-RAG", "CRAG"],
         "facets": ["mechanism"],
-        "output_language": "English",
     }
     state["evidence"] = old
     state["verification"]["corrective_query"] = "CRAG correction mechanism"
@@ -471,23 +465,22 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "missing": ["Self-RAG: mechanism", "CRAG: mechanism"],
         "corrective_query": "",
     }
-    state["plan"]["output_language"] = "中文"
-    llm = StubLLM({}, "当前语料库没有足够相关的证据来回答这个问题。")
+    llm = StubLLM({}, "The corpus does not contain enough relevant evidence.")
     abstention = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
-    assert "没有足够相关的证据" in abstention
+    assert "enough relevant evidence" in abstention
     assert ".pdf p." not in abstention
-    assert "Answer in 中文" in llm.last_prompt
+    assert "Answer in English" in llm.last_prompt
 
 
-def test_writer_handles_output_languages_without_language_specific_code() -> None:
+def test_writer_always_requests_english() -> None:
     state = initial_state("Cette preuve existe-t-elle ?")
-    state["plan"]["output_language"] = "French"
-    llm = StubLLM({}, "Le corpus ne contient pas suffisamment de preuves pertinentes.")
+    llm = StubLLM({}, "The corpus does not contain sufficiently relevant evidence.")
 
     answer = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
 
-    assert answer == "Le corpus ne contient pas suffisamment de preuves pertinentes."
-    assert "Answer in French" in llm.last_prompt
+    assert answer == "The corpus does not contain sufficiently relevant evidence."
+    assert "Answer in English" in llm.last_prompt
+    assert "Answer in French" not in llm.last_prompt
     assert "Status: insufficient" in llm.last_prompt
 
 

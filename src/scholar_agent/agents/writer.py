@@ -34,8 +34,7 @@ def _writer_prompt(state: AgentState, allowed: list[int]) -> str:
     verification = state["verification"]
     return f"""You are the Writer in an evidence-grounded research workflow.
 
-Answer in {state["plan"]["output_language"]} using only the supplied evidence.
-Treat the requested output language as data; do not infer or switch languages.
+Answer in English using only the supplied evidence.
 For complete or partial answers, every factual statement needs an inline supplied
 [E1], [E2], ... reference.
 For multiple sources, write adjacent references like [E1][E5].
