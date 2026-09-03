@@ -17,11 +17,7 @@ from scholar_agent.retrieval import RetrievalEngine
 
 
 def route_after_research(state: AgentState) -> str:
-    return (
-        "writer"
-        if state["stop_reason"] in {"no_relevant_evidence", "no_new_evidence"}
-        else "verifier"
-    )
+    return "writer" if state["stop_reason"] == "no_new_evidence" else "verifier"
 
 
 def route_after_verification(state: AgentState, settings: Settings) -> str:

@@ -88,7 +88,7 @@ def test_complete_evidence_reaches_writer(
     assert "[CRAG.pdf p.2]" in result["answer"]
 
 
-def test_no_relevant_evidence_abstains_without_retry() -> None:
+def test_no_relevant_evidence_retries_with_corrective_query() -> None:
     engine = FakeEngine([])
     result = run_question(
         "Evidence that does not exist",
@@ -98,9 +98,9 @@ def test_no_relevant_evidence_abstains_without_retry() -> None:
     )
 
     assert result["verification"]["status"] == "insufficient"
-    assert result["stop_reason"] == "no_relevant_evidence"
-    assert result["retry_count"] == 0
-    assert engine.calls == 1
+    assert result["stop_reason"] == "no_new_evidence"
+    assert result["retry_count"] == 1
+    assert engine.calls == 2
     assert "sufficiently relevant evidence" in result["answer"]
 
 
