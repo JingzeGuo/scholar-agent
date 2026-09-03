@@ -35,16 +35,14 @@ class FakeLLM:
         if "<user_question>" in prompt:
             return {
                 "queries": ["Self-RAG CRAG retrieval"],
-                "targets": ["Self-RAG", "CRAG"],
-                "facets": ["retrieval"],
+                "requirements": [
+                    {
+                        "description": "Answer the requested evidence question",
+                        "targets": [],
+                    },
+                ],
             }
-        if "E2:" in prompt:
-            covered = {
-                "Self-RAG": {"retrieval": ["E1"]},
-                "CRAG": {"retrieval": ["E2"]},
-            }
-        else:
-            covered = {"Self-RAG": {"retrieval": ["E1"]}, "CRAG": {}}
+        covered = {"R1": ["E1"], "R2": ["E2"]} if "E2:" in prompt else {"R1": ["E1"]}
         return {"covered": covered, "corrective_query": "Find CRAG retrieval evidence"}
 
     def complete(self, prompt: str) -> str:
@@ -59,8 +57,18 @@ def _retrieval_plan(state: AgentState, llm: object) -> dict:
     return {
         "plan": {
             "queries": [state["question"]],
-            "targets": ["Self-RAG", "CRAG"],
-            "facets": ["retrieval"],
+            "requirements": [
+                {
+                    "id": "R1",
+                    "description": "Explain Self-RAG retrieval",
+                    "targets": ["Self-RAG"],
+                },
+                {
+                    "id": "R2",
+                    "description": "Explain CRAG retrieval",
+                    "targets": ["CRAG"],
+                },
+            ],
         },
     }
 
@@ -164,13 +172,12 @@ def test_run_question_starts_with_initial_state(monkeypatch: Any) -> None:
     assert compiled.state == initial_state("question")
 
 
-def test_initial_state_does_not_invent_a_facet() -> None:
+def test_initial_state_does_not_invent_a_requirement() -> None:
     state = initial_state("Compare two methods")
 
     assert state["plan"] == {
         "queries": [],
-        "targets": [],
-        "facets": [],
+        "requirements": [],
     }
 
 

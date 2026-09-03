@@ -6,7 +6,7 @@ import logging
 from collections import Counter
 from collections.abc import Callable
 
-from scholar_agent.agents.planner import target_matches
+from scholar_agent.agents.planner import requirement_targets, target_matches
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
 from scholar_agent.reranker import rerank
@@ -131,7 +131,7 @@ def researcher_node(
     eligible = [item for item in by_id.values() if item["score"] >= settings.min_rerank_score]
     evidence = _select_evidence(
         eligible,
-        plan["targets"],
+        requirement_targets(plan["requirements"]),
     )
     LOGGER.info("[reranker] selected %d evidence chunks", len(evidence))
     for index, item in enumerate(evidence, start=1):

@@ -59,16 +59,22 @@ The Planner decomposes the question into this compact plan:
 
 ```python
 {
-    "queries": list[str],          # 1–3 evidence-seeking queries
-    "targets": list[str],          # 0–3 methods or papers named in the question
-    "facets": list[str],           # 1–5 requested coverage aspects
+    "queries": list[str],          # 1–5 evidence-seeking queries
+    "requirements": [             # 1–5 independent coverage checks
+        {
+            "id": str,            # assigned by code: R1, R2, ...
+            "description": str,
+            "targets": list[str], # 0–3 methods or papers named in the question
+        },
+    ],
 }
 ```
 
-Targets must be explicitly present in the question. Open-ended discovery
-questions use `targets=[]`. Queries preserve names and constraints but retrieve
-evidence instead of proposing an answer. Retrieval plans and final answers are
-always in English.
+Each requirement is verified independently, so asymmetric questions do not
+create unrequested target/aspect combinations. Targets must be explicitly
+present in the question; open-ended requirements use `targets=[]`. Queries
+preserve names and constraints but retrieve evidence instead of proposing an
+answer. Retrieval plans and final answers are always in English.
 
 ## Hybrid retrieval
 
@@ -117,11 +123,11 @@ without repeating verification.
 
 ## Verifier
 
-The Verifier checks every target × facet pair against supplied evidence IDs. It
+The Verifier checks every atomic requirement against supplied evidence IDs. It
 rejects unknown IDs, evidence for the wrong named target, and unsupported
 coverage. Its result is one of:
 
-- `complete`: every required pair has direct support;
+- `complete`: every requirement has direct support;
 - `partial`: some requested coverage is supported;
 - `insufficient`: none of the required coverage is supported.
 
@@ -195,8 +201,8 @@ Configuration uses environment variables:
 
 The default suite is deterministic and makes no paid provider calls. It covers
 page provenance, BM25 and dense retrieval, batched query encoding, RRF,
-reranking, evidence selection, target/facet verification, retry bounds, strict
-abstention, and physical-page citation validation.
+reranking, evidence selection, atomic-requirement verification, retry bounds,
+strict abstention, and physical-page citation validation.
 
 ```bash
 uv run ruff check .

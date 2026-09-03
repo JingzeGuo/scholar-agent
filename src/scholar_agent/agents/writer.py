@@ -19,11 +19,10 @@ LOGGER = logging.getLogger(__name__)
 
 def _allowed_ids(state: AgentState) -> list[int]:
     result: set[int] = set()
-    for facets in state["verification"]["covered"].values():
-        for evidence_ids in facets.values():
-            for evidence_id in evidence_ids:
-                if match := re.fullmatch(r"E(\d+)", evidence_id):
-                    result.add(int(match.group(1)))
+    for evidence_ids in state["verification"]["covered"].values():
+        for evidence_id in evidence_ids:
+            if match := re.fullmatch(r"E(\d+)", evidence_id):
+                result.add(int(match.group(1)))
     return sorted(result)
 
 
@@ -52,6 +51,7 @@ Apply exactly one policy based on Status:
   relevant evidence; make no factual claims and include no citations.
 
 Status: {verification["status"]}
+Requirements: {state["plan"]["requirements"]}
 Covered: {verification["covered"]}
 Missing: {verification["missing"]}
 Allowed evidence IDs: {[f"E{index}" for index in allowed]}
