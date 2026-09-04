@@ -42,7 +42,7 @@ class FakeLLM:
                     },
                 ],
             }
-        covered = {"R1": ["E1"], "R2": ["E2"]} if "E2:" in prompt else {"R1": ["E1"]}
+        covered = {"R1": ["E1"], "R2": ["E2"]} if "E2 [" in prompt else {"R1": ["E1"]}
         return {
             "covered": covered,
             "corrective_queries": [

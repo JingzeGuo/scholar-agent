@@ -34,7 +34,8 @@ def _matches_coverage_target(
 def _verifier_prompt(state: AgentState) -> str:
     plan = state["plan"]
     evidence_text = "\n".join(
-        f"E{index}: {item['text']}" for index, item in enumerate(state["evidence"], start=1)
+        f"E{index} [{item['paper']} p.{item['page']}]: {item['text']}"
+        for index, item in enumerate(state["evidence"], start=1)
     )
 
     requirements_text = "\n".join(

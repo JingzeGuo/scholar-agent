@@ -931,12 +931,14 @@ def test_verifier_accepts_target_identity_from_paper_name() -> None:
         },
     ]
 
-    verification = verifier_node(
-        state,
-        verifier_llm({"R1": ["E1"]}),  # type: ignore[arg-type]
-    )["verification"]
+    llm = verifier_llm({"R1": ["E1"]})
+    verification = verifier_node(state, llm)["verification"]  # type: ignore[arg-type]
 
     assert verification["status"] == "complete"
+    assert (
+        "E1 [MethodA.pdf p.1]: The proposed method retrieves passages dynamically."
+        in llm.last_prompt
+    )
 
 
 def test_verifier_prefers_insufficient_to_false_coverage() -> None:
