@@ -59,7 +59,6 @@ The Planner decomposes the question into this compact plan:
 
 ```python
 {
-    "queries": list[str],          # derived from requirement queries
     "requirements": [             # 1–5 independent coverage checks
         {
             "id": str,            # assigned by code: R1, R2, ...

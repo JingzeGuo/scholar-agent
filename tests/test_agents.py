@@ -90,7 +90,6 @@ def test_planner_returns_compact_bounded_plan() -> None:
         llm,  # type: ignore[arg-type]
     )["plan"]
 
-    assert plan["queries"] == ["q1", "q2", "q3", "q4", "q5"]
     assert plan["requirements"] == [
         requirement("R1", "Explain Alpha's retrieval trigger", ["Alpha"], "q1"),
         requirement("R2", "Identify Beta's limitations", ["Beta"], "q2"),
@@ -98,7 +97,7 @@ def test_planner_returns_compact_bounded_plan() -> None:
         requirement("R4", "Report Alpha's evaluation", ["Alpha"], "q4"),
         requirement("R5", "Describe Beta's deployment", ["Beta"], "q5"),
     ]
-    assert set(plan) == {"queries", "requirements"}
+    assert set(plan) == {"requirements"}
     assert "plan retrieval and verification" in llm.last_prompt
     assert "do not answer the question" in llm.last_prompt
     assert 'Every "requirement" is one independent' in llm.last_prompt
@@ -122,7 +121,6 @@ def test_planner_returns_compact_bounded_plan() -> None:
             },
         ),  # type: ignore[arg-type]
     )["plan"]
-    assert open_plan["queries"] == ["retrieval methods discussed in the corpus"]
     assert open_plan["requirements"] == [
         requirement(
             "R1",
@@ -236,7 +234,6 @@ def test_researcher_selection_uses_score_not_filename_age() -> None:
 def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict]) -> None:
     state = initial_state("Explain Self-RAG")
     state["plan"].update(
-        queries=["Self-RAG retrieval", "reflection tokens"],
         requirements=[
             requirement(
                 "R1",
@@ -274,7 +271,6 @@ def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict
 
 def test_researcher_keeps_one_query_per_requirement() -> None:
     plan = {
-        "queries": ["Self-RAG retrieval mechanism"],
         "requirements": [
             requirement(
                 "R1",
@@ -400,7 +396,6 @@ def test_researcher_reserves_rerank_candidates_for_every_query() -> None:
 def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict]) -> None:
     state = initial_state("Compare Self-RAG and CRAG")
     state["plan"] = {
-        "queries": ["Self-RAG CRAG"],
         "requirements": [
             requirement(
                 "R1",
@@ -499,7 +494,6 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     ]
     state = initial_state("Compare Self-RAG and CRAG")
     state["plan"] = {
-        "queries": ["Self-RAG CRAG"],
         "requirements": [
             requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
             requirement("R2", "Explain CRAG's mechanism", ["CRAG"]),
@@ -533,7 +527,6 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
 def test_researcher_marks_identical_retry_evidence(sample_chunks: list[dict]) -> None:
     state = initial_state("Explain Self-RAG")
     state["plan"].update(
-        queries=["Self-RAG"],
         requirements=[requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"])],
     )
     state["evidence"] = [{**sample_chunks[0], "score": 1.0}]

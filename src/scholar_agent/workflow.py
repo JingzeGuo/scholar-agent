@@ -65,7 +65,6 @@ def initial_state(question: str) -> AgentState:
     return {
         "question": question,
         "plan": {
-            "queries": [],
             "requirements": [],
         },
         "evidence": [],

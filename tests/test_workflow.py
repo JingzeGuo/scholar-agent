@@ -56,7 +56,6 @@ class FakeLLM:
 def _retrieval_plan(state: AgentState, llm: object) -> dict:
     return {
         "plan": {
-            "queries": [state["question"]],
             "requirements": [
                 {
                     "id": "R1",
@@ -178,7 +177,6 @@ def test_initial_state_does_not_invent_a_requirement() -> None:
     state = initial_state("Compare two methods")
 
     assert state["plan"] == {
-        "queries": [],
         "requirements": [],
     }
 

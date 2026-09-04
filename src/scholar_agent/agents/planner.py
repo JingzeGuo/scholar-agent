@@ -149,15 +149,12 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
     requirements = _requirements(payload.get("requirements"), question)
     if not requirements:
         raise ValueError("Planner returned no valid requirements")
-    queries = _unique_strings([requirement["query"] for requirement in requirements], 5)
 
     plan = {
-        "queries": queries,
         "requirements": requirements,
     }
     LOGGER.info(
-        "[planner] queries=%d requirements=%d targets=%d",
-        len(plan["queries"]),
+        "[planner] requirements=%d targets=%d",
         len(plan["requirements"]),
         len(requirement_targets(plan["requirements"])),
     )
