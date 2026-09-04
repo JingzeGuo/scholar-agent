@@ -48,14 +48,12 @@ Decide which supplied evidence directly supports each atomic requirement.
 
 Return one JSON object:
 - "covered": requirement ID -> list of supplied evidence IDs
-- "corrective_requirement_id": the one missing requirement ID targeted by
-  "corrective_query", or an empty string when the query is empty
-- "corrective_query": one concise English query for the most important missing evidence,
-  or an empty string when no additional retrieval is useful
+- "corrective_queries": one object per useful corrective query, each with a missing
+  "requirement_id" and a concise English "query"; otherwise an empty list
 
 Rules:
 - Use only supplied evidence IDs.
-- Return a corrective query and requirement ID together, or leave both empty.
+- Return at most one corrective query per missing requirement.
 - Cover a requirement only when the evidence collectively supports its entire description.
 - When a requirement names targets, the evidence must collectively cover every named target.
 - Related methods cannot substitute for a named target.
@@ -128,29 +126,31 @@ def verifier_node(state: AgentState, llm: LLMClient) -> dict:
     """Return complete, partial, or insufficient evidence coverage."""
     payload = llm.complete_json(_verifier_prompt(state))
     covered = _sanitize_coverage(state, payload.get("covered"))
-    raw_query = payload.get("corrective_query", "")
-    if not isinstance(raw_query, str):
-        raise ValueError("Verifier returned an invalid corrective query")
-    corrective_query = raw_query.strip()
-    raw_requirement_id = payload.get("corrective_requirement_id", "")
-    if not isinstance(raw_requirement_id, str):
-        raise ValueError("Verifier returned an invalid corrective requirement ID")
-    corrective_requirement_id = raw_requirement_id.strip()
-
     required = [item["id"] for item in state["plan"]["requirements"]]
     missing = [requirement_id for requirement_id in required if requirement_id not in covered]
+    raw_queries = payload.get("corrective_queries", []) if missing else []
+    if not isinstance(raw_queries, list):
+        raise ValueError("Verifier returned invalid corrective queries")
 
-    if not missing:
-        corrective_query = ""
-        corrective_requirement_id = ""
-    elif corrective_query:
-        missing_by_key = {requirement_id.casefold(): requirement_id for requirement_id in missing}
-        canonical_id = missing_by_key.get(corrective_requirement_id.casefold())
-        if canonical_id is None:
-            raise ValueError("Corrective query must target one missing requirement")
-        corrective_requirement_id = canonical_id
-    elif corrective_requirement_id:
-        raise ValueError("Corrective requirement ID requires a corrective query")
+    missing_by_key = {requirement_id.casefold(): requirement_id for requirement_id in missing}
+    corrections: dict[str, str] = {}
+    for item in raw_queries:
+        if not isinstance(item, dict):
+            raise ValueError("Verifier returned invalid corrective queries")
+        requirement_id = item.get("requirement_id")
+        query = item.get("query")
+        if not isinstance(requirement_id, str) or not isinstance(query, str):
+            raise ValueError("Verifier returned invalid corrective queries")
+        canonical_id = missing_by_key.get(requirement_id.strip().casefold())
+        query = query.strip()
+        if canonical_id is None or not query:
+            raise ValueError("Corrective queries must target missing requirements")
+        corrections[canonical_id] = query
+    corrective_queries = [
+        {"requirement_id": requirement_id, "query": corrections[requirement_id]}
+        for requirement_id in missing
+        if requirement_id in corrections
+    ]
 
     covered_count = len(required) - len(missing)
 
@@ -165,8 +165,7 @@ def verifier_node(state: AgentState, llm: LLMClient) -> dict:
         "status": status,
         "covered": covered,
         "missing": missing,
-        "corrective_requirement_id": corrective_requirement_id,
-        "corrective_query": corrective_query,
+        "corrective_queries": corrective_queries,
     }
 
     LOGGER.info(

@@ -270,22 +270,10 @@ def researcher_node(
 ) -> dict:
     """Run fixed hybrid retrieval, RRF, reranking, and evidence selection."""
     plan = state["plan"]
-    corrective_query = state["verification"].get("corrective_query", "")
-    if corrective_query:
-        corrective_requirement_id = state["verification"].get(
-            "corrective_requirement_id",
-            "",
-        )
-        missing = state["verification"].get("missing", [])
-        planned_ids = {requirement["id"] for requirement in plan["requirements"]}
-        if (
-            not isinstance(corrective_requirement_id, str)
-            or corrective_requirement_id not in planned_ids
-            or corrective_requirement_id not in missing
-        ):
-            raise ValueError("Corrective query must target one missing requirement")
-        queries = [corrective_query]
-        query_requirement_ids = [[corrective_requirement_id]]
+    corrective_queries = state["verification"]["corrective_queries"]
+    if corrective_queries:
+        queries = [item["query"] for item in corrective_queries]
+        query_requirement_ids = [[item["requirement_id"]] for item in corrective_queries]
     else:
         queries, query_requirement_ids = _planned_queries(plan)
 
@@ -329,9 +317,9 @@ def researcher_node(
             item["score"],
         )
 
-    retry_count = state["retry_count"] + (1 if corrective_query else 0)
+    retry_count = state["retry_count"] + bool(corrective_queries)
     stop_reason = "" if evidence else "no_relevant_evidence"
-    if corrective_query and {item["chunk_id"] for item in evidence} == {
+    if corrective_queries and {item["chunk_id"] for item in evidence} == {
         item["chunk_id"] for item in state["evidence"]
     }:
         evidence = state["evidence"]

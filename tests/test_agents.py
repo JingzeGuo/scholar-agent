@@ -37,14 +37,12 @@ class StubLLM:
 
 def verifier_llm(
     covered: dict,
-    corrective_query: str = "",
-    corrective_requirement_id: str = "",
+    corrective_queries: list[dict] | None = None,
 ) -> StubLLM:
     return StubLLM(
         {
             "covered": covered,
-            "corrective_requirement_id": corrective_requirement_id,
-            "corrective_query": corrective_query,
+            "corrective_queries": corrective_queries or [],
         },
     )
 
@@ -643,8 +641,9 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     }
     state["evidence"] = old
     state["verification"]["missing"] = ["R2"]
-    state["verification"]["corrective_requirement_id"] = "R2"
-    state["verification"]["corrective_query"] = "CRAG correction mechanism"
+    state["verification"]["corrective_queries"] = [
+        {"requirement_id": "R2", "query": "CRAG correction mechanism"},
+    ]
 
     def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
         return [{**item, "_query_scores": [item["score"]]} for item in new]
@@ -678,8 +677,9 @@ def test_researcher_marks_identical_retry_evidence(sample_chunks: list[dict]) ->
     )
     state["evidence"] = [{**sample_chunks[0], "score": 1.0}]
     state["verification"]["missing"] = ["R1"]
-    state["verification"]["corrective_requirement_id"] = "R1"
-    state["verification"]["corrective_query"] = "Self-RAG mechanism"
+    state["verification"]["corrective_queries"] = [
+        {"requirement_id": "R1", "query": "Self-RAG mechanism"},
+    ]
 
     def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
         return [
@@ -697,6 +697,51 @@ def test_researcher_marks_identical_retry_evidence(sample_chunks: list[dict]) ->
     assert result["evidence"] == state["evidence"]
     assert result["retry_count"] == 1
     assert result["stop_reason"] == "no_new_evidence"
+
+
+def test_researcher_batches_corrective_queries(sample_chunks: list[dict]) -> None:
+    state = initial_state("Compare Self-RAG and CRAG")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain Self-RAG retrieval", ["Self-RAG"]),
+        requirement("R2", "Explain CRAG retrieval", ["CRAG"]),
+    ]
+    state["verification"].update(
+        missing=["R1", "R2"],
+        corrective_queries=[
+            {"requirement_id": "R1", "query": "Self-RAG retrieval evidence"},
+            {"requirement_id": "R2", "query": "CRAG retrieval evidence"},
+        ],
+    )
+
+    def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
+        return [
+            {
+                **item,
+                "score": 2.0,
+                "_query_scores": [2.0, -1.0]
+                if item["chunk_id"] == "self-1"
+                else [-1.0, 2.0],
+            }
+            for item in candidates
+        ]
+
+    engine = FakeEngine(sample_chunks[:2])
+    result = researcher_node(
+        state,
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        scored,
+    )
+
+    assert engine.sparse_calls == [
+        ["Self-RAG retrieval evidence"],
+        ["CRAG retrieval evidence"],
+    ]
+    assert engine.dense_calls == [
+        ["Self-RAG retrieval evidence", "CRAG retrieval evidence"],
+    ]
+    assert result["retry_count"] == 1
+    assert {item["chunk_id"] for item in result["evidence"]} == {"self-1", "crag-1"}
 
 
 def test_verifier_rejects_target_mismatch_and_invalid_ids(
@@ -725,7 +770,7 @@ def test_verifier_rejects_target_mismatch_and_invalid_ids(
                 "R2": ["E1", "E99"],
             },
             "missing": [],
-            "corrective_query": "",
+            "corrective_queries": [],
         },
     )
     result = verifier_node(state, mismatched)  # type: ignore[arg-type]
@@ -764,7 +809,7 @@ def test_verifier_rejects_shared_acronym_as_target_substitution(
                     "R1": ["E2"],
                     "R2": ["E2"],
                 },
-                "corrective_query": "",
+                "corrective_queries": [],
             },
         ),  # type: ignore[arg-type]
     )["verification"]
@@ -828,11 +873,12 @@ def test_verifier_returns_partial_for_missing_requirement() -> None:
     assert verification["missing"] == ["R2"]
 
 
-def test_verifier_targets_corrective_query_to_one_missing_requirement() -> None:
-    state = initial_state("Explain MethodA retrieval and generation")
+def test_verifier_batches_queries_for_missing_requirements() -> None:
+    state = initial_state("Explain MethodA retrieval, generation, and evaluation")
     state["plan"]["requirements"] = [
         requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
         requirement("R2", "Explain MethodA generation", ["MethodA"]),
+        requirement("R3", "Explain MethodA evaluation", ["MethodA"]),
     ]
     state["evidence"] = [
         {
@@ -848,20 +894,24 @@ def test_verifier_targets_corrective_query_to_one_missing_requirement() -> None:
         state,
         verifier_llm(
             {"R1": ["E1"]},
-            corrective_query="MethodA generation evidence",
-            corrective_requirement_id="r2",
+            [
+                {"requirement_id": "r3", "query": "MethodA evaluation evidence"},
+                {"requirement_id": "r2", "query": "MethodA generation evidence"},
+            ],
         ),  # type: ignore[arg-type]
     )["verification"]
 
-    assert verification["corrective_requirement_id"] == "R2"
+    assert verification["corrective_queries"] == [
+        {"requirement_id": "R2", "query": "MethodA generation evidence"},
+        {"requirement_id": "R3", "query": "MethodA evaluation evidence"},
+    ]
 
-    with pytest.raises(ValueError, match="target one missing requirement"):
+    with pytest.raises(ValueError, match="target missing requirements"):
         verifier_node(
             state,
             verifier_llm(
                 {"R1": ["E1"]},
-                corrective_query="MethodA generation evidence",
-                corrective_requirement_id="R1",
+                [{"requirement_id": "R1", "query": "MethodA generation evidence"}],
             ),  # type: ignore[arg-type]
         )
 
@@ -923,8 +973,7 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "status": "partial",
         "covered": {"R1": ["E1"]},
         "missing": ["R2"],
-        "corrective_requirement_id": "",
-        "corrective_query": "",
+        "corrective_queries": [],
     }
     partial = writer_node(
         state,
@@ -941,8 +990,7 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "status": "insufficient",
         "covered": {},
         "missing": ["R1", "R2"],
-        "corrective_requirement_id": "",
-        "corrective_query": "",
+        "corrective_queries": [],
     }
     llm = StubLLM({}, "The corpus does not contain enough relevant evidence.")
     abstention = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
@@ -973,8 +1021,7 @@ def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
         "status": "complete",
         "covered": {"R1": ["E1"]},
         "missing": [],
-        "corrective_requirement_id": "",
-        "corrective_query": "",
+        "corrective_queries": [],
     }
 
     with pytest.raises(ValueError, match="not approved"):
@@ -984,8 +1031,7 @@ def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
         "status": "insufficient",
         "covered": {},
         "missing": ["R1"],
-        "corrective_requirement_id": "",
-        "corrective_query": "",
+        "corrective_queries": [],
     }
     with pytest.raises(ValueError, match="while abstaining"):
         writer_node(state, StubLLM({}, "Unsupported [E1]."))  # type: ignore[arg-type]

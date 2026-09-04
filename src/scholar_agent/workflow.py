@@ -21,11 +21,10 @@ def route_after_research(state: AgentState) -> str:
 
 
 def route_after_verification(state: AgentState, settings: Settings) -> str:
-    if state["verification"]["status"] == "complete":
-        return "writer"
-    if not state["verification"]["corrective_query"]:
-        return "writer"
-    if state["retry_count"] >= settings.max_retries:
+    if (
+        not state["verification"]["corrective_queries"]
+        or state["retry_count"] >= settings.max_retries
+    ):
         return "writer"
     return "researcher"
 
@@ -72,8 +71,7 @@ def initial_state(question: str) -> AgentState:
             "status": "insufficient",
             "covered": {},
             "missing": [],
-            "corrective_requirement_id": "",
-            "corrective_query": "",
+            "corrective_queries": [],
         },
         "retry_count": 0,
         "stop_reason": "",

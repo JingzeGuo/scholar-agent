@@ -45,8 +45,12 @@ class FakeLLM:
         covered = {"R1": ["E1"], "R2": ["E2"]} if "E2:" in prompt else {"R1": ["E1"]}
         return {
             "covered": covered,
-            "corrective_requirement_id": "R2" if "R2:" in prompt else "R1",
-            "corrective_query": "Find CRAG retrieval evidence",
+            "corrective_queries": [
+                {
+                    "requirement_id": "R2" if "R2:" in prompt else "R1",
+                    "query": "Find CRAG retrieval evidence",
+                },
+            ],
         }
 
     def complete(self, prompt: str) -> str:
@@ -99,7 +103,7 @@ def test_complete_evidence_reaches_writer(
     assert "[CRAG.pdf p.2]" in result["answer"]
 
 
-def test_no_relevant_evidence_retries_with_corrective_query() -> None:
+def test_no_relevant_evidence_retries_with_corrective_queries() -> None:
     engine = FakeEngine([])
     result = run_question(
         "Evidence that does not exist",
@@ -192,8 +196,9 @@ def test_workflow_requires_an_llm() -> None:
 
 def test_verification_retry_limit_is_configurable() -> None:
     state = initial_state("question")
-    state["verification"]["corrective_requirement_id"] = "R1"
-    state["verification"]["corrective_query"] = "Find missing evidence"
+    state["verification"]["corrective_queries"] = [
+        {"requirement_id": "R1", "query": "Find missing evidence"},
+    ]
     state["retry_count"] = 1
 
     assert route_after_verification(state, Settings(max_retries=2)) == "researcher"
@@ -202,8 +207,7 @@ def test_verification_retry_limit_is_configurable() -> None:
     assert route_after_verification(state, Settings(max_retries=2)) == "writer"
 
     state["retry_count"] = 0
-    state["verification"]["corrective_requirement_id"] = ""
-    state["verification"]["corrective_query"] = ""
+    state["verification"]["corrective_queries"] = []
     assert route_after_verification(state, Settings(max_retries=2)) == "writer"
 
 

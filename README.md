@@ -31,7 +31,7 @@ Researcher
    ↓
 Verifier
    ├── complete ───────────────────────────────┐
-   ├── partial + corrective query → Researcher once → Verifier
+   ├── partial + corrective queries → Researcher once → Verifier
    └── insufficient ──────────────────────────┤
                                                ↓
                                              Writer
@@ -50,8 +50,8 @@ LangGraph connects four workflow nodes:
 - Writer: LLM-based grounded-answer node.
 
 The Researcher is a deterministic workflow node, not an autonomous LLM agent.
-The only bounded loop is a single corrective retrieval requested by the
-Verifier.
+Each pass through the bounded retry loop runs one batch of corrective retrievals
+requested by the Verifier.
 
 ## Planner
 
@@ -139,10 +139,10 @@ coverage. Its result is one of:
 - `partial`: some requested coverage is supported;
 - `insufficient`: none of the required coverage is supported.
 
-For missing coverage it may return one concise corrective query together with
-the specific missing requirement ID that query targets. The default retry
-budget is one, so the workflow cannot become an unrestricted loop. If no useful
-query exists or the budget is exhausted, processing continues to the Writer.
+For missing coverage it may return a batch containing one concise corrective
+query per missing requirement. The default retry budget is one, so the workflow
+cannot become an unrestricted loop. If no useful query exists or the budget is
+exhausted, processing continues to the Writer.
 
 ## Writer and citation validation
 
