@@ -8,7 +8,7 @@ from scholar_agent.agents.planner import evidence_matches_target, planner_node, 
 from scholar_agent.agents.researcher import (
     _attach_requirement_scores,
     _planned_queries,
-    _rerank_candidates,
+    _select_candidates_for_reranking,
     _select_evidence,
     researcher_node,
 )
@@ -470,7 +470,7 @@ def test_researcher_reserves_evidence_for_requirements_with_the_same_target() ->
     assert "limitation" in {item["chunk_id"] for item in selected}
 
 
-def test_researcher_reserves_rerank_candidates_for_every_query() -> None:
+def test_researcher_selects_reranking_candidates_for_every_query() -> None:
     sparse_rankings: list[list[dict]] = []
     dense_rankings: list[list[dict]] = []
     for query_index in range(4):
@@ -502,7 +502,7 @@ def test_researcher_reserves_rerank_candidates_for_every_query() -> None:
     )
     dense_rankings.append([])
 
-    candidates = _rerank_candidates(sparse_rankings, dense_rankings)
+    candidates = _select_candidates_for_reranking(sparse_rankings, dense_rankings)
 
     assert len(candidates) == 30
     assert "rare-0" in {item["chunk_id"] for item in candidates}

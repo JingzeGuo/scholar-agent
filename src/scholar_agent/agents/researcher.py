@@ -227,7 +227,7 @@ def _unique_count(rankings: list[list[dict]]) -> int:
     return len({item["chunk_id"] for ranking in rankings for item in ranking})
 
 
-def _rerank_candidates(
+def _select_candidates_for_reranking(
     sparse_rankings: list[list[dict]],
     dense_rankings: list[list[dict]],
 ) -> list[dict]:
@@ -285,7 +285,7 @@ def researcher_node(
         _unique_count(dense_rankings),
     )
 
-    candidates = _rerank_candidates(sparse_rankings, dense_rankings)
+    candidates = _select_candidates_for_reranking(sparse_rankings, dense_rankings)
     LOGGER.info("[fusion] %d candidates for reranking", len(candidates))
     reranked = rerank_function(
         queries,
