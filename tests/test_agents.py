@@ -4,8 +4,9 @@ from typing import Any
 
 import pytest
 
-from scholar_agent.agents.planner import planner_node, target_matches
+from scholar_agent.agents.planner import evidence_matches_target, planner_node, target_matches
 from scholar_agent.agents.researcher import (
+    _attach_requirement_scores,
     _planned_queries,
     _rerank_candidates,
     _select_evidence,
@@ -34,8 +35,18 @@ class StubLLM:
         return self.text
 
 
-def verifier_llm(covered: dict, corrective_query: str = "") -> StubLLM:
-    return StubLLM({"covered": covered, "corrective_query": corrective_query})
+def verifier_llm(
+    covered: dict,
+    corrective_query: str = "",
+    corrective_requirement_id: str = "",
+) -> StubLLM:
+    return StubLLM(
+        {
+            "covered": covered,
+            "corrective_requirement_id": corrective_requirement_id,
+            "corrective_query": corrective_query,
+        },
+    )
 
 
 def requirement(
@@ -206,6 +217,10 @@ def test_target_matching_preserves_method_identity() -> None:
     assert not target_matches("CRAG", "Self-CRAG combines both methods.")
     assert not target_matches("DPR", "ANCE uses one dense embedding.")
     assert not target_matches("RAG", "CRAG and Self-RAG are methods.")
+    assert evidence_matches_target(
+        "Self-RAG",
+        {"paper": "Self-RAG.pdf", "text": "The proposed method retrieves passages."},
+    )
 
 
 def test_researcher_selection_uses_score_not_filename_age() -> None:
@@ -253,7 +268,10 @@ def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict
 
     def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
         rerank_inputs.append([item["chunk_id"] for item in candidates])
-        return [{**item, "score": 1.0} for item in candidates]
+        return [
+            {**item, "score": 1.0, "_query_scores": [1.0] * len(queries)}
+            for item in candidates
+        ]
 
     engine = FakeEngine(sample_chunks[:2])
     result = researcher_node(
@@ -310,6 +328,104 @@ def test_researcher_deduplicates_physical_pages(sample_chunks: list[dict]) -> No
     )
 
     assert [item["chunk_id"] for item in selected] == ["self-1", "crag-1"]
+
+
+def test_researcher_allows_same_page_and_paper_for_requirement_coverage() -> None:
+    requirements = [
+        requirement(f"R{index}", f"Explain aspect {index}", []) for index in range(1, 6)
+    ]
+    items = [
+        {
+            "chunk_id": f"aspect-{index}",
+            "paper": "Method.pdf",
+            "page": min(index, 4),
+            "text": f"Evidence for aspect {index}.",
+            "score": 1.0,
+            "_requirement_scores": {
+                requirement["id"]: 1.0 if requirement["id"] == f"R{index}" else 0.0
+                for requirement in requirements
+            },
+        }
+        for index in range(1, 6)
+    ]
+
+    selected = _select_evidence(items, requirements, min_score=0.5)
+
+    assert {item["chunk_id"] for item in selected} == {
+        "aspect-1",
+        "aspect-2",
+        "aspect-3",
+        "aspect-4",
+        "aspect-5",
+    }
+
+
+def test_researcher_expands_evidence_limit_for_multi_target_coverage() -> None:
+    requirements = [
+        requirement(
+            f"R{requirement_index}",
+            f"Compare group {requirement_index}",
+            [f"Target-{requirement_index}-{target_index}" for target_index in range(1, 4)],
+        )
+        for requirement_index in range(1, 4)
+    ]
+    items = [
+        {
+            "chunk_id": target,
+            "paper": f"{target}.pdf",
+            "page": 1,
+            "text": f"{target} evidence.",
+            "score": 1.0,
+            "_requirement_scores": {
+                requirement["id"]: 1.0 if target in requirement["targets"] else 0.0
+                for requirement in requirements
+            },
+        }
+        for requirement in requirements
+        for target in requirement["targets"]
+    ]
+
+    selected = _select_evidence(items, requirements, min_score=0.5)
+
+    assert len(selected) == 9
+
+
+def test_researcher_does_not_reuse_a_retry_score_for_unscored_requirements() -> None:
+    requirements = [
+        requirement("R1", "Explain the mechanism", []),
+        requirement("R2", "Explain the limitations", []),
+    ]
+    mechanism = {
+        "chunk_id": "mechanism",
+        "paper": "Method.pdf",
+        "page": 1,
+        "text": "Mechanism evidence.",
+        "score": 0.6,
+        "_requirement_scores": {"R1": 0.6, "R2": 0.0},
+    }
+    retry_items = [
+        {
+            "chunk_id": f"limitation-{index}",
+            "paper": f"Limitations-{index}.pdf",
+            "page": 1,
+            "text": f"Limitation evidence {index}.",
+            "score": 0.99 - index / 100,
+            "_requirement_scores": {"R2": 0.99 - index / 100},
+        }
+        for index in range(8)
+    ]
+
+    selected = _select_evidence([mechanism, *retry_items], requirements, min_score=0.5)
+
+    assert "mechanism" in {item["chunk_id"] for item in selected}
+
+
+def test_researcher_requires_per_query_reranker_scores() -> None:
+    with pytest.raises(ValueError, match="one query score per query"):
+        _attach_requirement_scores(
+            [{"chunk_id": "c1", "score": 1.0}],
+            [["R1"], ["R2"]],
+        )
 
 
 def test_researcher_reserves_evidence_for_requirements_with_the_same_target() -> None:
@@ -374,7 +490,8 @@ def test_researcher_reserves_rerank_candidates_for_every_query() -> None:
         dense_rankings.append(shared)
 
     sparse_rankings.append(
-        [
+        sparse_rankings[0][:4]
+        + [
             {
                 "chunk_id": f"rare-{rank}",
                 "paper": "Rare.pdf",
@@ -382,7 +499,7 @@ def test_researcher_reserves_rerank_candidates_for_every_query() -> None:
                 "text": "rare requirement evidence",
                 "score": 0.0,
             }
-            for rank in range(8)
+            for rank in range(4)
         ],
     )
     dense_rankings.append([])
@@ -391,6 +508,25 @@ def test_researcher_reserves_rerank_candidates_for_every_query() -> None:
 
     assert len(candidates) == 30
     assert "rare-0" in {item["chunk_id"] for item in candidates}
+
+
+def test_researcher_accepts_target_identity_from_paper_name() -> None:
+    item = {
+        "chunk_id": "method-a",
+        "paper": "MethodA.pdf",
+        "page": 3,
+        "text": "The proposed method retrieves passages dynamically.",
+        "score": 0.9,
+        "_requirement_scores": {"R1": 0.9},
+    }
+
+    selected = _select_evidence(
+        [item],
+        [requirement("R1", "Explain MethodA retrieval", ["MethodA"])],
+        min_score=0.5,
+    )
+
+    assert selected == [item]
 
 
 def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict]) -> None:
@@ -408,7 +544,10 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
     }
 
     def low_scores(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [{**item, "score": 0.4} for item in candidates]
+        return [
+            {**item, "score": 0.4, "_query_scores": [0.4] * len(queries)}
+            for item in candidates
+        ]
 
     result = researcher_node(
         state,
@@ -430,7 +569,10 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
     ]
 
     def high_scores(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [{**item, "score": 9.0} for item in candidates]
+        return [
+            {**item, "score": 9.0, "_query_scores": [9.0] * len(queries)}
+            for item in candidates
+        ]
 
     absent_target = researcher_node(
         state,
@@ -500,10 +642,12 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
         ],
     }
     state["evidence"] = old
+    state["verification"]["missing"] = ["R2"]
+    state["verification"]["corrective_requirement_id"] = "R2"
     state["verification"]["corrective_query"] = "CRAG correction mechanism"
 
     def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return new
+        return [{**item, "_query_scores": [item["score"]]} for item in new]
 
     engine = FakeEngine(old + new)
     result = researcher_node(
@@ -519,6 +663,9 @@ def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict])
     assert result["retry_count"] == 1
     assert engine.sparse_calls == [["CRAG correction mechanism"]]
     assert engine.dense_calls == [["CRAG correction mechanism"]]
+    assert next(
+        item for item in result["evidence"] if item["chunk_id"] == "crag-0"
+    )["_requirement_scores"] == {"R2": 2.0}
     assert len({(item["paper"], item["page"]) for item in result["evidence"]}) == len(
         result["evidence"],
     )
@@ -530,10 +677,15 @@ def test_researcher_marks_identical_retry_evidence(sample_chunks: list[dict]) ->
         requirements=[requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"])],
     )
     state["evidence"] = [{**sample_chunks[0], "score": 1.0}]
+    state["verification"]["missing"] = ["R1"]
+    state["verification"]["corrective_requirement_id"] = "R1"
     state["verification"]["corrective_query"] = "Self-RAG mechanism"
 
     def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [{**item, "score": 1.0} for item in candidates]
+        return [
+            {**item, "score": 1.0, "_query_scores": [1.0] * len(queries)}
+            for item in candidates
+        ]
 
     result = researcher_node(
         state,
@@ -676,6 +828,67 @@ def test_verifier_returns_partial_for_missing_requirement() -> None:
     assert verification["missing"] == ["R2"]
 
 
+def test_verifier_targets_corrective_query_to_one_missing_requirement() -> None:
+    state = initial_state("Explain MethodA retrieval and generation")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
+        requirement("R2", "Explain MethodA generation", ["MethodA"]),
+    ]
+    state["evidence"] = [
+        {
+            "chunk_id": "retrieval",
+            "paper": "MethodA.pdf",
+            "page": 1,
+            "text": "The proposed method retrieves passages dynamically.",
+            "score": 1.0,
+        },
+    ]
+
+    verification = verifier_node(
+        state,
+        verifier_llm(
+            {"R1": ["E1"]},
+            corrective_query="MethodA generation evidence",
+            corrective_requirement_id="r2",
+        ),  # type: ignore[arg-type]
+    )["verification"]
+
+    assert verification["corrective_requirement_id"] == "R2"
+
+    with pytest.raises(ValueError, match="target one missing requirement"):
+        verifier_node(
+            state,
+            verifier_llm(
+                {"R1": ["E1"]},
+                corrective_query="MethodA generation evidence",
+                corrective_requirement_id="R1",
+            ),  # type: ignore[arg-type]
+        )
+
+
+def test_verifier_accepts_target_identity_from_paper_name() -> None:
+    state = initial_state("Explain MethodA retrieval")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
+    ]
+    state["evidence"] = [
+        {
+            "chunk_id": "method-a",
+            "paper": "MethodA.pdf",
+            "page": 1,
+            "text": "The proposed method retrieves passages dynamically.",
+            "score": 1.0,
+        },
+    ]
+
+    verification = verifier_node(
+        state,
+        verifier_llm({"R1": ["E1"]}),  # type: ignore[arg-type]
+    )["verification"]
+
+    assert verification["status"] == "complete"
+
+
 def test_verifier_prefers_insufficient_to_false_coverage() -> None:
     state = initial_state("Explain MethodA retrieval")
     state["plan"].update(
@@ -710,6 +923,7 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "status": "partial",
         "covered": {"R1": ["E1"]},
         "missing": ["R2"],
+        "corrective_requirement_id": "",
         "corrective_query": "",
     }
     partial = writer_node(
@@ -727,6 +941,7 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
         "status": "insufficient",
         "covered": {},
         "missing": ["R1", "R2"],
+        "corrective_requirement_id": "",
         "corrective_query": "",
     }
     llm = StubLLM({}, "The corpus does not contain enough relevant evidence.")
@@ -758,6 +973,7 @@ def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
         "status": "complete",
         "covered": {"R1": ["E1"]},
         "missing": [],
+        "corrective_requirement_id": "",
         "corrective_query": "",
     }
 
@@ -768,6 +984,7 @@ def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
         "status": "insufficient",
         "covered": {},
         "missing": ["R1"],
+        "corrective_requirement_id": "",
         "corrective_query": "",
     }
     with pytest.raises(ValueError, match="while abstaining"):

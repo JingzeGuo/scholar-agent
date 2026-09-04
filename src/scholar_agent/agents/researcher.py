@@ -6,7 +6,12 @@ import logging
 from collections import Counter
 from collections.abc import Callable
 
-from scholar_agent.agents.planner import requirement_targets, target_matches
+from scholar_agent.agents.planner import (
+    MAX_REQUIREMENTS,
+    MAX_TARGETS_PER_REQUIREMENT,
+    evidence_matches_target,
+    requirement_targets,
+)
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
 from scholar_agent.reranker import rerank
@@ -14,7 +19,8 @@ from scholar_agent.retrieval import RetrievalEngine, reciprocal_rank_fusion
 
 LOGGER = logging.getLogger(__name__)
 RerankFunction = Callable[[list[str], list[dict], str], list[dict]]
-MAX_EVIDENCE = 8
+DEFAULT_EVIDENCE_LIMIT = 8
+MAX_EVIDENCE = MAX_REQUIREMENTS * MAX_TARGETS_PER_REQUIREMENT
 MAX_RERANK_CANDIDATES = 30
 PER_QUERY_RERANK_CANDIDATES = 4
 PER_TARGET = 2
@@ -34,7 +40,7 @@ def _select_evidence(
     )
 
     if targets and not any(
-        target_matches(target, item["text"]) for target in targets for item in ranked
+        evidence_matches_target(target, item) for target in targets for item in ranked
     ):
         return []
 
@@ -43,17 +49,18 @@ def _select_evidence(
     selected_pages: set[tuple[str, int]] = set()
     paper_counts: Counter = Counter()
 
-    def add(item: dict) -> bool:
+    def add(item: dict, *, enforce_diversity: bool, limit: int) -> bool:
         page_key = (item["paper"], item["page"])
 
-        if len(selected) >= MAX_EVIDENCE:
+        if len(selected) >= limit:
             return False
         if item["chunk_id"] in selected_ids:
             return False
-        if page_key in selected_pages:
-            return False
-        if paper_counts[item["paper"]] >= PER_PAPER:
-            return False
+        if enforce_diversity:
+            if page_key in selected_pages:
+                return False
+            if paper_counts[item["paper"]] >= PER_PAPER:
+                return False
 
         selected.append(item)
         selected_ids.add(item["chunk_id"])
@@ -62,16 +69,17 @@ def _select_evidence(
         return True
 
     def requirement_score(item: dict, requirement_id: str) -> float:
-        scores = item.get("_requirement_scores", {})
+        scores = item.get("_requirement_scores")
         if isinstance(scores, dict):
             score = scores.get(requirement_id)
             if isinstance(score, int | float):
                 return float(score)
+            return float("-inf")
         return float(item["score"])
 
     def matches_requirement(item: dict, requirement: dict) -> bool:
         return not requirement["targets"] or any(
-            target_matches(target, item["text"]) for target in requirement["targets"]
+            evidence_matches_target(target, item) for target in requirement["targets"]
         )
 
     requirement_rankings: dict[str, list[dict]] = {
@@ -90,14 +98,18 @@ def _select_evidence(
                 break
             if not matches_requirement(item, requirement):
                 continue
-            if item["chunk_id"] in selected_ids or add(item):
+            if item["chunk_id"] in selected_ids or add(
+                item,
+                enforce_diversity=False,
+                limit=MAX_EVIDENCE,
+            ):
                 break
 
     # A comparison requirement may need separate evidence for each named target.
     for requirement in requirements:
         for target in requirement["targets"]:
             if any(
-                target_matches(target, item["text"])
+                evidence_matches_target(target, item)
                 and requirement_score(item, requirement["id"]) >= min_score
                 for item in selected
             ):
@@ -105,22 +117,32 @@ def _select_evidence(
             for item in requirement_rankings[requirement["id"]]:
                 if requirement_score(item, requirement["id"]) < min_score:
                     break
-                if target_matches(target, item["text"]) and add(item):
+                if evidence_matches_target(target, item) and add(
+                    item,
+                    enforce_diversity=False,
+                    limit=MAX_EVIDENCE,
+                ):
                     break
+
+    evidence_limit = max(DEFAULT_EVIDENCE_LIMIT, len(selected))
 
     # Preserve the existing per-target diversity after requirement coverage.
     for target in targets:
-        added = sum(target_matches(target, item["text"]) for item in selected)
+        added = sum(evidence_matches_target(target, item) for item in selected)
         for item in ranked:
-            if target_matches(target, item["text"]) and add(item):
+            if evidence_matches_target(target, item) and add(
+                item,
+                enforce_diversity=True,
+                limit=evidence_limit,
+            ):
                 added += 1
             if added >= PER_TARGET:
                 break
 
     # Fill the remaining evidence slots purely by relevance.
     for item in ranked:
-        add(item)
-        if len(selected) >= MAX_EVIDENCE:
+        add(item, enforce_diversity=True, limit=evidence_limit)
+        if len(selected) >= evidence_limit:
             break
 
     return selected
@@ -145,7 +167,7 @@ def _attach_requirement_scores(
         if not isinstance(raw_query_scores, list) or len(raw_query_scores) != len(
             query_requirement_ids,
         ):
-            raw_query_scores = [item["score"]] * len(query_requirement_ids)
+            raise ValueError("Reranker must return one query score per query")
 
         requirement_scores: dict[str, float] = {}
         for score, requirement_ids in zip(
@@ -219,15 +241,21 @@ def _rerank_candidates(
     selected: list[dict] = []
     selected_ids: set[str] = set()
 
-    def add(item: dict) -> None:
+    def add(item: dict) -> bool:
         if len(selected) < MAX_RERANK_CANDIDATES and item["chunk_id"] not in selected_ids:
             selected.append(item)
             selected_ids.add(item["chunk_id"])
+            return True
+        return False
 
     # Keep local candidates before global fusion can favor evidence repeated by other queries.
     for sparse, dense in zip(sparse_rankings, dense_rankings, strict=True):
-        for item in reciprocal_rank_fusion(sparse, dense)[:PER_QUERY_RERANK_CANDIDATES]:
-            add(item)
+        added = 0
+        for item in reciprocal_rank_fusion(sparse, dense):
+            if add(item):
+                added += 1
+            if added >= PER_QUERY_RERANK_CANDIDATES:
+                break
 
     for item in global_ranking:
         add(item)
@@ -244,11 +272,20 @@ def researcher_node(
     plan = state["plan"]
     corrective_query = state["verification"].get("corrective_query", "")
     if corrective_query:
-        requirement_ids = state["verification"].get("missing") or [
-            requirement["id"] for requirement in plan["requirements"]
-        ]
+        corrective_requirement_id = state["verification"].get(
+            "corrective_requirement_id",
+            "",
+        )
+        missing = state["verification"].get("missing", [])
+        planned_ids = {requirement["id"] for requirement in plan["requirements"]}
+        if (
+            not isinstance(corrective_requirement_id, str)
+            or corrective_requirement_id not in planned_ids
+            or corrective_requirement_id not in missing
+        ):
+            raise ValueError("Corrective query must target one missing requirement")
         queries = [corrective_query]
-        query_requirement_ids = [requirement_ids]
+        query_requirement_ids = [[corrective_requirement_id]]
     else:
         queries, query_requirement_ids = _planned_queries(plan)
 

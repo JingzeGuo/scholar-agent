@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from scholar_agent.agents.planner import requirement_targets, target_matches
+from scholar_agent.agents.planner import evidence_matches_target, requirement_targets
 from scholar_agent.indexes import tokenize
 from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
@@ -17,14 +17,16 @@ EVIDENCE_ID_RE = re.compile(r"E(\d+)")
 def _matches_coverage_target(
     target: str,
     named_targets: list[str],
-    text: str,
+    item: dict,
 ) -> bool:
-    if not target_matches(target, text):
+    if not evidence_matches_target(target, item):
         return False
 
     target_length = len(tokenize(target))
     return not any(
-        other != target and len(tokenize(other)) > target_length and target_matches(other, text)
+        other != target
+        and len(tokenize(other)) > target_length
+        and evidence_matches_target(other, item)
         for other in named_targets
     )
 
@@ -46,11 +48,14 @@ Decide which supplied evidence directly supports each atomic requirement.
 
 Return one JSON object:
 - "covered": requirement ID -> list of supplied evidence IDs
+- "corrective_requirement_id": the one missing requirement ID targeted by
+  "corrective_query", or an empty string when the query is empty
 - "corrective_query": one concise English query for the most important missing evidence,
   or an empty string when no additional retrieval is useful
 
 Rules:
 - Use only supplied evidence IDs.
+- Return a corrective query and requirement ID together, or leave both empty.
 - Cover a requirement only when the evidence collectively supports its entire description.
 - When a requirement names targets, the evidence must collectively cover every named target.
 - Related methods cannot substitute for a named target.
@@ -96,7 +101,7 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]
                 _matches_coverage_target(
                     target,
                     named_targets,
-                    item["text"],
+                    item,
                 )
                 for target in requirement["targets"]
             ):
@@ -109,7 +114,7 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]
                 _matches_coverage_target(
                     target,
                     named_targets,
-                    state["evidence"][int(evidence_id[1:]) - 1]["text"],
+                    state["evidence"][int(evidence_id[1:]) - 1],
                 )
                 for evidence_id in valid_ids
             )
@@ -127,9 +132,25 @@ def verifier_node(state: AgentState, llm: LLMClient) -> dict:
     if not isinstance(raw_query, str):
         raise ValueError("Verifier returned an invalid corrective query")
     corrective_query = raw_query.strip()
+    raw_requirement_id = payload.get("corrective_requirement_id", "")
+    if not isinstance(raw_requirement_id, str):
+        raise ValueError("Verifier returned an invalid corrective requirement ID")
+    corrective_requirement_id = raw_requirement_id.strip()
 
     required = [item["id"] for item in state["plan"]["requirements"]]
     missing = [requirement_id for requirement_id in required if requirement_id not in covered]
+
+    if not missing:
+        corrective_query = ""
+        corrective_requirement_id = ""
+    elif corrective_query:
+        missing_by_key = {requirement_id.casefold(): requirement_id for requirement_id in missing}
+        canonical_id = missing_by_key.get(corrective_requirement_id.casefold())
+        if canonical_id is None:
+            raise ValueError("Corrective query must target one missing requirement")
+        corrective_requirement_id = canonical_id
+    elif corrective_requirement_id:
+        raise ValueError("Corrective requirement ID requires a corrective query")
 
     covered_count = len(required) - len(missing)
 
@@ -144,6 +165,7 @@ def verifier_node(state: AgentState, llm: LLMClient) -> dict:
         "status": status,
         "covered": covered,
         "missing": missing,
+        "corrective_requirement_id": corrective_requirement_id,
         "corrective_query": corrective_query,
     }
 

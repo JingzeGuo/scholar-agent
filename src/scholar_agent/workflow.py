@@ -72,6 +72,7 @@ def initial_state(question: str) -> AgentState:
             "status": "insufficient",
             "covered": {},
             "missing": [],
+            "corrective_requirement_id": "",
             "corrective_query": "",
         },
         "retry_count": 0,

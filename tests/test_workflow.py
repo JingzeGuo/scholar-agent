@@ -43,7 +43,11 @@ class FakeLLM:
                 ],
             }
         covered = {"R1": ["E1"], "R2": ["E2"]} if "E2:" in prompt else {"R1": ["E1"]}
-        return {"covered": covered, "corrective_query": "Find CRAG retrieval evidence"}
+        return {
+            "covered": covered,
+            "corrective_requirement_id": "R2" if "R2:" in prompt else "R1",
+            "corrective_query": "Find CRAG retrieval evidence",
+        }
 
     def complete(self, prompt: str) -> str:
         if "Status: complete" in prompt:
@@ -188,6 +192,7 @@ def test_workflow_requires_an_llm() -> None:
 
 def test_verification_retry_limit_is_configurable() -> None:
     state = initial_state("question")
+    state["verification"]["corrective_requirement_id"] = "R1"
     state["verification"]["corrective_query"] = "Find missing evidence"
     state["retry_count"] = 1
 
@@ -197,6 +202,7 @@ def test_verification_retry_limit_is_configurable() -> None:
     assert route_after_verification(state, Settings(max_retries=2)) == "writer"
 
     state["retry_count"] = 0
+    state["verification"]["corrective_requirement_id"] = ""
     state["verification"]["corrective_query"] = ""
     assert route_after_verification(state, Settings(max_retries=2)) == "writer"
 

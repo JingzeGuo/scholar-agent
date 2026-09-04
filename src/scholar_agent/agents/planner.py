@@ -10,6 +10,8 @@ from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
 GENERIC_TARGET_SUFFIXES = {"method", "methods", "approach", "approaches", "frameworks"}
+MAX_REQUIREMENTS = 5
+MAX_TARGETS_PER_REQUIREMENT = 3
 
 
 def _unique_strings(values: object, limit: int) -> list[str]:
@@ -37,9 +39,17 @@ def target_matches(target: str, text: str) -> bool:
     )
 
 
+def evidence_matches_target(target: str, item: dict) -> bool:
+    """Match a target in either the passage text or its source filename."""
+    return any(
+        isinstance(value, str) and target_matches(target, value)
+        for value in (item.get("text"), item.get("paper"))
+    )
+
+
 def _explicit_targets(values: object, question: str) -> list[str]:
     targets: list[str] = []
-    for value in _unique_strings(values, 3):
+    for value in _unique_strings(values, MAX_TARGETS_PER_REQUIREMENT):
         aliases = re.findall(r"\(([A-Z][A-Z0-9-]{1,9})\)", value)
         explicit = (
             value
@@ -66,7 +76,11 @@ def requirement_targets(requirements: list[dict]) -> list[str]:
     )
 
 
-def _requirements(values: object, question: str, limit: int = 5) -> list[dict]:
+def _requirements(
+    values: object,
+    question: str,
+    limit: int = MAX_REQUIREMENTS,
+) -> list[dict]:
     if not isinstance(values, list):
         raise ValueError("Expected a list")
 
@@ -85,7 +99,7 @@ def _requirements(values: object, question: str, limit: int = 5) -> list[dict]:
         if not isinstance(raw_targets, list):
             continue
 
-        supplied_targets = _unique_strings(raw_targets, 3)
+        supplied_targets = _unique_strings(raw_targets, MAX_TARGETS_PER_REQUIREMENT)
         targets = _explicit_targets(raw_targets, question)
         if len(targets) != len(supplied_targets):
             continue
@@ -120,10 +134,10 @@ The plan is consumed as follows:
   or aspect substitution.
 
 Return one JSON object with exactly one field:
-- "requirements": one to five objects, each with exactly these fields:
+- "requirements": one to {MAX_REQUIREMENTS} objects, each with exactly these fields:
   - "description": one concise English statement of an independently verifiable answer requirement
-  - "targets": zero to three method or paper names explicitly written in the question that this
-    requirement concerns
+  - "targets": zero to {MAX_TARGETS_PER_REQUIREMENT} method or paper names explicitly written in
+    the question that this requirement concerns
   - "query": one concise English evidence-seeking search query for this requirement
 
 Rules:

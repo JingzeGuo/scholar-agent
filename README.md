@@ -117,9 +117,10 @@ coverage selection. Candidates below the configured relevance threshold are
 removed. The remaining evidence is selected with explicit, deterministic
 bounds:
 
-- at most eight evidence chunks;
-- at most four chunks per paper;
-- no duplicate physical page;
+- normally at most eight evidence chunks, expanding up to fifteen when distinct
+  requirement or comparison-target coverage needs more slots;
+- after requirement coverage, at most four chunks per paper and no duplicate
+  physical page when filling diversity slots;
 - one relevant slot per requirement when matching evidence exists;
 - comparison requirements receive evidence for each named target when possible;
 - up to two early slots per explicitly named target when matching evidence exists.
@@ -138,10 +139,10 @@ coverage. Its result is one of:
 - `partial`: some requested coverage is supported;
 - `insufficient`: none of the required coverage is supported.
 
-For missing coverage it may return one concise corrective query. The default
-retry budget is one, so the workflow cannot become an unrestricted loop. If no
-useful query exists or the budget is exhausted, processing continues to the
-Writer.
+For missing coverage it may return one concise corrective query together with
+the specific missing requirement ID that query targets. The default retry
+budget is one, so the workflow cannot become an unrestricted loop. If no useful
+query exists or the budget is exhausted, processing continues to the Writer.
 
 ## Writer and citation validation
 
