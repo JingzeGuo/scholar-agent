@@ -272,7 +272,7 @@ def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict
     assert [item["chunk_id"] for item in result["evidence"]] == ["self-1", "crag-1"]
 
 
-def test_researcher_groups_normalized_queries_by_requirement() -> None:
+def test_researcher_keeps_one_query_per_requirement() -> None:
     plan = {
         "queries": ["Self-RAG retrieval mechanism"],
         "requirements": [
@@ -293,8 +293,11 @@ def test_researcher_groups_normalized_queries_by_requirement() -> None:
 
     queries, query_requirement_ids = _planned_queries(plan)
 
-    assert queries == ["Self-RAG retrieval mechanism"]
-    assert query_requirement_ids == [["R1", "R2"]]
+    assert queries == [
+        "Self-RAG retrieval mechanism",
+        "self-rag   retrieval mechanism",
+    ]
+    assert query_requirement_ids == [["R1"], ["R2"]]
 
 
 def test_researcher_deduplicates_physical_pages(sample_chunks: list[dict]) -> None:
