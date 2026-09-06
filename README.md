@@ -8,6 +8,11 @@ lexical and semantic search, reranks the fused candidates, optionally checks
 whether the evidence covers the question, and renders only validated
 physical-page citations.
 
+On a 50-question English benchmark, the default workflow improved strict
+answer success from 46% to 62% (+16 percentage points) and requirement
+accuracy from 73.2% to 90.1% (+16.9 points) over a hybrid RAG baseline, while
+achieving 87.8% citation support.
+
 ## Problem
 
 Academic question answering needs more than a plausible response. The system
@@ -248,6 +253,33 @@ Scholar-Agent workflow on 50 English questions. See
 workflow, including the `none` versus `soft` Coverage Analyzer ablation.
 Evaluation stays outside the production CLI and the default test suite never
 calls DeepSeek.
+
+The benchmark uses 10,726 page-aware corpus chunks, `deepseek-v4-flash` with
+temperature zero, and variant-blinded external LLM review against extracted
+cited and gold PDF pages. The default No Coverage workflow produced:
+
+| Metric | Simple RAG | Scholar-Agent | Delta |
+|---|---:|---:|---:|
+| Strict Success | 46.0% | 62.0% | +16.0 pp |
+| Requirement Accuracy | 73.2% | 90.1% | +16.9 pp |
+| Citation Support | 89.6% | 87.8% | -1.8 pp |
+| Average latency | 8.72s | 51.81s | +43.09s |
+| Average LLM calls | 1.00 | 3.36 | +2.36 |
+
+The agent workflow substantially improved end-to-end success and requirement
+handling, but did not improve citation support. Citation grounding is therefore
+the clearest remaining quality bottleneck.
+
+The optional Soft Coverage path raised Full-system requirement accuracy from
+90.1% to 94.4%, but Strict Success remained 62% and citation support remained
+87.8%. It also increased average latency from 51.81s to 59.76s and LLM calls
+from 3.36 to 4.48. Based on this ablation, No Coverage is the default and Soft
+Coverage remains available for experiments that prioritize requirement
+completeness.
+
+These are descriptive results from one fixed-model run scored by one external
+LLM judge. The benchmark does not include repeated runs, confidence intervals,
+or a claim of statistical significance.
 
 ## Limitations
 
