@@ -43,13 +43,15 @@ def _verifier_prompt(state: AgentState) -> str:
         for item in plan["requirements"]
     )
 
-    return f"""You are the Verifier in an academic research workflow.
+    return f"""You are the Coverage Analyzer in an academic research workflow.
 
-Decide which supplied evidence directly supports each atomic requirement.
+Annotate how well the supplied evidence covers each atomic requirement. Your labels guide
+retrieval and writing; they do not remove evidence or decide the final answer.
 
 Return one JSON object:
 - "covered": requirement ID -> list of supplied evidence IDs
-- "corrective_queries": one object per useful corrective query, each with a missing
+- "uncertain": requirement ID -> list of related or partially supporting evidence IDs
+- "corrective_queries": one object per useful corrective query, each with an uncertain or missing
   "requirement_id" and a concise English "query"; otherwise an empty list
 
 Rules:
@@ -61,7 +63,8 @@ Rules:
   needs to state the comparison directly.
 - Related methods cannot substitute for a named target.
 - Do not mark a requirement covered merely because the evidence is topically related.
-- Partial coverage is acceptable.
+- Put partial or ambiguous coverage in "uncertain", not "covered".
+- Do not include one requirement in both "covered" and "uncertain".
 - Evidence absence is preferable to unsupported approval.
 - Respect constraints present in the original question without inventing new ones.
 
@@ -74,7 +77,12 @@ Evidence:
 """
 
 
-def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]:
+def _sanitize_evidence_map(
+    state: AgentState,
+    value: object,
+    *,
+    require_all_targets: bool,
+) -> dict[str, list[str]]:
     if not isinstance(value, dict):
         LOGGER.warning("[verifier] ignored non-object coverage")
         return {}
@@ -82,7 +90,7 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]
     requirements = state["plan"]["requirements"]
     requirement_keys = {item["id"].casefold(): item for item in requirements}
     named_targets = requirement_targets(requirements)
-    covered: dict[str, list[str]] = {}
+    result: dict[str, list[str]] = {}
     for raw_requirement_id, raw_ids in value.items():
         if not isinstance(raw_requirement_id, str) or not isinstance(raw_ids, list):
             continue
@@ -124,33 +132,53 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]
             if len(requirement["targets"]) > 1
             else []
         )
-        if valid_ids and all(
-            any(
-                _matches_coverage_target(
-                    target,
-                    named_targets,
-                    state["evidence"][int(evidence_id[1:]) - 1],
+        if valid_ids and (
+            not require_all_targets
+            or all(
+                any(
+                    _matches_coverage_target(
+                        target,
+                        named_targets,
+                        state["evidence"][int(evidence_id[1:]) - 1],
+                    )
+                    for evidence_id in valid_ids
                 )
-                for evidence_id in valid_ids
+                for target in detectable_targets
             )
-            for target in detectable_targets
         ):
-            covered[requirement["id"]] = valid_ids
-    return covered
+            result[requirement["id"]] = valid_ids
+    return result
 
 
 def verifier_node(state: AgentState, llm: LLMClient) -> dict:
-    """Return complete, partial, or insufficient evidence coverage."""
+    """Return advisory evidence coverage and optional corrective queries."""
     payload = llm.complete_json(_verifier_prompt(state))
-    covered = _sanitize_coverage(state, payload.get("covered"))
+    covered = _sanitize_evidence_map(
+        state,
+        payload.get("covered"),
+        require_all_targets=True,
+    )
+    uncertain = _sanitize_evidence_map(
+        state,
+        payload.get("uncertain"),
+        require_all_targets=False,
+    )
+    uncertain = {
+        requirement_id: evidence_ids
+        for requirement_id, evidence_ids in uncertain.items()
+        if requirement_id not in covered
+    }
     required = [item["id"] for item in state["plan"]["requirements"]]
-    missing = [requirement_id for requirement_id in required if requirement_id not in covered]
-    raw_queries = payload.get("corrective_queries", []) if missing else []
+    incomplete = [requirement_id for requirement_id in required if requirement_id not in covered]
+    missing = [requirement_id for requirement_id in incomplete if requirement_id not in uncertain]
+    raw_queries = payload.get("corrective_queries", []) if incomplete else []
     if not isinstance(raw_queries, list):
         LOGGER.warning("[verifier] ignored non-list corrective queries")
         raw_queries = []
 
-    missing_by_key = {requirement_id.casefold(): requirement_id for requirement_id in missing}
+    incomplete_by_key = {
+        requirement_id.casefold(): requirement_id for requirement_id in incomplete
+    }
     corrections: dict[str, str] = {}
     for item in raw_queries:
         if not isinstance(item, dict):
@@ -159,29 +187,30 @@ def verifier_node(state: AgentState, llm: LLMClient) -> dict:
         query = item.get("query")
         if not isinstance(requirement_id, str) or not isinstance(query, str):
             continue
-        canonical_id = missing_by_key.get(requirement_id.strip().casefold())
+        canonical_id = incomplete_by_key.get(requirement_id.strip().casefold())
         query = query.strip()
         if canonical_id is None or not query:
             continue
         corrections[canonical_id] = query
     corrective_queries = [
         {"requirement_id": requirement_id, "query": corrections[requirement_id]}
-        for requirement_id in missing
+        for requirement_id in incomplete
         if requirement_id in corrections
     ]
 
-    covered_count = len(required) - len(missing)
+    covered_count = len(covered)
 
-    if not required or covered_count == 0:
-        status = "insufficient"
-    elif not missing:
+    if required and covered_count == len(required):
         status = "complete"
-    else:
+    elif covered or uncertain:
         status = "partial"
+    else:
+        status = "insufficient"
 
     verification = {
         "status": status,
         "covered": covered,
+        "uncertain": uncertain,
         "missing": missing,
         "corrective_queries": corrective_queries,
     }

@@ -55,9 +55,9 @@ class FakeLLM:
         }
 
     def complete(self, prompt: str) -> str:
-        if "Status: complete" in prompt:
+        if "Coverage status: complete" in prompt:
             return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
-        if "Status: partial" in prompt:
+        if "Coverage status: partial" in prompt:
             return "Self-RAG uses adaptive retrieval [E1]. Missing evidence: CRAG retrieval."
         return "The corpus does not contain sufficiently relevant evidence."
 
@@ -188,6 +188,7 @@ def test_initial_state_does_not_invent_a_requirement() -> None:
     assert state["plan"] == {
         "requirements": [],
     }
+    assert state["verification"]["uncertain"] == {}
 
 
 def test_workflow_requires_an_llm() -> None:

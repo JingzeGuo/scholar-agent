@@ -48,10 +48,12 @@ class SequenceLLM(StubLLM):
 def verifier_llm(
     covered: dict,
     corrective_queries: list[dict] | None = None,
+    uncertain: dict | None = None,
 ) -> StubLLM:
     return StubLLM(
         {
             "covered": covered,
+            "uncertain": uncertain or {},
             "corrective_queries": corrective_queries or [],
         },
     )
@@ -878,6 +880,32 @@ def test_verifier_returns_partial_for_missing_requirement() -> None:
     assert verification["missing"] == ["R2"]
 
 
+def test_verifier_preserves_uncertain_evidence_as_advice() -> None:
+    state = initial_state("Explain MethodA retrieval")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
+    ]
+    state["evidence"] = [
+        {
+            "chunk_id": "method-a",
+            "paper": "MethodA.pdf",
+            "page": 1,
+            "text": "MethodA may retrieve passages dynamically.",
+            "score": 1.0,
+        },
+    ]
+
+    verification = verifier_node(
+        state,
+        verifier_llm({}, uncertain={"R1": ["E1"]}),  # type: ignore[arg-type]
+    )["verification"]
+
+    assert verification["status"] == "partial"
+    assert verification["covered"] == {}
+    assert verification["uncertain"] == {"R1": ["E1"]}
+    assert verification["missing"] == []
+
+
 def test_verifier_batches_queries_for_missing_requirements() -> None:
     state = initial_state("Explain MethodA retrieval, generation, and evaluation")
     state["plan"]["requirements"] = [
@@ -998,7 +1026,7 @@ def test_verifier_prefers_insufficient_to_false_coverage() -> None:
     assert verification["missing"] == ["R1"]
 
 
-def test_writer_uses_only_covered_ids_and_abstains_without_citations(
+def test_writer_sees_all_evidence_and_treats_coverage_as_advisory(
     sample_chunks: list[dict],
 ) -> None:
     state = initial_state("Compare Self-RAG and CRAG")
@@ -1010,31 +1038,33 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
     state["verification"] = {
         "status": "partial",
         "covered": {"R1": ["E1"]},
-        "missing": ["R2"],
+        "uncertain": {"R2": ["E2"]},
+        "missing": [],
         "corrective_queries": [],
     }
     partial = writer_node(
         state,
         StubLLM(
             {},
-            "Self-RAG uses adaptive retrieval [E1]. Missing evidence: CRAG mechanism.",
+            "Self-RAG uses adaptive retrieval [E1]. CRAG uses correction [E2].",
         ),  # type: ignore[arg-type]
     )["answer"]
     assert "[Self-RAG.pdf p.1]" in partial
-    assert "[CRAG.pdf p.2]" not in partial
-    assert "Missing evidence" in partial
+    assert "[CRAG.pdf p.2]" in partial
 
     state["verification"] = {
         "status": "insufficient",
         "covered": {},
+        "uncertain": {},
         "missing": ["R1", "R2"],
         "corrective_queries": [],
     }
-    llm = StubLLM({}, "The corpus does not contain enough relevant evidence.")
+    llm = StubLLM({}, SAFE_ABSTENTION)
     abstention = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
     assert abstention == SAFE_ABSTENTION
     assert ".pdf p." not in abstention
-    assert llm.last_prompt == ""
+    assert "[E1]" in llm.last_prompt
+    assert "[E2]" in llm.last_prompt
 
 
 def test_writer_always_requests_english() -> None:
@@ -1054,6 +1084,7 @@ def test_writer_always_requests_english() -> None:
     state["verification"] = {
         "status": "complete",
         "covered": {"R1": ["E1"]},
+        "uncertain": {},
         "missing": [],
         "corrective_queries": [],
     }
@@ -1064,7 +1095,7 @@ def test_writer_always_requests_english() -> None:
     assert answer == "The evidence supports the answer [Evidence.pdf p.1]."
     assert "Answer in English" in llm.last_prompt
     assert "Answer in French" not in llm.last_prompt
-    assert "Status: complete" in llm.last_prompt
+    assert "Coverage status: complete" in llm.last_prompt
 
 
 def test_writer_repairs_an_unverified_citation_once(sample_chunks: list[dict]) -> None:
@@ -1076,13 +1107,14 @@ def test_writer_repairs_an_unverified_citation_once(sample_chunks: list[dict]) -
     state["verification"] = {
         "status": "complete",
         "covered": {"R1": ["E1"]},
+        "uncertain": {},
         "missing": [],
         "corrective_queries": [],
     }
 
     repaired = writer_node(
         state,
-        SequenceLLM(["Unsupported [E2].", "Supported [E1]."]),  # type: ignore[arg-type]
+        SequenceLLM(["Unsupported [E99].", "Supported [E1]."]),  # type: ignore[arg-type]
     )["answer"]
     assert repaired == "Supported [Self-RAG.pdf p.1]."
 
@@ -1098,24 +1130,26 @@ def test_writer_safely_abstains_when_citation_repair_fails(
     state["verification"] = {
         "status": "complete",
         "covered": {"R1": ["E1"]},
+        "uncertain": {},
         "missing": [],
         "corrective_queries": [],
     }
 
     failed_repair = writer_node(
         state,
-        StubLLM({}, "Unsupported [E2]."),  # type: ignore[arg-type]
+        StubLLM({}, "Unsupported [E99]."),  # type: ignore[arg-type]
     )["answer"]
     assert failed_repair == SAFE_ABSTENTION
 
     state["verification"] = {
         "status": "insufficient",
         "covered": {},
+        "uncertain": {},
         "missing": ["R1"],
         "corrective_queries": [],
     }
-    unsafe_abstention = writer_node(
+    advisory_answer = writer_node(
         state,
         StubLLM({}, "Unsupported [E1]."),  # type: ignore[arg-type]
     )["answer"]
-    assert unsafe_abstention == SAFE_ABSTENTION
+    assert advisory_answer == "Unsupported [Self-RAG.pdf p.1]."

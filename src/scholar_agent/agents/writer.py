@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from scholar_agent.citations import (
     PAGE_CITATION_RE,
@@ -18,44 +17,36 @@ LOGGER = logging.getLogger(__name__)
 SAFE_ABSTENTION = "The supplied evidence is insufficient to provide a citation-grounded answer."
 
 
-def _allowed_ids(state: AgentState) -> list[int]:
-    result: set[int] = set()
-    for evidence_ids in state["verification"]["covered"].values():
-        for evidence_id in evidence_ids:
-            if match := re.fullmatch(r"E(\d+)", evidence_id):
-                result.add(int(match.group(1)))
-    return sorted(result)
-
-
-def _writer_prompt(state: AgentState, allowed: list[int]) -> str:
+def _writer_prompt(state: AgentState) -> str:
     evidence_text = "\n".join(
-        f"[E{index}] {state['evidence'][index - 1]['text']}" for index in allowed
+        f"[E{index}] {item['text']}"
+        for index, item in enumerate(state["evidence"], start=1)
     )
     verification = state["verification"]
     return f"""You are the Writer in an evidence-grounded research workflow.
 
 Answer in English using only the supplied evidence.
-For complete or partial answers, every factual statement needs an inline supplied
-[E1], [E2], ... reference.
+Every factual statement, including an opening summary or concluding restatement, needs an
+inline supplied [E1], [E2], ... reference.
 For multiple sources, write adjacent references like [E1][E5].
-Use the smallest sufficient citation set.
+Use only citations that directly support the sentence, and repeat a citation whenever another
+factual sentence requires it.
 Do not use evidence IDs that were not supplied.
 Do not substitute related methods for explicitly named targets.
 Respect constraints in the original question only when supported by evidence.
 Answer only supported aspects and do not fill missing gaps from memory.
 Organize the answer around the user's question rather than around evidence chunks.
+Treat the coverage analysis as advisory. Inspect all evidence yourself, and do not claim that
+an item is missing when any supplied evidence supports it.
 
-Apply exactly one policy based on Status:
-- complete: answer the question from the evidence.
-- partial: answer supported aspects, then explicitly identify every item in Missing.
-- insufficient: give only a concise abstention explaining that the corpus lacks enough
-  relevant evidence; make no factual claims and include no citations.
+If no supplied evidence supports any requested factual answer, return exactly:
+{SAFE_ABSTENTION}
 
-Status: {verification["status"]}
+Coverage status: {verification["status"]}
 Requirements: {state["plan"]["requirements"]}
 Covered: {verification["covered"]}
+Uncertain: {verification.get("uncertain", {})}
 Missing: {verification["missing"]}
-Allowed evidence IDs: {[f"E{index}" for index in allowed]}
 Question: {state["question"]}
 
 Evidence:
@@ -63,39 +54,38 @@ Evidence:
 """
 
 
-def _citation_policy_error(used: set[int], allowed: set[int]) -> str:
+def _citation_policy_error(draft: str, used: set[int]) -> str:
+    if draft.strip() == SAFE_ABSTENTION:
+        return ""
     if not used:
         return "the answer has no valid evidence citations"
-    if not used.issubset(allowed):
-        return "the answer cites evidence not approved by the Verifier"
     return ""
 
 
 def writer_node(state: AgentState, llm: LLMClient) -> dict:
-    """Write only from verifier-approved evidence, or abstain."""
+    """Write from all selected evidence, using coverage only as advice."""
     status = state["verification"]["status"]
-    if status == "insufficient":
-        LOGGER.info("[writer] deterministic abstention for insufficient evidence")
+    if not state["evidence"]:
+        LOGGER.info("[writer] deterministic abstention without evidence")
         return {"answer": SAFE_ABSTENTION}
 
-    allowed = _allowed_ids(state)
-    prompt = _writer_prompt(state, allowed)
+    prompt = _writer_prompt(state)
     draft = llm.complete(prompt)
     used = set(valid_evidence_ids(draft, len(state["evidence"])))
-    policy_error = _citation_policy_error(used, set(allowed))
+    policy_error = _citation_policy_error(draft, used)
     if policy_error:
         draft = llm.complete(
             f"""{prompt}
 
 Your previous draft failed validation because {policy_error}.
-Rewrite the answer once. Follow the citation policy exactly and use only the allowed evidence IDs.
+Rewrite the answer once. Follow the citation policy exactly and use only supplied evidence IDs.
 
 Previous draft:
 {draft}
 """,
         )
         used = set(valid_evidence_ids(draft, len(state["evidence"])))
-        policy_error = _citation_policy_error(used, set(allowed))
+        policy_error = _citation_policy_error(draft, used)
     if policy_error:
         LOGGER.warning("[writer] safe fallback: %s", policy_error)
         draft = SAFE_ABSTENTION

@@ -70,6 +70,7 @@ def initial_state(question: str) -> AgentState:
         "verification": {
             "status": "insufficient",
             "covered": {},
+            "uncertain": {},
             "missing": [],
             "corrective_queries": [],
         },

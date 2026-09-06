@@ -35,7 +35,7 @@ SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
 MODEL_NAME = "deepseek-v4-flash"
-PIPELINE_VERSION = "v0_hard_verifier"
+PIPELINE_VERSION = "v1_soft_coverage"
 EXPECTED_CORPUS_SIZE = 10_726
 EXPECTED_QUESTION_COUNT = 50
 DEFAULT_EVIDENCE_LIMIT = 8

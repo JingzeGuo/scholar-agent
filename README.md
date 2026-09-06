@@ -29,12 +29,11 @@ Researcher
    ├── Reciprocal Rank Fusion
    └── Cross-encoder reranking
    ↓
-Verifier
-   ├── complete ───────────────────────────────┐
-   ├── partial + corrective queries → Researcher once → Verifier
-   └── insufficient ──────────────────────────┤
+Coverage Analyzer
+   ├── annotations ────────────────────────────┐
+   └── corrective queries → Researcher once ──┤
                                                ↓
-                                             Writer
+                                      Writer (all evidence)
    ↓
 Deterministic physical-page citation validation
    ↓
@@ -46,12 +45,12 @@ LangGraph connects four workflow nodes:
 - Planner: LLM-based planning node.
 - Researcher: deterministic retrieval, fusion, reranking, and
   evidence-selection node.
-- Verifier: LLM-based evidence-coverage node.
+- Coverage Analyzer: LLM-based evidence annotation and corrective-query node.
 - Writer: LLM-based grounded-answer node.
 
 The Researcher is a deterministic workflow node, not an autonomous LLM agent.
 Each pass through the bounded retry loop runs one batch of corrective retrievals
-requested by the Verifier.
+requested by the Coverage Analyzer.
 
 ## Planner
 
@@ -129,36 +128,37 @@ bounds:
 - up to two early slots per explicitly named target when matching evidence exists.
 
 When a target name is not repeated verbatim in any candidate, the top semantic
-candidates still reach the Verifier instead of being discarded as a group.
+candidates still reach the Coverage Analyzer instead of being discarded as a group.
 
 During corrective retrieval, useful new evidence is merged with the existing
 selection. If the retry produces the same evidence IDs, the workflow terminates
 without repeating verification.
 
-## Verifier
+## Coverage Analyzer
 
-The Verifier checks every atomic requirement against supplied evidence IDs. It
+The Coverage Analyzer checks every atomic requirement against supplied evidence IDs. It
 rejects unknown IDs, evidence explicitly belonging to a different named target,
-and unsupported coverage. It can combine separately supported facts across
+and unsupported coverage annotations. It can combine separately supported facts across
 papers and does not require every evidence passage to repeat the target name.
-Its result is one of:
+Each requirement is annotated as supported, uncertain, or missing; the aggregate
+status remains:
 
 - `complete`: every requirement has direct support;
 - `partial`: some requested coverage is supported;
 - `insufficient`: none of the required coverage is supported.
 
-For missing coverage it may return a batch containing one concise corrective
-query per missing requirement. The default retry budget is one, so the workflow
-cannot become an unrestricted loop. If no useful query exists or the budget is
-exhausted, processing continues to the Writer.
+For uncertain or missing coverage it may return one concise corrective query per
+requirement. The default retry budget is one, so the workflow cannot become an
+unrestricted loop. Its annotations never remove evidence or force an abstention.
+If no useful query exists or the budget is exhausted, processing continues to
+the Writer.
 
 ## Writer and citation validation
 
-The Writer sees only evidence approved by the Verifier. It cites temporary IDs
-such as `[E1]`. If it cites an unknown or unapproved ID, it receives one
-constrained rewrite attempt; a second failure safely becomes an abstention
-instead of terminating the workflow. Partial answers must name the missing
-coverage. Insufficient evidence produces a concise abstention with no citations.
+The Writer sees every selected evidence chunk and treats coverage annotations as
+advice. It cites temporary IDs such as `[E1]`. If it produces no valid citation,
+it receives one constrained rewrite attempt; a second failure safely becomes an
+abstention. Only an actually empty evidence set causes an immediate abstention.
 
 After writing, deterministic validation converts known IDs to citations copied
 from stored metadata:
@@ -241,7 +241,7 @@ suite never calls DeepSeek.
 
 - The corpus and NumPy indexes are intended for laptop-scale use.
 - Retrieval is always BM25 plus dense search rather than adaptive routing.
-- The Verifier relies on an LLM and is not a formal entailment checker.
+- Coverage annotations rely on an LLM and are not formal entailment checks.
 - Citation validation establishes provenance, not semantic truth.
 - Indexes are rebuilt as a unit rather than updated incrementally.
 - Local embedding and reranker models require a download on first use.
