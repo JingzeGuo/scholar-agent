@@ -18,6 +18,8 @@ class AgentState(TypedDict):
     verification: dict
     retry_count: int
     stop_reason: str
+    answer_verification: dict
+    repair_count: int
     answer: str
 
 

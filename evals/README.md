@@ -30,8 +30,8 @@ uv run python evals/evaluate.py --run-id v1_soft prepare-review
 It stops at the first provider or model error; rerunning the command skips
 successful records and retries the failed sample.
 Versioned runs are stored under `evals/runs/<run-id>/`. Full-system records
-also include the plan, verification result, retry count, stop reason, and cited
-pages under `trace`.
+also include the plan, coverage and answer verification results, retry and repair
+counts, stop reason, and cited pages under `trace`.
 
 ## Manual review
 

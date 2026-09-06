@@ -9,7 +9,12 @@ import scholar_agent.workflow as workflow_module
 from scholar_agent.agents.writer import SAFE_ABSTENTION
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
-from scholar_agent.workflow import initial_state, route_after_verification, run_question
+from scholar_agent.workflow import (
+    initial_state,
+    route_after_answer_verification,
+    route_after_verification,
+    run_question,
+)
 
 
 class FakeEngine:
@@ -42,6 +47,20 @@ class FakeLLM:
                         "query": "Self-RAG CRAG retrieval",
                     },
                 ],
+            }
+        if "You verify a final answer" in prompt:
+            requirements = {
+                "R1": {"passed": True, "issue": ""},
+            }
+            if "R2:" in prompt:
+                requirements["R2"] = {"passed": True, "issue": ""}
+            return {
+                "requirements": requirements,
+                "citation_issues": [],
+                "uncited_claims": [],
+                "unsupported_claims": [],
+                "incorrect_missing_claims": [],
+                "repair_instructions": [],
             }
         covered = {"R1": ["E1"], "R2": ["E2"]} if "E2 [" in prompt else {"R1": ["E1"]}
         return {
@@ -213,7 +232,65 @@ def test_verification_retry_limit_is_configurable() -> None:
     assert route_after_verification(state, Settings(max_retries=2)) == "writer"
 
 
-def test_agent_state_has_seven_cross_agent_fields() -> None:
+def test_answer_repair_is_bounded_to_one_attempt(sample_chunks: list[dict]) -> None:
+    state = initial_state("question")
+    state["evidence"] = sample_chunks[:1]
+    state["answer_verification"]["repair_required"] = True
+
+    assert route_after_answer_verification(state) == "repair"
+
+    state["repair_count"] = 1
+    assert route_after_answer_verification(state) == "end"
+
+
+def test_workflow_repairs_and_rechecks_the_answer_once(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    class RepairingLLM(FakeLLM):
+        answer_checks = 0
+
+        def complete_json(self, prompt: str) -> dict:
+            if "You verify a final answer" not in prompt:
+                return super().complete_json(prompt)
+            self.answer_checks += 1
+            issue = self.answer_checks == 1
+            return {
+                "requirements": {
+                    "R1": {"passed": True, "issue": ""},
+                    "R2": {"passed": True, "issue": ""},
+                },
+                "citation_issues": [],
+                "uncited_claims": ["The answer has no citation."] if issue else [],
+                "unsupported_claims": [],
+                "incorrect_missing_claims": [],
+                "repair_instructions": ["Add supporting citations."] if issue else [],
+            }
+
+        def complete(self, prompt: str) -> str:
+            if "Repair an evidence-grounded" in prompt:
+                return "Self-RAG uses retrieval [E1]. CRAG uses correction [E2]."
+            return "Self-RAG uses retrieval. CRAG uses correction."
+
+    llm = RepairingLLM()
+    engine = FakeEngine(sample_chunks[:2])
+    monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
+    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
+
+    result = run_question(
+        "Compare Self-RAG and CRAG",
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        llm,  # type: ignore[arg-type]
+    )
+
+    assert result["repair_count"] == 1
+    assert result["answer_verification"]["passed"] is True
+    assert llm.answer_checks == 2
+    assert "[Self-RAG.pdf p.1]" in result["answer"]
+    assert "[CRAG.pdf p.2]" in result["answer"]
+
+def test_agent_state_has_answer_verification_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
         "plan",
@@ -221,5 +298,7 @@ def test_agent_state_has_seven_cross_agent_fields() -> None:
         "verification",
         "retry_count",
         "stop_reason",
+        "answer_verification",
+        "repair_count",
         "answer",
     }

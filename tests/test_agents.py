@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from scholar_agent.agents.answer_verifier import answer_verifier_node
 from scholar_agent.agents.planner import evidence_matches_target, planner_node, target_matches
 from scholar_agent.agents.researcher import (
     _attach_requirement_scores,
@@ -13,7 +14,7 @@ from scholar_agent.agents.researcher import (
     researcher_node,
 )
 from scholar_agent.agents.verifier import verifier_node
-from scholar_agent.agents.writer import SAFE_ABSTENTION, writer_node
+from scholar_agent.agents.writer import SAFE_ABSTENTION, repair_writer_node, writer_node
 from scholar_agent.config import Settings
 from scholar_agent.workflow import initial_state
 
@@ -33,16 +34,6 @@ class StubLLM:
     def complete(self, prompt: str) -> str:
         self.last_prompt = prompt
         return self.text
-
-
-class SequenceLLM(StubLLM):
-    def __init__(self, texts: list[str]) -> None:
-        super().__init__({})
-        self.texts = iter(texts)
-
-    def complete(self, prompt: str) -> str:
-        self.last_prompt = prompt
-        return next(self.texts)
 
 
 def verifier_llm(
@@ -1098,28 +1089,7 @@ def test_writer_always_requests_english() -> None:
     assert "Coverage status: complete" in llm.last_prompt
 
 
-def test_writer_repairs_an_unverified_citation_once(sample_chunks: list[dict]) -> None:
-    state = initial_state("Explain Self-RAG")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
-    ]
-    state["evidence"] = sample_chunks[:2]
-    state["verification"] = {
-        "status": "complete",
-        "covered": {"R1": ["E1"]},
-        "uncertain": {},
-        "missing": [],
-        "corrective_queries": [],
-    }
-
-    repaired = writer_node(
-        state,
-        SequenceLLM(["Unsupported [E99].", "Supported [E1]."]),  # type: ignore[arg-type]
-    )["answer"]
-    assert repaired == "Supported [Self-RAG.pdf p.1]."
-
-
-def test_writer_safely_abstains_when_citation_repair_fails(
+def test_answer_verifier_requests_repair_for_grounding_issues(
     sample_chunks: list[dict],
 ) -> None:
     state = initial_state("Explain Self-RAG")
@@ -1135,21 +1105,61 @@ def test_writer_safely_abstains_when_citation_repair_fails(
         "corrective_queries": [],
     }
 
-    failed_repair = writer_node(
+    state["answer"] = "Self-RAG uses retrieval."
+    result = answer_verifier_node(
         state,
-        StubLLM({}, "Unsupported [E99]."),  # type: ignore[arg-type]
-    )["answer"]
-    assert failed_repair == SAFE_ABSTENTION
+        StubLLM(
+            {
+                "requirements": {"R1": {"passed": True, "issue": ""}},
+                "citation_issues": [],
+                "uncited_claims": ["Self-RAG uses retrieval."],
+                "unsupported_claims": [],
+                "incorrect_missing_claims": [],
+                "repair_instructions": ["Cite E1 after the claim."],
+            },
+        ),  # type: ignore[arg-type]
+    )["answer_verification"]
 
+    assert result["passed"] is False
+    assert result["repair_required"] is True
+    assert result["uncited_claims"] == ["Self-RAG uses retrieval."]
+
+
+def test_writer_repair_runs_once_and_malformed_verification_fails_open(
+    sample_chunks: list[dict],
+) -> None:
+    state = initial_state("Explain Self-RAG")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
+    ]
+    state["evidence"] = sample_chunks[:2]
     state["verification"] = {
-        "status": "insufficient",
-        "covered": {},
+        "status": "complete",
+        "covered": {"R1": ["E1"]},
         "uncertain": {},
-        "missing": ["R1"],
+        "missing": [],
         "corrective_queries": [],
     }
-    advisory_answer = writer_node(
+
+    state["answer"] = "Unsupported."
+    state["answer_verification"] = {
+        **state["answer_verification"],
+        "repair_required": True,
+        "repair_instructions": ["Replace the claim with the supported mechanism."],
+    }
+    repaired = repair_writer_node(
         state,
-        StubLLM({}, "Unsupported [E1]."),  # type: ignore[arg-type]
-    )["answer"]
-    assert advisory_answer == "Unsupported [Self-RAG.pdf p.1]."
+        StubLLM({}, "Self-RAG uses adaptive retrieval [E1]."),  # type: ignore[arg-type]
+    )
+    assert repaired == {
+        "answer": "Self-RAG uses adaptive retrieval [Self-RAG.pdf p.1].",
+        "repair_count": 1,
+    }
+
+    invalid = answer_verifier_node(
+        state,
+        StubLLM({}),  # type: ignore[arg-type]
+    )["answer_verification"]
+    assert invalid["passed"] is None
+    assert invalid["repair_required"] is False
+    assert invalid["error"]

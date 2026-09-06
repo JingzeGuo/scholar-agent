@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from scholar_agent.citations import (
     PAGE_CITATION_RE,
     citation_summary,
-    valid_evidence_ids,
     validate_citations,
 )
 from scholar_agent.llm import LLMClient
@@ -54,12 +54,8 @@ Evidence:
 """
 
 
-def _citation_policy_error(draft: str, used: set[int]) -> str:
-    if draft.strip() == SAFE_ABSTENTION:
-        return ""
-    if not used:
-        return "the answer has no valid evidence citations"
-    return ""
+def _render_answer(draft: str, evidence: list[dict]) -> str:
+    return validate_citations(PAGE_CITATION_RE.sub("", draft), evidence)
 
 
 def writer_node(state: AgentState, llm: LLMClient) -> dict:
@@ -69,29 +65,7 @@ def writer_node(state: AgentState, llm: LLMClient) -> dict:
         LOGGER.info("[writer] deterministic abstention without evidence")
         return {"answer": SAFE_ABSTENTION}
 
-    prompt = _writer_prompt(state)
-    draft = llm.complete(prompt)
-    used = set(valid_evidence_ids(draft, len(state["evidence"])))
-    policy_error = _citation_policy_error(draft, used)
-    if policy_error:
-        draft = llm.complete(
-            f"""{prompt}
-
-Your previous draft failed validation because {policy_error}.
-Rewrite the answer once. Follow the citation policy exactly and use only supplied evidence IDs.
-
-Previous draft:
-{draft}
-""",
-        )
-        used = set(valid_evidence_ids(draft, len(state["evidence"])))
-        policy_error = _citation_policy_error(draft, used)
-    if policy_error:
-        LOGGER.warning("[writer] safe fallback: %s", policy_error)
-        draft = SAFE_ABSTENTION
-
-    draft = PAGE_CITATION_RE.sub("", draft)
-    answer = validate_citations(draft, state["evidence"])
+    answer = _render_answer(llm.complete(_writer_prompt(state)), state["evidence"])
     summary = citation_summary(answer, state["evidence"])
     LOGGER.info(
         "[writer] status=%s citations=%d sources=%d",
@@ -100,3 +74,36 @@ Previous draft:
         summary["sources"],
     )
     return {"answer": answer}
+
+
+def repair_writer_node(state: AgentState, llm: LLMClient) -> dict:
+    """Repair only the issues reported by the answer verifier, at most once."""
+    evidence_text = "\n".join(
+        f"[E{index}] {item['text']}"
+        for index, item in enumerate(state["evidence"], start=1)
+    )
+    issues = json.dumps(
+        state["answer_verification"],
+        ensure_ascii=False,
+        indent=2,
+    )
+    prompt = f"""Repair an evidence-grounded academic answer in English.
+
+Use only the supplied evidence and change only what the verification issues require.
+Every factual sentence needs a directly supporting [E1], [E2], ... citation.
+Do not add new claims. Do not claim that evidence is missing when it is supplied.
+
+Question: {state["question"]}
+Requirements: {state["plan"]["requirements"]}
+
+Verification issues:
+{issues}
+
+Previous answer:
+{state["answer"]}
+
+Evidence:
+{evidence_text}
+"""
+    answer = _render_answer(llm.complete(prompt), state["evidence"])
+    return {"answer": answer, "repair_count": state["repair_count"] + 1}

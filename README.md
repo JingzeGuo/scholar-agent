@@ -33,20 +33,25 @@ Coverage Analyzer
    ├── annotations ────────────────────────────┐
    └── corrective queries → Researcher once ──┤
                                                ↓
-                                      Writer (all evidence)
+                                       Writer (all evidence)
    ↓
+Answer Verifier
+   ├── pass ────────────────────────┐
+   └── fail → Writer repair once → recheck
+                                    ↓
 Deterministic physical-page citation validation
    ↓
 Answer
 ```
 
-LangGraph connects four workflow nodes:
+LangGraph connects the workflow nodes:
 
 - Planner: LLM-based planning node.
 - Researcher: deterministic retrieval, fusion, reranking, and
   evidence-selection node.
 - Coverage Analyzer: LLM-based evidence annotation and corrective-query node.
 - Writer: LLM-based grounded-answer node.
+- Answer Verifier: LLM-based final requirement and grounding check.
 
 The Researcher is a deterministic workflow node, not an autonomous LLM agent.
 Each pass through the bounded retry loop runs one batch of corrective retrievals
@@ -156,9 +161,14 @@ the Writer.
 ## Writer and citation validation
 
 The Writer sees every selected evidence chunk and treats coverage annotations as
-advice. It cites temporary IDs such as `[E1]`. If it produces no valid citation,
-it receives one constrained rewrite attempt; a second failure safely becomes an
-abstention. Only an actually empty evidence set causes an immediate abstention.
+advice. It cites temporary IDs such as `[E1]`. Only an actually empty evidence
+set causes an immediate abstention.
+
+The Answer Verifier then checks planned requirement coverage, uncited and
+unsupported claims, citation support, and incorrect claims that evidence is
+missing. It sees no benchmark answer keys or gold pages. A failed answer receives
+one constrained repair and one final check; it cannot enter an unrestricted
+loop. Malformed verifier output is recorded without discarding the answer.
 
 After writing, deterministic validation converts known IDs to citations copied
 from stored metadata:

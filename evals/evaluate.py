@@ -35,7 +35,7 @@ SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
 MODEL_NAME = "deepseek-v4-flash"
-PIPELINE_VERSION = "v1_soft_coverage"
+PIPELINE_VERSION = "v2_answer_verifier"
 EXPECTED_CORPUS_SIZE = 10_726
 EXPECTED_QUESTION_COUNT = 50
 DEFAULT_EVIDENCE_LIMIT = 8
@@ -362,6 +362,8 @@ def _trace(answer: str, state: dict[str, Any]) -> dict[str, Any]:
         "verification": state.get("verification"),
         "retry_count": int(state.get("retry_count", 0)),
         "stop_reason": state.get("stop_reason", ""),
+        "answer_verification": state.get("answer_verification"),
+        "repair_count": int(state.get("repair_count", 0)),
         "cited_pages": [
             {"paper": paper, "page": page} for paper, page in cited_pages(answer)
         ],
