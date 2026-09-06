@@ -206,6 +206,7 @@ def test_run_is_resumable_and_does_not_repeat_successful_pairs(
         full_calls.append(question)
         return {
             "answer": "Full [Self-RAG.pdf p.1].",
+            "coverage_mode": "none",
             "evidence": sample_chunks[:1],
             "verification": {"status": "complete"},
         }
@@ -242,7 +243,18 @@ def test_run_is_resumable_and_does_not_repeat_successful_pairs(
         evaluation.PIPELINE_VERSION,
     }
     assert {record["run_id"] for record in records} == {"legacy"}
+    assert records[0]["trace"]["coverage_mode"] == "none"
     assert records[0]["trace"]["verification"] == {"status": "complete"}
+
+
+def test_parser_accepts_coverage_ablation_mode() -> None:
+    args = evaluation._parser().parse_args(
+        ["--run-id", "v2_no_coverage", "--coverage-mode", "none", "run"],
+    )
+
+    assert args.run_id == "v2_no_coverage"
+    assert args.coverage_mode == "none"
+    assert args.command == "run"
 
 
 def test_versioned_artifacts_stay_inside_the_run_directory() -> None:

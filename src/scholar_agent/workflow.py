@@ -44,16 +44,19 @@ def build_workflow(
     engine: RetrievalEngine,
     settings: Settings,
     llm: LLMClient | None,
+    *,
+    coverage_mode: str = "soft",
 ) -> Any:
     if llm is None:
         raise ValueError("llm is required")
+    if coverage_mode not in {"none", "soft"}:
+        raise ValueError(f"Unknown coverage mode: {coverage_mode}")
     workflow = StateGraph(AgentState)
     workflow.add_node("planner", lambda state: planner_node(state, llm))
     workflow.add_node(
         "researcher",
         lambda state: researcher_node(state, engine, settings),
     )
-    workflow.add_node("verifier", lambda state: verifier_node(state, llm))
     workflow.add_node("writer", lambda state: writer_node(state, llm))
     workflow.add_node(
         "answer_verifier",
@@ -62,16 +65,20 @@ def build_workflow(
     workflow.add_node("repair", lambda state: repair_writer_node(state, llm))
     workflow.set_entry_point("planner")
     workflow.add_edge("planner", "researcher")
-    workflow.add_conditional_edges(
-        "researcher",
-        route_after_research,
-        {"verifier": "verifier", "writer": "writer"},
-    )
-    workflow.add_conditional_edges(
-        "verifier",
-        lambda state: route_after_verification(state, settings),
-        {"researcher": "researcher", "writer": "writer"},
-    )
+    if coverage_mode == "soft":
+        workflow.add_node("verifier", lambda state: verifier_node(state, llm))
+        workflow.add_conditional_edges(
+            "researcher",
+            route_after_research,
+            {"verifier": "verifier", "writer": "writer"},
+        )
+        workflow.add_conditional_edges(
+            "verifier",
+            lambda state: route_after_verification(state, settings),
+            {"researcher": "researcher", "writer": "writer"},
+        )
+    else:
+        workflow.add_edge("researcher", "writer")
     workflow.add_edge("writer", "answer_verifier")
     workflow.add_conditional_edges(
         "answer_verifier",
@@ -82,15 +89,16 @@ def build_workflow(
     return workflow.compile()
 
 
-def initial_state(question: str) -> AgentState:
+def initial_state(question: str, coverage_mode: str = "soft") -> AgentState:
     return {
         "question": question,
+        "coverage_mode": coverage_mode,
         "plan": {
             "requirements": [],
         },
         "evidence": [],
         "verification": {
-            "status": "insufficient",
+            "status": "insufficient" if coverage_mode == "soft" else "not_run",
             "covered": {},
             "uncertain": {},
             "missing": [],
@@ -119,6 +127,13 @@ def run_question(
     engine: RetrievalEngine,
     settings: Settings,
     llm: LLMClient | None,
+    *,
+    coverage_mode: str = "soft",
 ) -> AgentState:
-    result = build_workflow(engine, settings, llm).invoke(initial_state(question))
+    result = build_workflow(
+        engine,
+        settings,
+        llm,
+        coverage_mode=coverage_mode,
+    ).invoke(initial_state(question, coverage_mode))
     return AgentState(**result)

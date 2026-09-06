@@ -13,6 +13,7 @@ class AgentState(TypedDict):
     """The only state passed through the LangGraph workflow."""
 
     question: str
+    coverage_mode: str
     plan: dict
     evidence: list[dict]
     verification: dict

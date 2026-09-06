@@ -26,6 +26,20 @@ uv run python evals/evaluate.py --run-id v1_soft run
 uv run python evals/evaluate.py --run-id v1_soft prepare-review
 ```
 
+To measure the value of the pre-write Coverage Analyzer, run the full system
+once without it and once with its advisory annotations and single retrieval
+retry. Keep all other settings unchanged:
+
+```bash
+uv run python evals/evaluate.py --run-id v2_no_coverage --coverage-mode none run
+uv run python evals/evaluate.py --run-id v2_soft_coverage --coverage-mode soft run
+```
+
+Prepare and score each run with its matching `--run-id`, then compare the
+`full` rows in their generated summaries. The default is `soft`; `none` routes
+the Researcher directly to the Writer. The final Answer Verifier and its single
+repair remain enabled in both modes.
+
 `run` writes one resumable record per question and variant to `results.jsonl`.
 It stops at the first provider or model error; rerunning the command skips
 successful records and retries the failed sample.

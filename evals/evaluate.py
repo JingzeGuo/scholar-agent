@@ -359,6 +359,7 @@ def _public_evidence(evidence: Iterable[dict]) -> list[dict[str, Any]]:
 def _trace(answer: str, state: dict[str, Any]) -> dict[str, Any]:
     return {
         "plan": state.get("plan"),
+        "coverage_mode": state.get("coverage_mode"),
         "verification": state.get("verification"),
         "retry_count": int(state.get("retry_count", 0)),
         "stop_reason": state.get("stop_reason", ""),
@@ -995,6 +996,12 @@ def _parser() -> argparse.ArgumentParser:
         "--run-id",
         help="Store generated artifacts under evals/runs/<run-id>",
     )
+    parser.add_argument(
+        "--coverage-mode",
+        choices=("none", "soft"),
+        default="soft",
+        help="Run the full agent with or without pre-write coverage analysis",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("run", help="Run Full Scholar-Agent and Simple RAG")
     review = subparsers.add_parser("prepare-review", help="Create the blinded review CSV")
@@ -1023,6 +1030,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run":
             questions, engine, settings, llm = _runtime()
             _warm_up(questions[0]["question"], engine, settings)
+
+            def full_runner(
+                question: str,
+                engine: RetrievalEngine,
+                settings: Settings,
+                llm: Any,
+            ) -> dict:
+                return run_question(
+                    question,
+                    engine,
+                    settings,
+                    llm,
+                    coverage_mode=args.coverage_mode,
+                )
+
             run_evaluation(
                 questions,
                 engine,
@@ -1030,6 +1052,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 llm,
                 results_path,
                 run_id=run_id,
+                pipeline_version=f"{PIPELINE_VERSION}_{args.coverage_mode}",
+                full_runner=full_runner,
             )
         elif args.command == "prepare-review":
             questions = load_questions()

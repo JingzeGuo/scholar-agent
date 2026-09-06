@@ -74,7 +74,7 @@ class FakeLLM:
         }
 
     def complete(self, prompt: str) -> str:
-        if "Coverage status: complete" in prompt:
+        if "Coverage status: complete" in prompt or "Coverage status: not_run" in prompt:
             return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
         if "Coverage status: partial" in prompt:
             return "Self-RAG uses adaptive retrieval [E1]. Missing evidence: CRAG retrieval."
@@ -188,7 +188,7 @@ def test_run_question_starts_with_initial_state(monkeypatch: Any) -> None:
             return state
 
     compiled = CapturingWorkflow()
-    monkeypatch.setattr(workflow_module, "build_workflow", lambda *args: compiled)
+    monkeypatch.setattr(workflow_module, "build_workflow", lambda *args, **kwargs: compiled)
 
     result = run_question(
         "question",
@@ -213,6 +213,44 @@ def test_initial_state_does_not_invent_a_requirement() -> None:
 def test_workflow_requires_an_llm() -> None:
     with pytest.raises(ValueError, match="llm is required"):
         workflow_module.build_workflow(FakeEngine([]), Settings(), None)  # type: ignore[arg-type]
+
+
+def test_workflow_rejects_unknown_coverage_mode() -> None:
+    with pytest.raises(ValueError, match="Unknown coverage mode"):
+        workflow_module.build_workflow(
+            FakeEngine([]),
+            Settings(),
+            FakeLLM(),  # type: ignore[arg-type]
+            coverage_mode="hard",
+        )
+
+
+def test_no_coverage_mode_skips_prewrite_verification(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    engine = FakeEngine(sample_chunks[:2])
+    monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
+    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
+    monkeypatch.setattr(
+        workflow_module,
+        "verifier_node",
+        lambda *args: pytest.fail("coverage analyzer must not run"),
+    )
+
+    result = run_question(
+        "Compare Self-RAG and CRAG",
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        FakeLLM(),  # type: ignore[arg-type]
+        coverage_mode="none",
+    )
+
+    assert result["coverage_mode"] == "none"
+    assert result["verification"]["status"] == "not_run"
+    assert result["retry_count"] == 0
+    assert "[Self-RAG.pdf p.1]" in result["answer"]
+    assert "[CRAG.pdf p.2]" in result["answer"]
 
 
 def test_verification_retry_limit_is_configurable() -> None:
@@ -293,6 +331,7 @@ def test_workflow_repairs_and_rechecks_the_answer_once(
 def test_agent_state_has_answer_verification_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
+        "coverage_mode",
         "plan",
         "evidence",
         "verification",
