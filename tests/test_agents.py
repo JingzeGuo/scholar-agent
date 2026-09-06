@@ -13,7 +13,7 @@ from scholar_agent.agents.researcher import (
     researcher_node,
 )
 from scholar_agent.agents.verifier import verifier_node
-from scholar_agent.agents.writer import writer_node
+from scholar_agent.agents.writer import SAFE_ABSTENTION, writer_node
 from scholar_agent.config import Settings
 from scholar_agent.workflow import initial_state
 
@@ -33,6 +33,16 @@ class StubLLM:
     def complete(self, prompt: str) -> str:
         self.last_prompt = prompt
         return self.text
+
+
+class SequenceLLM(StubLLM):
+    def __init__(self, texts: list[str]) -> None:
+        super().__init__({})
+        self.texts = iter(texts)
+
+    def complete(self, prompt: str) -> str:
+        self.last_prompt = prompt
+        return next(self.texts)
 
 
 def verifier_llm(
@@ -113,6 +123,7 @@ def test_planner_returns_compact_bounded_plan() -> None:
     assert "both BM25 and dense retrieval" in llm.last_prompt
     assert "Do not invent targets or requirements" in llm.last_prompt
     assert "Keep asymmetric requests separate" in llm.last_prompt
+    assert "comparison can be synthesized" in llm.last_prompt
     assert "<user_question>" in llm.last_prompt
 
     open_plan = planner_node(
@@ -140,40 +151,30 @@ def test_planner_returns_compact_bounded_plan() -> None:
     ]
 
 
-def test_planner_rejects_invalid_llm_output() -> None:
+def test_planner_falls_back_to_the_question_for_invalid_llm_output() -> None:
     question = "Compare MethodA and MethodB"
-
-    with pytest.raises(ValueError, match="invalid JSON"):
-        planner_node(
-            initial_state(question),
-            StubLLM(ValueError("invalid JSON")),  # type: ignore[arg-type]
-        )
-
-    with pytest.raises(ValueError, match="no valid requirements"):
-        planner_node(
-            initial_state(question),
-            StubLLM(
+    invalid_outputs = [
+        ValueError("invalid JSON"),
+        {
+            "requirements": [
                 {
-                    "requirements": [
-                        {
-                            "description": "Compare the methods",
-                            "targets": ["MethodA", "MethodB"],
-                            "query": "",
-                        },
-                    ],
+                    "description": "Compare the methods",
+                    "targets": ["MethodA", "MethodB"],
+                    "query": "",
                 },
-            ),  # type: ignore[arg-type]
-        )
+            ],
+        },
+        {"requirements": []},
+    ]
 
-    with pytest.raises(ValueError, match="no valid requirements"):
-        planner_node(
+    for output in invalid_outputs:
+        plan = planner_node(
             initial_state(question),
-            StubLLM(
-                {
-                    "requirements": [],
-                },
-            ),  # type: ignore[arg-type]
-        )
+            StubLLM(output),  # type: ignore[arg-type]
+        )["plan"]
+        assert plan["requirements"] == [
+            requirement("R1", question, [], question),
+        ]
 
 
 def test_planner_preserves_asymmetric_atomic_requirements() -> None:
@@ -644,8 +645,8 @@ def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict
         Settings(),
         high_scores,
     )
-    assert absent_target["evidence"] == []
-    assert absent_target["stop_reason"] == "no_relevant_evidence"
+    assert absent_target["evidence"]
+    assert absent_target["stop_reason"] == ""
 
     state["plan"]["requirements"] = [
         requirement("R1", "Explain Self-RAG", ["Self-RAG"], "Self-RAG CRAG"),
@@ -842,8 +843,11 @@ def test_verifier_rejects_target_mismatch_and_invalid_ids(
     result = verifier_node(state, mismatched)  # type: ignore[arg-type]
     assert result["verification"]["status"] == "insufficient"
 
-    with pytest.raises(ValueError, match="covered must be an object"):
-        verifier_node(state, StubLLM({"covered": None}))  # type: ignore[arg-type]
+    malformed = verifier_node(
+        state,
+        StubLLM({"covered": None}),  # type: ignore[arg-type]
+    )["verification"]
+    assert malformed["status"] == "insufficient"
 
 
 def test_verifier_rejects_shared_acronym_as_target_substitution(
@@ -972,14 +976,14 @@ def test_verifier_batches_queries_for_missing_requirements() -> None:
         {"requirement_id": "R3", "query": "MethodA evaluation evidence"},
     ]
 
-    with pytest.raises(ValueError, match="target missing requirements"):
-        verifier_node(
-            state,
-            verifier_llm(
-                {"R1": ["E1"]},
-                [{"requirement_id": "R1", "query": "MethodA generation evidence"}],
-            ),  # type: ignore[arg-type]
-        )
+    malformed = verifier_node(
+        state,
+        verifier_llm(
+            {"R1": ["E1"]},
+            [{"requirement_id": "R1", "query": "MethodA generation evidence"}],
+        ),  # type: ignore[arg-type]
+    )["verification"]
+    assert malformed["corrective_queries"] == []
 
 
 def test_verifier_accepts_target_identity_from_paper_name() -> None:
@@ -1005,6 +1009,37 @@ def test_verifier_accepts_target_identity_from_paper_name() -> None:
         "E1 [MethodA.pdf p.1]: The proposed method retrieves passages dynamically."
         in llm.last_prompt
     )
+
+
+def test_verifier_accepts_semantic_support_when_the_target_name_is_not_repeated() -> None:
+    state = initial_state("Explain MethodA retrieval")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
+    ]
+    state["evidence"] = [
+        {
+            "chunk_id": "method-a-title",
+            "paper": "1234.56789.pdf",
+            "page": 1,
+            "text": "MethodA is a retrieval system.",
+            "score": 1.0,
+        },
+        {
+            "chunk_id": "method-a-detail",
+            "paper": "1234.56789.pdf",
+            "page": 4,
+            "text": "The proposed approach retrieves passages dynamically.",
+            "score": 1.0,
+        },
+    ]
+
+    verification = verifier_node(
+        state,
+        verifier_llm({"R1": ["E2"]}),  # type: ignore[arg-type]
+    )["verification"]
+
+    assert verification["status"] == "complete"
+    assert verification["covered"] == {"R1": ["E2"]}
 
 
 def test_verifier_prefers_insufficient_to_false_coverage() -> None:
@@ -1062,24 +1097,42 @@ def test_writer_uses_only_covered_ids_and_abstains_without_citations(
     }
     llm = StubLLM({}, "The corpus does not contain enough relevant evidence.")
     abstention = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
-    assert "enough relevant evidence" in abstention
+    assert abstention == SAFE_ABSTENTION
     assert ".pdf p." not in abstention
-    assert "Answer in English" in llm.last_prompt
+    assert llm.last_prompt == ""
 
 
 def test_writer_always_requests_english() -> None:
     state = initial_state("Cette preuve existe-t-elle ?")
-    llm = StubLLM({}, "The corpus does not contain sufficiently relevant evidence.")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain the evidence", [], "evidence"),
+    ]
+    state["evidence"] = [
+        {
+            "chunk_id": "evidence",
+            "paper": "Evidence.pdf",
+            "page": 1,
+            "text": "The evidence supports the answer.",
+            "score": 1.0,
+        },
+    ]
+    state["verification"] = {
+        "status": "complete",
+        "covered": {"R1": ["E1"]},
+        "missing": [],
+        "corrective_queries": [],
+    }
+    llm = StubLLM({}, "The evidence supports the answer [E1].")
 
     answer = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
 
-    assert answer == "The corpus does not contain sufficiently relevant evidence."
+    assert answer == "The evidence supports the answer [Evidence.pdf p.1]."
     assert "Answer in English" in llm.last_prompt
     assert "Answer in French" not in llm.last_prompt
-    assert "Status: insufficient" in llm.last_prompt
+    assert "Status: complete" in llm.last_prompt
 
 
-def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
+def test_writer_repairs_an_unverified_citation_once(sample_chunks: list[dict]) -> None:
     state = initial_state("Explain Self-RAG")
     state["plan"]["requirements"] = [
         requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
@@ -1092,8 +1145,33 @@ def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
         "corrective_queries": [],
     }
 
-    with pytest.raises(ValueError, match="not approved"):
-        writer_node(state, StubLLM({}, "Unsupported [E2]."))  # type: ignore[arg-type]
+    repaired = writer_node(
+        state,
+        SequenceLLM(["Unsupported [E2].", "Supported [E1]."]),  # type: ignore[arg-type]
+    )["answer"]
+    assert repaired == "Supported [Self-RAG.pdf p.1]."
+
+
+def test_writer_safely_abstains_when_citation_repair_fails(
+    sample_chunks: list[dict],
+) -> None:
+    state = initial_state("Explain Self-RAG")
+    state["plan"]["requirements"] = [
+        requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
+    ]
+    state["evidence"] = sample_chunks[:2]
+    state["verification"] = {
+        "status": "complete",
+        "covered": {"R1": ["E1"]},
+        "missing": [],
+        "corrective_queries": [],
+    }
+
+    failed_repair = writer_node(
+        state,
+        StubLLM({}, "Unsupported [E2]."),  # type: ignore[arg-type]
+    )["answer"]
+    assert failed_repair == SAFE_ABSTENTION
 
     state["verification"] = {
         "status": "insufficient",
@@ -1101,5 +1179,8 @@ def test_writer_rejects_unverified_citations(sample_chunks: list[dict]) -> None:
         "missing": ["R1"],
         "corrective_queries": [],
     }
-    with pytest.raises(ValueError, match="while abstaining"):
-        writer_node(state, StubLLM({}, "Unsupported [E1]."))  # type: ignore[arg-type]
+    unsafe_abstention = writer_node(
+        state,
+        StubLLM({}, "Unsupported [E1]."),  # type: ignore[arg-type]
+    )["answer"]
+    assert unsafe_abstention == SAFE_ABSTENTION

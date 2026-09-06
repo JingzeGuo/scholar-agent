@@ -6,6 +6,7 @@ import pytest
 
 import scholar_agent.reranker
 import scholar_agent.workflow as workflow_module
+from scholar_agent.agents.writer import SAFE_ABSTENTION
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
 from scholar_agent.workflow import initial_state, route_after_verification, run_question
@@ -116,7 +117,7 @@ def test_no_relevant_evidence_retries_with_corrective_queries() -> None:
     assert result["stop_reason"] == "no_new_evidence"
     assert result["retry_count"] == 1
     assert engine.calls == 2
-    assert "sufficiently relevant evidence" in result["answer"]
+    assert result["answer"] == SAFE_ABSTENTION
 
 
 def test_partial_workflow_retries_exactly_once(

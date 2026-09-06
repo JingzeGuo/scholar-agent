@@ -194,6 +194,9 @@ Return one JSON object with exactly one field:
 Rules:
 - Keep asymmetric requests separate instead of applying every aspect to every target.
 - A comparison requirement may name multiple targets; a global requirement may have no targets.
+- A comparison can be synthesized from separately supported facts about its targets. When those
+  facts are already requirements, do not add another requirement demanding a source that directly
+  compares them.
 - Do not invent targets or requirements that are absent from the question.
 - Preserve names and temporal constraints from the original question.
 - Open-ended discovery requirements may have an empty targets list.
@@ -210,17 +213,33 @@ User question:
 def planner_node(state: AgentState, llm: LLMClient) -> dict:
     """Return one compact retrieval and answer plan."""
     question = state["question"].strip()
-    payload = llm.complete_json(_planner_prompt(question))
+    try:
+        payload = llm.complete_json(_planner_prompt(question))
+    except ValueError as exc:
+        LOGGER.warning("[planner] invalid JSON; using the original question: %s", exc)
+        payload = {}
     raw_requirements = payload.get("requirements")
-    requirements = _requirements(raw_requirements, question)
-    if not requirements:
+    requirements = (
+        _requirements(raw_requirements, question)
+        if isinstance(raw_requirements, list)
+        else []
+    )
+    if not requirements and isinstance(raw_requirements, list):
         requirements = _requirements(
             raw_requirements,
             question,
             allow_initialisms=True,
         )
     if not requirements:
-        raise ValueError("Planner returned no valid requirements")
+        LOGGER.warning("[planner] no valid requirements; using the original question")
+        requirements = [
+            {
+                "id": "R1",
+                "description": question,
+                "targets": [],
+                "query": question,
+            },
+        ]
 
     plan = {
         "requirements": requirements,

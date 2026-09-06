@@ -15,6 +15,7 @@ from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
+SAFE_ABSTENTION = "The supplied evidence is insufficient to provide a citation-grounded answer."
 
 
 def _allowed_ids(state: AgentState) -> list[int]:
@@ -62,20 +63,42 @@ Evidence:
 """
 
 
+def _citation_policy_error(used: set[int], allowed: set[int]) -> str:
+    if not used:
+        return "the answer has no valid evidence citations"
+    if not used.issubset(allowed):
+        return "the answer cites evidence not approved by the Verifier"
+    return ""
+
+
 def writer_node(state: AgentState, llm: LLMClient) -> dict:
     """Write only from verifier-approved evidence, or abstain."""
     status = state["verification"]["status"]
-    allowed = _allowed_ids(state)
-    draft = llm.complete(_writer_prompt(state, allowed))
-    used = set(valid_evidence_ids(draft, len(state["evidence"])))
     if status == "insufficient":
-        if used:
-            raise ValueError("Writer cited evidence while abstaining")
-    else:
-        if not used:
-            raise ValueError("Writer returned no valid evidence citations")
-        if not used.issubset(allowed):
-            raise ValueError("Writer cited evidence not approved by the Verifier")
+        LOGGER.info("[writer] deterministic abstention for insufficient evidence")
+        return {"answer": SAFE_ABSTENTION}
+
+    allowed = _allowed_ids(state)
+    prompt = _writer_prompt(state, allowed)
+    draft = llm.complete(prompt)
+    used = set(valid_evidence_ids(draft, len(state["evidence"])))
+    policy_error = _citation_policy_error(used, set(allowed))
+    if policy_error:
+        draft = llm.complete(
+            f"""{prompt}
+
+Your previous draft failed validation because {policy_error}.
+Rewrite the answer once. Follow the citation policy exactly and use only the allowed evidence IDs.
+
+Previous draft:
+{draft}
+""",
+        )
+        used = set(valid_evidence_ids(draft, len(state["evidence"])))
+        policy_error = _citation_policy_error(used, set(allowed))
+    if policy_error:
+        LOGGER.warning("[writer] safe fallback: %s", policy_error)
+        draft = SAFE_ABSTENTION
 
     draft = PAGE_CITATION_RE.sub("", draft)
     answer = validate_citations(draft, state["evidence"])

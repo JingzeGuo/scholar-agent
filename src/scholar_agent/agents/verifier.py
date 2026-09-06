@@ -57,6 +57,8 @@ Rules:
 - Return at most one corrective query per missing requirement.
 - Cover a requirement only when the evidence collectively supports its entire description.
 - When a requirement names targets, the evidence must collectively cover every named target.
+- A comparison may be supported by combining separate evidence about each target; no passage
+  needs to state the comparison directly.
 - Related methods cannot substitute for a named target.
 - Do not mark a requirement covered merely because the evidence is topically related.
 - Partial coverage is acceptable.
@@ -74,7 +76,8 @@ Evidence:
 
 def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]:
     if not isinstance(value, dict):
-        raise ValueError("covered must be an object")
+        LOGGER.warning("[verifier] ignored non-object coverage")
+        return {}
 
     requirements = state["plan"]["requirements"]
     requirement_keys = {item["id"].casefold(): item for item in requirements}
@@ -96,18 +99,31 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]
             if not 1 <= index <= len(state["evidence"]):
                 continue
             item = state["evidence"][index - 1]
-            if requirement["targets"] and not any(
-                _matches_coverage_target(
-                    target,
-                    named_targets,
-                    item,
+            if requirement["targets"]:
+                matches_intended_target = any(
+                    _matches_coverage_target(target, named_targets, item)
+                    for target in requirement["targets"]
                 )
-                for target in requirement["targets"]
-            ):
-                continue
+                matches_different_target = any(
+                    evidence_matches_target(target, item) for target in named_targets
+                )
+                if matches_different_target and not matches_intended_target:
+                    continue
             valid_ids.append(f"E{index}")
 
         valid_ids = list(dict.fromkeys(valid_ids))
+        detectable_targets = (
+            [
+                target
+                for target in requirement["targets"]
+                if any(
+                    _matches_coverage_target(target, named_targets, item)
+                    for item in state["evidence"]
+                )
+            ]
+            if len(requirement["targets"]) > 1
+            else []
+        )
         if valid_ids and all(
             any(
                 _matches_coverage_target(
@@ -117,7 +133,7 @@ def _sanitize_coverage(state: AgentState, value: object) -> dict[str, list[str]]
                 )
                 for evidence_id in valid_ids
             )
-            for target in requirement["targets"]
+            for target in detectable_targets
         ):
             covered[requirement["id"]] = valid_ids
     return covered
@@ -131,21 +147,22 @@ def verifier_node(state: AgentState, llm: LLMClient) -> dict:
     missing = [requirement_id for requirement_id in required if requirement_id not in covered]
     raw_queries = payload.get("corrective_queries", []) if missing else []
     if not isinstance(raw_queries, list):
-        raise ValueError("Verifier returned invalid corrective queries")
+        LOGGER.warning("[verifier] ignored non-list corrective queries")
+        raw_queries = []
 
     missing_by_key = {requirement_id.casefold(): requirement_id for requirement_id in missing}
     corrections: dict[str, str] = {}
     for item in raw_queries:
         if not isinstance(item, dict):
-            raise ValueError("Verifier returned invalid corrective queries")
+            continue
         requirement_id = item.get("requirement_id")
         query = item.get("query")
         if not isinstance(requirement_id, str) or not isinstance(query, str):
-            raise ValueError("Verifier returned invalid corrective queries")
+            continue
         canonical_id = missing_by_key.get(requirement_id.strip().casefold())
         query = query.strip()
         if canonical_id is None or not query:
-            raise ValueError("Corrective queries must target missing requirements")
+            continue
         corrections[canonical_id] = query
     corrective_queries = [
         {"requirement_id": requirement_id, "query": corrections[requirement_id]}

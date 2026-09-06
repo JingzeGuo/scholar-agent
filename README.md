@@ -76,7 +76,10 @@ different aspects of the same target retain separate retrieval signals. Targets
 must be explicitly present in the question; open-ended requirements use
 `targets=[]`. Queries preserve names and constraints but retrieve evidence
 instead of proposing an answer. Retrieval plans and final answers are always in
-English.
+English. Comparisons are synthesized from separately supported target facts;
+the Planner does not require a source that already states the comparison. If
+the model returns no usable plan, the original question becomes one conservative
+target-free requirement instead of terminating the workflow.
 
 ## Hybrid retrieval
 
@@ -125,6 +128,9 @@ bounds:
 - comparison requirements receive evidence for each named target when possible;
 - up to two early slots per explicitly named target when matching evidence exists.
 
+When a target name is not repeated verbatim in any candidate, the top semantic
+candidates still reach the Verifier instead of being discarded as a group.
+
 During corrective retrieval, useful new evidence is merged with the existing
 selection. If the retry produces the same evidence IDs, the workflow terminates
 without repeating verification.
@@ -132,8 +138,10 @@ without repeating verification.
 ## Verifier
 
 The Verifier checks every atomic requirement against supplied evidence IDs. It
-rejects unknown IDs, evidence for the wrong named target, and unsupported
-coverage. Its result is one of:
+rejects unknown IDs, evidence explicitly belonging to a different named target,
+and unsupported coverage. It can combine separately supported facts across
+papers and does not require every evidence passage to repeat the target name.
+Its result is one of:
 
 - `complete`: every requirement has direct support;
 - `partial`: some requested coverage is supported;
@@ -147,9 +155,10 @@ exhausted, processing continues to the Writer.
 ## Writer and citation validation
 
 The Writer sees only evidence approved by the Verifier. It cites temporary IDs
-such as `[E1]`; citing an unknown or unapproved ID is an error. Partial answers
-must name the missing coverage. Insufficient evidence produces a concise
-abstention with no citations.
+such as `[E1]`. If it cites an unknown or unapproved ID, it receives one
+constrained rewrite attempt; a second failure safely becomes an abstention
+instead of terminating the workflow. Partial answers must name the missing
+coverage. Insufficient evidence produces a concise abstention with no citations.
 
 After writing, deterministic validation converts known IDs to citations copied
 from stored metadata:

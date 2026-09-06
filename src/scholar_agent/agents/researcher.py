@@ -39,11 +39,6 @@ def _select_evidence(
         reverse=True,
     )
 
-    if targets and not any(
-        evidence_matches_target(target, item) for target in targets for item in ranked
-    ):
-        return []
-
     selected: list[dict] = []
     selected_ids: set[str] = set()
     selected_pages: set[tuple[str, int]] = set()
