@@ -16,6 +16,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import fitz
+
 from scholar_agent.citations import PAGE_CITATION_RE, cited_pages, validate_citations
 from scholar_agent.config import Settings
 from scholar_agent.llm import LLMClient
@@ -28,6 +30,7 @@ QUESTIONS_PATH = ROOT / "evals" / "questions.jsonl"
 RESULTS_PATH = ROOT / "evals" / "results.jsonl"
 REVIEW_PATH = ROOT / "evals" / "review.csv"
 REVIEW_KEY_PATH = ROOT / "evals" / "review_key.json"
+REVIEW_EVIDENCE_PATH = ROOT / "evals" / "review_evidence.jsonl"
 SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
@@ -567,6 +570,136 @@ def prepare_review(
     )
 
 
+def _physical_page_texts(
+    page_refs: set[tuple[str, int]],
+    papers_dir: Path,
+) -> dict[tuple[str, int], str]:
+    pages_by_paper: dict[str, set[int]] = {}
+    for paper, page in page_refs:
+        if Path(paper).name != paper:
+            raise EvaluationError(f"Unsafe paper filename: {paper}")
+        pages_by_paper.setdefault(paper, set()).add(page)
+
+    extracted: dict[tuple[str, int], str] = {}
+    for paper, page_numbers in sorted(pages_by_paper.items()):
+        pdf_path = papers_dir / paper
+        if not pdf_path.is_file():
+            raise EvaluationError(f"Cited PDF not found: {pdf_path}")
+        with fitz.open(pdf_path) as document:
+            for page_number in sorted(page_numbers):
+                if not 1 <= page_number <= document.page_count:
+                    raise EvaluationError(
+                        f"Physical page is outside {paper}: p.{page_number}",
+                    )
+                text = re.sub(
+                    r"\s+",
+                    " ",
+                    document[page_number - 1].get_text("text"),
+                ).strip()
+                if not text:
+                    raise EvaluationError(f"Physical page has no extractable text: {paper} p.{page_number}")
+                extracted[(paper, page_number)] = text
+    return extracted
+
+
+def export_review_evidence(
+    questions: Sequence[dict[str, Any]],
+    review_path: Path,
+    papers_dir: Path,
+    output_path: Path,
+) -> dict[str, int]:
+    """Export variant-blinded cited and gold physical-page text for LLM judging."""
+    questions_by_id = {item["id"]: item for item in questions}
+    with review_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    expected_rows = len(questions) * len(VARIANTS)
+    if len(rows) != expected_rows:
+        raise EvaluationError(f"Expected {expected_rows} review rows")
+
+    prepared: list[tuple[dict[str, str], dict[str, Any], list[dict[str, Any]]]] = []
+    all_page_refs: set[tuple[str, int]] = set()
+    seen_review_ids: set[str] = set()
+    for row in rows:
+        review_id = row.get("review_id", "")
+        question_id = row.get("question_id", "")
+        if not review_id or review_id in seen_review_ids:
+            raise EvaluationError(f"Invalid or duplicate review id: {review_id}")
+        seen_review_ids.add(review_id)
+        question = questions_by_id.get(question_id)
+        if question is None:
+            raise EvaluationError(f"Unknown question id in {review_id}: {question_id}")
+        if row.get("question") != question["question"]:
+            raise EvaluationError(f"Question text was modified in {review_id}")
+
+        try:
+            citations = json.loads(row.get("citations", "[]"))
+        except json.JSONDecodeError as exc:
+            raise EvaluationError(f"Invalid citations JSON in {review_id}") from exc
+        expected_citations = [
+            {"paper": paper, "page": page}
+            for paper, page in cited_pages(row.get("answer", ""))
+        ]
+        if citations != expected_citations:
+            raise EvaluationError(f"Citations do not match the answer in {review_id}")
+
+        for citation in citations:
+            all_page_refs.add((citation["paper"], citation["page"]))
+        for requirement in question["requirements"]:
+            for gold_page in requirement["gold_pages"]:
+                all_page_refs.add((gold_page["paper"], gold_page["page"]))
+        prepared.append((row, question, citations))
+
+    page_texts = _physical_page_texts(all_page_refs, papers_dir)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as handle:
+        for row, question, citations in prepared:
+            citation_refs = [(item["paper"], item["page"]) for item in citations]
+            gold_requirements: dict[tuple[str, int], list[str]] = {}
+            for requirement in question["requirements"]:
+                for gold_page in requirement["gold_pages"]:
+                    ref = (gold_page["paper"], gold_page["page"])
+                    gold_requirements.setdefault(ref, []).append(requirement["id"])
+
+            ordered_refs = list(dict.fromkeys([*citation_refs, *gold_requirements]))
+            page_ids = {ref: f"P{index}" for index, ref in enumerate(ordered_refs, start=1)}
+            packet = {
+                "review_id": row["review_id"],
+                "question_id": question["id"],
+                "question": question["question"],
+                "expected_status": question["expected_status"],
+                "requirements": question["requirements"],
+                "answer": row["answer"],
+                "citations": [
+                    {
+                        "index": index,
+                        "paper": paper,
+                        "page": page,
+                        "page_ref": page_ids[(paper, page)],
+                    }
+                    for index, (paper, page) in enumerate(citation_refs, start=1)
+                ],
+                "pages": [
+                    {
+                        "page_ref": page_ids[ref],
+                        "paper": ref[0],
+                        "page": ref[1],
+                        "citation_indexes": [
+                            index
+                            for index, citation_ref in enumerate(citation_refs, start=1)
+                            if citation_ref == ref
+                        ],
+                        "gold_requirement_ids": gold_requirements.get(ref, []),
+                        "text": page_texts[ref],
+                    }
+                    for ref in ordered_refs
+                ],
+            }
+            handle.write(json.dumps(packet, ensure_ascii=False) + "\n")
+    temporary_path.replace(output_path)
+    return {"samples": len(prepared), "unique_pages": len(page_texts)}
+
+
 def _binary_mapping(value: str, expected_ids: set[str], review_id: str) -> dict[str, int]:
     try:
         parsed = json.loads(value)
@@ -806,6 +939,10 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("run", help="Run Full Scholar-Agent and Simple RAG")
     review = subparsers.add_parser("prepare-review", help="Create the blinded review CSV")
     review.add_argument("--force", action="store_true", help="Replace existing review files")
+    subparsers.add_parser(
+        "extract-pages",
+        help="Extract cited and gold PDF pages for blinded judging",
+    )
     subparsers.add_parser("score", help="Aggregate a completed review CSV")
     return parser
 
@@ -825,6 +962,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 REVIEW_PATH,
                 REVIEW_KEY_PATH,
                 force=args.force,
+            )
+        elif args.command == "extract-pages":
+            questions = load_questions()
+            stats = export_review_evidence(
+                questions,
+                REVIEW_PATH,
+                ROOT / "data" / "papers",
+                REVIEW_EVIDENCE_PATH,
+            )
+            print(
+                f"exported {stats['samples']} blind samples with "
+                f"{stats['unique_pages']} unique physical pages",
             )
         else:
             questions = load_questions()

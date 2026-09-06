@@ -46,5 +46,6 @@ outputs/
 evals/results*.jsonl
 evals/review.csv
 evals/review_key.json
+evals/review_evidence.jsonl
 evals/summary.json
 evals/summary.md

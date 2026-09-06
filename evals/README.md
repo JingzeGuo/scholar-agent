@@ -15,6 +15,7 @@ export DEEPSEEK_API_KEY=...
 export SCHOLAR_AGENT_LLM_MODEL=deepseek-v4-flash
 uv run python evals/evaluate.py run
 uv run python evals/evaluate.py prepare-review
+uv run python evals/evaluate.py extract-pages
 ```
 
 `run` writes one resumable record per question and variant to `results.jsonl`.
@@ -37,6 +38,11 @@ columns for every row:
 - `unsupported_claims`: count of factual claims not supported by the corpus.
 - `uncited_claims`: count of factual claims that require but lack a citation.
 - `notes`: optional review notes.
+
+`extract-pages` creates `review_evidence.jsonl`, with one variant-blinded packet
+per answer. Each packet contains the requirements, answer, ordered citation
+occurrences, and the extracted text of every cited or gold physical PDF page.
+Repeated citations point to one deduplicated `page_ref` inside that packet.
 
 If a review sheet already contains work, `prepare-review` refuses to overwrite
 it. `--force` is available only when replacement is intentional.

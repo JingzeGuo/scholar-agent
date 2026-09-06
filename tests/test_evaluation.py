@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import evals.evaluate as evaluation
+import fitz
 from evals.evaluate import (
     CountingLLM,
     baseline_evidence_limit,
+    export_review_evidence,
     prepare_review,
     run_evaluation,
     run_simple_rag,
@@ -312,3 +314,57 @@ def test_blind_review_round_trip_computes_resume_metrics(tmp_path: Path) -> None
     assert "| Strict Success | 50.0% | 100.0% | +50.0 pp |" in markdown_path.read_text(
         encoding="utf-8",
     )
+
+
+def test_export_review_evidence_extracts_and_deduplicates_physical_pages(
+    tmp_path: Path,
+) -> None:
+    questions = small_questions()[:1]
+    review_path = tmp_path / "review.csv"
+    citations = json.dumps(
+        [
+            {"paper": "A.pdf", "page": 1},
+            {"paper": "A.pdf", "page": 1},
+        ],
+    )
+    rows = [
+        {
+            "review_id": f"V{index:03d}",
+            "question_id": "Q001",
+            "question": questions[0]["question"],
+            "answer": "First [A.pdf p.1]. Second [A.pdf p.1].",
+            "citations": citations,
+        }
+        for index in range(1, 3)
+    ]
+    with review_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    papers_dir = tmp_path / "papers"
+    papers_dir.mkdir()
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "Method A retrieves supporting evidence.")
+    document.save(papers_dir / "A.pdf")
+    document.close()
+
+    output_path = tmp_path / "review_evidence.jsonl"
+    stats = export_review_evidence(questions, review_path, papers_dir, output_path)
+    packets = [json.loads(line) for line in output_path.read_text().splitlines()]
+
+    assert stats == {"samples": 2, "unique_pages": 1}
+    assert len(packets) == 2
+    assert "variant" not in packets[0]
+    assert [item["page_ref"] for item in packets[0]["citations"]] == ["P1", "P1"]
+    assert packets[0]["pages"] == [
+        {
+            "page_ref": "P1",
+            "paper": "A.pdf",
+            "page": 1,
+            "citation_indexes": [1, 2],
+            "gold_requirement_ids": ["G1"],
+            "text": "Method A retrieves supporting evidence.",
+        },
+    ]
