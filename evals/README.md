@@ -18,9 +18,20 @@ uv run python evals/evaluate.py prepare-review
 uv run python evals/evaluate.py extract-pages
 ```
 
+Pass `--run-id` before the command to keep a new pipeline run separate from
+the legacy V0 artifacts:
+
+```bash
+uv run python evals/evaluate.py --run-id v1_soft run
+uv run python evals/evaluate.py --run-id v1_soft prepare-review
+```
+
 `run` writes one resumable record per question and variant to `results.jsonl`.
 It stops at the first provider or model error; rerunning the command skips
 successful records and retries the failed sample.
+Versioned runs are stored under `evals/runs/<run-id>/`. Full-system records
+also include the plan, verification result, retry count, stop reason, and cited
+pages under `trace`.
 
 ## Manual review
 

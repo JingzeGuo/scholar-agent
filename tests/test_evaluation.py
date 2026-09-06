@@ -7,9 +7,11 @@ from typing import Any
 
 import evals.evaluate as evaluation
 import fitz
+import pytest
 from evals.evaluate import (
     CountingLLM,
     baseline_evidence_limit,
+    evaluation_artifact_path,
     export_review_evidence,
     prepare_review,
     run_evaluation,
@@ -235,6 +237,20 @@ def test_run_is_resumable_and_does_not_repeat_successful_pairs(
     assert results_path.read_text(encoding="utf-8") == first_contents
     assert full_calls == ["Explain Method A."]
     assert len(first_contents.splitlines()) == 2
+    records = [json.loads(line) for line in first_contents.splitlines()]
+    assert {record["pipeline_version"] for record in records} == {
+        evaluation.PIPELINE_VERSION,
+    }
+    assert {record["run_id"] for record in records} == {"legacy"}
+    assert records[0]["trace"]["verification"] == {"status": "complete"}
+
+
+def test_versioned_artifacts_stay_inside_the_run_directory() -> None:
+    path = evaluation_artifact_path("results.jsonl", "v1_soft")
+
+    assert path == evaluation.ROOT / "evals" / "runs" / "v1_soft" / "results.jsonl"
+    with pytest.raises(evaluation.EvaluationError, match="Invalid run id"):
+        evaluation_artifact_path("results.jsonl", "../outside")
 
 
 def test_blind_review_round_trip_computes_resume_metrics(tmp_path: Path) -> None:

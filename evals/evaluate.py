@@ -35,6 +35,7 @@ SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
 MODEL_NAME = "deepseek-v4-flash"
+PIPELINE_VERSION = "v0_hard_verifier"
 EXPECTED_CORPUS_SIZE = 10_726
 EXPECTED_QUESTION_COUNT = 50
 DEFAULT_EVIDENCE_LIMIT = 8
@@ -49,6 +50,7 @@ CATEGORY_COUNTS = {
     "insufficient": 10,
 }
 QUESTION_ID_RE = re.compile(r"Q\d{3}")
+RUN_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
 RerankFunction = Callable[[list[str], list[dict], str], list[dict]]
@@ -56,6 +58,15 @@ RerankFunction = Callable[[list[str], list[dict], str], list[dict]]
 
 class EvaluationError(RuntimeError):
     """Raised for actionable benchmark or run failures."""
+
+
+def evaluation_artifact_path(filename: str, run_id: str | None) -> Path:
+    """Resolve a generated artifact without allowing run IDs to escape evals/runs."""
+    if run_id is None:
+        return ROOT / "evals" / filename
+    if RUN_ID_RE.fullmatch(run_id) is None:
+        raise EvaluationError(f"Invalid run id: {run_id}")
+    return ROOT / "evals" / "runs" / run_id / filename
 
 
 class CountingLLM:
@@ -345,6 +356,18 @@ def _public_evidence(evidence: Iterable[dict]) -> list[dict[str, Any]]:
     ]
 
 
+def _trace(answer: str, state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "plan": state.get("plan"),
+        "verification": state.get("verification"),
+        "retry_count": int(state.get("retry_count", 0)),
+        "stop_reason": state.get("stop_reason", ""),
+        "cited_pages": [
+            {"paper": paper, "page": page} for paper, page in cited_pages(answer)
+        ],
+    }
+
+
 def _append_result(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -372,6 +395,8 @@ def _successful_result(
 
 
 def _result_record(
+    run_id: str,
+    pipeline_version: str,
     question_id: str,
     variant: str,
     answer: str,
@@ -379,8 +404,11 @@ def _result_record(
     verification_status: str | None,
     latency: float,
     llm_calls: int,
+    trace: dict[str, Any],
 ) -> dict[str, Any]:
     return {
+        "run_id": run_id,
+        "pipeline_version": pipeline_version,
         "question_id": question_id,
         "variant": variant,
         "answer": answer,
@@ -388,11 +416,14 @@ def _result_record(
         "evidence": _public_evidence(evidence),
         "latency_seconds": round(latency, 4),
         "llm_calls": llm_calls,
+        "trace": trace,
         "error": None,
     }
 
 
 def _error_record(
+    run_id: str,
+    pipeline_version: str,
     question_id: str,
     variant: str,
     exc: Exception,
@@ -400,6 +431,8 @@ def _error_record(
     llm_calls: int,
 ) -> dict[str, Any]:
     return {
+        "run_id": run_id,
+        "pipeline_version": pipeline_version,
         "question_id": question_id,
         "variant": variant,
         "answer": "",
@@ -407,6 +440,7 @@ def _error_record(
         "evidence": [],
         "latency_seconds": round(latency, 4),
         "llm_calls": llm_calls,
+        "trace": {},
         "error": f"{type(exc).__name__}: {exc}",
     }
 
@@ -418,11 +452,21 @@ def run_evaluation(
     llm: CountingLLM,
     results_path: Path,
     *,
+    run_id: str = "legacy",
+    pipeline_version: str = PIPELINE_VERSION,
     full_runner: Callable[[str, RetrievalEngine, Settings, Any], dict] = run_question,
     rerank_function: RerankFunction = rerank,
 ) -> None:
     """Run Full first, then a budget-matched baseline, with resumable JSONL output."""
     existing = _read_jsonl(results_path) if results_path.is_file() else []
+    for value in existing:
+        if value.get("run_id", run_id) != run_id:
+            raise EvaluationError(f"Existing results belong to run {value.get('run_id')}")
+        if value.get("pipeline_version", pipeline_version) != pipeline_version:
+            raise EvaluationError(
+                "Existing results use a different pipeline version: "
+                f"{value.get('pipeline_version')}",
+            )
     latest = latest_results(existing)
 
     for question in questions:
@@ -434,6 +478,8 @@ def run_evaluation(
             try:
                 state = full_runner(question["question"], engine, settings, llm)
                 full = _result_record(
+                    run_id,
+                    pipeline_version,
                     question_id,
                     "full",
                     state["answer"],
@@ -441,9 +487,12 @@ def run_evaluation(
                     state["verification"]["status"],
                     time.perf_counter() - started,
                     llm.calls - calls_before,
+                    _trace(state["answer"], state),
                 )
             except Exception as exc:
                 failed = _error_record(
+                    run_id,
+                    pipeline_version,
                     question_id,
                     "full",
                     exc,
@@ -472,6 +521,8 @@ def run_evaluation(
                 rerank_function=rerank_function,
             )
             simple = _result_record(
+                run_id,
+                pipeline_version,
                 question_id,
                 "simple_rag",
                 state["answer"],
@@ -479,9 +530,12 @@ def run_evaluation(
                 None,
                 time.perf_counter() - started,
                 llm.calls - calls_before,
+                _trace(state["answer"], state),
             )
         except Exception as exc:
             failed = _error_record(
+                run_id,
+                pipeline_version,
                 question_id,
                 "simple_rag",
                 exc,
@@ -935,6 +989,10 @@ def _warm_up(question: str, engine: RetrievalEngine, settings: Settings) -> None
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--run-id",
+        help="Store generated artifacts under evals/runs/<run-id>",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("run", help="Run Full Scholar-Agent and Simple RAG")
     review = subparsers.add_parser("prepare-review", help="Create the blinded review CSV")
@@ -950,26 +1008,43 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        results_path = evaluation_artifact_path("results.jsonl", args.run_id)
+        review_path = evaluation_artifact_path("review.csv", args.run_id)
+        review_key_path = evaluation_artifact_path("review_key.json", args.run_id)
+        review_evidence_path = evaluation_artifact_path(
+            "review_evidence.jsonl",
+            args.run_id,
+        )
+        summary_path = evaluation_artifact_path("summary.json", args.run_id)
+        summary_markdown_path = evaluation_artifact_path("summary.md", args.run_id)
+        run_id = args.run_id or "legacy"
         if args.command == "run":
             questions, engine, settings, llm = _runtime()
             _warm_up(questions[0]["question"], engine, settings)
-            run_evaluation(questions, engine, settings, llm, RESULTS_PATH)
+            run_evaluation(
+                questions,
+                engine,
+                settings,
+                llm,
+                results_path,
+                run_id=run_id,
+            )
         elif args.command == "prepare-review":
             questions = load_questions()
             prepare_review(
                 questions,
-                RESULTS_PATH,
-                REVIEW_PATH,
-                REVIEW_KEY_PATH,
+                results_path,
+                review_path,
+                review_key_path,
                 force=args.force,
             )
         elif args.command == "extract-pages":
             questions = load_questions()
             stats = export_review_evidence(
                 questions,
-                REVIEW_PATH,
+                review_path,
                 ROOT / "data" / "papers",
-                REVIEW_EVIDENCE_PATH,
+                review_evidence_path,
             )
             print(
                 f"exported {stats['samples']} blind samples with "
@@ -979,11 +1054,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             questions = load_questions()
             summary = score_review(
                 questions,
-                RESULTS_PATH,
-                REVIEW_PATH,
-                REVIEW_KEY_PATH,
-                SUMMARY_PATH,
-                SUMMARY_MARKDOWN_PATH,
+                results_path,
+                review_path,
+                review_key_path,
+                summary_path,
+                summary_markdown_path,
             )
             print(_summary_markdown(summary))
     except (EvaluationError, OSError, ValueError) as exc:
