@@ -10,6 +10,16 @@ from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
 GENERIC_TARGET_SUFFIXES = {"method", "methods", "approach", "approaches", "frameworks"}
+INITIALISM_SUFFIXES = {
+    "approach",
+    "benchmark",
+    "dataset",
+    "framework",
+    "method",
+    "model",
+    "paper",
+    "system",
+}
 MAX_REQUIREMENTS = 5
 MAX_TARGETS_PER_REQUIREMENT = 3
 
@@ -47,10 +57,36 @@ def evidence_matches_target(target: str, item: dict) -> bool:
     )
 
 
-def _explicit_targets(values: object, question: str) -> list[str]:
+def _target_initialisms(value: str) -> set[str]:
+    tokens = re.findall(r"[A-Za-z0-9]+", value)
+    token_groups = [tokens]
+    while tokens and tokens[-1].casefold() in INITIALISM_SUFFIXES:
+        tokens = tokens[:-1]
+        token_groups.append(tokens)
+
+    return {
+        "".join(token if token.isupper() else token[0].upper() for token in group)
+        for group in token_groups
+        if group
+    }
+
+
+def _explicit_targets(
+    values: object,
+    question: str,
+    *,
+    allow_initialisms: bool = False,
+) -> list[str]:
     targets: list[str] = []
+    question_initialisms = (
+        set(re.findall(r"(?<![A-Z0-9-])[A-Z][A-Z0-9-]{1,9}(?![A-Z0-9-])", question))
+        if allow_initialisms
+        else set()
+    )
     for value in _unique_strings(values, MAX_TARGETS_PER_REQUIREMENT):
         aliases = re.findall(r"\(([A-Z][A-Z0-9-]{1,9})\)", value)
+        if allow_initialisms:
+            aliases.extend(question_initialisms & _target_initialisms(value))
         explicit = (
             value
             if target_matches(value, question)
@@ -80,6 +116,8 @@ def _requirements(
     values: object,
     question: str,
     limit: int = MAX_REQUIREMENTS,
+    *,
+    allow_initialisms: bool = False,
 ) -> list[dict]:
     if not isinstance(values, list):
         raise ValueError("Expected a list")
@@ -100,9 +138,22 @@ def _requirements(
             continue
 
         supplied_targets = _unique_strings(raw_targets, MAX_TARGETS_PER_REQUIREMENT)
-        targets = _explicit_targets(raw_targets, question)
+        targets = _explicit_targets(
+            raw_targets,
+            question,
+            allow_initialisms=allow_initialisms,
+        )
         if len(targets) != len(supplied_targets):
-            continue
+            every_target_resolved = allow_initialisms and all(
+                _explicit_targets(
+                    [target],
+                    question,
+                    allow_initialisms=True,
+                )
+                for target in supplied_targets
+            )
+            if not every_target_resolved:
+                continue
 
         description = description.strip()
         identity = (description.casefold(), tuple(target.casefold() for target in targets))
@@ -160,7 +211,14 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
     """Return one compact retrieval and answer plan."""
     question = state["question"].strip()
     payload = llm.complete_json(_planner_prompt(question))
-    requirements = _requirements(payload.get("requirements"), question)
+    raw_requirements = payload.get("requirements")
+    requirements = _requirements(raw_requirements, question)
+    if not requirements:
+        requirements = _requirements(
+            raw_requirements,
+            question,
+            allow_initialisms=True,
+        )
     if not requirements:
         raise ValueError("Planner returned no valid requirements")
 

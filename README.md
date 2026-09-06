@@ -220,6 +220,14 @@ make quality
 
 Provider-dependent tests belong behind the `live` pytest marker.
 
+## Evaluation
+
+The small, resume-oriented benchmark compares Simple RAG with the full
+Scholar-Agent workflow on 50 English questions. See
+[`evals/README.md`](evals/README.md) for the run, blinded review, and scoring
+workflow. Evaluation stays outside the production CLI and the default test
+suite never calls DeepSeek.
+
 ## Limitations
 
 - The corpus and NumPy indexes are intended for laptop-scale use.

@@ -41,3 +41,10 @@ logs/
 runs/
 outputs/
 *.log
+
+# Local evaluation artifacts
+evals/results.jsonl
+evals/review.csv
+evals/review_key.json
+evals/summary.json
+evals/summary.md

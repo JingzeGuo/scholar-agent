@@ -209,6 +209,72 @@ def test_planner_preserves_asymmetric_atomic_requirements() -> None:
     ]
 
 
+def test_planner_recovers_expanded_names_from_an_explicit_question_acronym() -> None:
+    state = initial_state(
+        "Distinguish the method named CRAG from the dataset named CRAG.",
+    )
+    plan = planner_node(
+        state,
+        StubLLM(
+            {
+                "requirements": [
+                    {
+                        "description": "Explain Corrective Retrieval Augmented Generation",
+                        "targets": ["Corrective Retrieval Augmented Generation"],
+                        "query": "Corrective Retrieval Augmented Generation method",
+                    },
+                    {
+                        "description": "Explain the Comprehensive RAG Benchmark",
+                        "targets": ["Comprehensive RAG Benchmark"],
+                        "query": "Comprehensive RAG Benchmark dataset",
+                    },
+                ],
+            },
+        ),  # type: ignore[arg-type]
+    )["plan"]
+
+    assert plan["requirements"] == [
+        requirement(
+            "R1",
+            "Explain Corrective Retrieval Augmented Generation",
+            ["CRAG"],
+            "Corrective Retrieval Augmented Generation method",
+        ),
+        requirement(
+            "R2",
+            "Explain the Comprehensive RAG Benchmark",
+            ["CRAG"],
+            "Comprehensive RAG Benchmark dataset",
+        ),
+    ]
+
+    combined = planner_node(
+        state,
+        StubLLM(
+            {
+                "requirements": [
+                    {
+                        "description": "Distinguish the method and benchmark",
+                        "targets": [
+                            "Corrective Retrieval Augmented Generation",
+                            "Comprehensive RAG Benchmark",
+                        ],
+                        "query": "CRAG method versus benchmark",
+                    },
+                ],
+            },
+        ),  # type: ignore[arg-type]
+    )["plan"]
+    assert combined["requirements"] == [
+        requirement(
+            "R1",
+            "Distinguish the method and benchmark",
+            ["CRAG"],
+            "CRAG method versus benchmark",
+        ),
+    ]
+
+
 def test_target_matching_preserves_method_identity() -> None:
     assert target_matches("Self-RAG", "Self RAG uses reflection tokens.")
     assert target_matches("CRAG", "CRAG uses a retrieval evaluator.")
