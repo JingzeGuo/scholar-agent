@@ -36,7 +36,7 @@ uv run python evals/evaluate.py --run-id v2_soft_coverage --coverage-mode soft r
 ```
 
 Prepare and score each run with its matching `--run-id`, then compare the
-`full` rows in their generated summaries. The default is `soft`; `none` routes
+`full` rows in their generated summaries. The default is `none`; `none` routes
 the Researcher directly to the Writer. The final Answer Verifier and its single
 repair remain enabled in both modes.
 

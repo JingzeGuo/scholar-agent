@@ -45,7 +45,7 @@ def build_workflow(
     settings: Settings,
     llm: LLMClient | None,
     *,
-    coverage_mode: str = "soft",
+    coverage_mode: str = "none",
 ) -> Any:
     if llm is None:
         raise ValueError("llm is required")
@@ -89,7 +89,7 @@ def build_workflow(
     return workflow.compile()
 
 
-def initial_state(question: str, coverage_mode: str = "soft") -> AgentState:
+def initial_state(question: str, coverage_mode: str = "none") -> AgentState:
     return {
         "question": question,
         "coverage_mode": coverage_mode,
@@ -128,7 +128,7 @@ def run_question(
     settings: Settings,
     llm: LLMClient | None,
     *,
-    coverage_mode: str = "soft",
+    coverage_mode: str = "none",
 ) -> AgentState:
     result = build_workflow(
         engine,

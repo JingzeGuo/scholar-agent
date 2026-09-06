@@ -4,9 +4,9 @@ A compact agentic RAG workflow for evidence-grounded academic research.
 
 ScholarAgent answers questions over a small collection of academic PDFs while
 keeping the full retrieval and grounding path easy to inspect. It combines
-lexical and semantic search, reranks the fused candidates, checks whether the
-evidence covers the question, and renders only validated physical-page
-citations.
+lexical and semantic search, reranks the fused candidates, optionally checks
+whether the evidence covers the question, and renders only validated
+physical-page citations.
 
 ## Problem
 
@@ -29,11 +29,7 @@ Researcher
    ├── Reciprocal Rank Fusion
    └── Cross-encoder reranking
    ↓
-Coverage Analyzer
-   ├── annotations ────────────────────────────┐
-   └── corrective queries → Researcher once ──┤
-                                               ↓
-                                       Writer (all evidence)
+Writer (all evidence)
    ↓
 Answer Verifier
    ├── pass ────────────────────────┐
@@ -42,6 +38,10 @@ Answer Verifier
 Deterministic physical-page citation validation
    ↓
 Answer
+
+Optional soft-coverage path:
+
+Researcher → Coverage Analyzer → corrective retrieval at most once → Writer
 ```
 
 LangGraph connects the workflow nodes:
@@ -49,13 +49,14 @@ LangGraph connects the workflow nodes:
 - Planner: LLM-based planning node.
 - Researcher: deterministic retrieval, fusion, reranking, and
   evidence-selection node.
-- Coverage Analyzer: LLM-based evidence annotation and corrective-query node.
+- Coverage Analyzer: optional LLM-based evidence annotation and
+  corrective-query node; disabled by default.
 - Writer: LLM-based grounded-answer node.
 - Answer Verifier: LLM-based final requirement and grounding check.
 
 The Researcher is a deterministic workflow node, not an autonomous LLM agent.
-Each pass through the bounded retry loop runs one batch of corrective retrievals
-requested by the Coverage Analyzer.
+When soft coverage is explicitly enabled, the bounded retry loop runs one batch
+of corrective retrievals requested by the Coverage Analyzer.
 
 ## Planner
 

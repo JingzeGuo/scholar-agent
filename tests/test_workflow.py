@@ -115,6 +115,7 @@ def test_complete_evidence_reaches_writer(
         engine,  # type: ignore[arg-type]
         Settings(),
         FakeLLM(),  # type: ignore[arg-type]
+        coverage_mode="soft",
     )
 
     assert result["verification"]["status"] == "complete"
@@ -130,6 +131,7 @@ def test_no_relevant_evidence_retries_with_corrective_queries() -> None:
         engine,  # type: ignore[arg-type]
         Settings(),
         FakeLLM(),  # type: ignore[arg-type]
+        coverage_mode="soft",
     )
 
     assert result["verification"]["status"] == "insufficient"
@@ -169,6 +171,7 @@ def test_partial_workflow_retries_exactly_once(
         engine,  # type: ignore[arg-type]
         Settings(),
         FakeLLM(),  # type: ignore[arg-type]
+        coverage_mode="soft",
     )
 
     assert result["verification"]["status"] == "partial"
@@ -225,7 +228,7 @@ def test_workflow_rejects_unknown_coverage_mode() -> None:
         )
 
 
-def test_no_coverage_mode_skips_prewrite_verification(
+def test_default_mode_skips_prewrite_verification(
     sample_chunks: list[dict],
     monkeypatch: Any,
 ) -> None:
@@ -243,7 +246,6 @@ def test_no_coverage_mode_skips_prewrite_verification(
         engine,  # type: ignore[arg-type]
         Settings(),
         FakeLLM(),  # type: ignore[arg-type]
-        coverage_mode="none",
     )
 
     assert result["coverage_mode"] == "none"

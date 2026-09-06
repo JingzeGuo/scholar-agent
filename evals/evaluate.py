@@ -999,7 +999,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--coverage-mode",
         choices=("none", "soft"),
-        default="soft",
+        default="none",
         help="Run the full agent with or without pre-write coverage analysis",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

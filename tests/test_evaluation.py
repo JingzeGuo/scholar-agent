@@ -257,6 +257,10 @@ def test_parser_accepts_coverage_ablation_mode() -> None:
     assert args.command == "run"
 
 
+def test_evaluation_defaults_to_no_coverage() -> None:
+    assert evaluation._parser().parse_args(["run"]).coverage_mode == "none"
+
+
 def test_versioned_artifacts_stay_inside_the_run_directory() -> None:
     path = evaluation_artifact_path("results.jsonl", "v1_soft")
 
