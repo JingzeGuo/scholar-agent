@@ -10,12 +10,10 @@ import fitz
 import pytest
 from evals.evaluate import (
     CountingLLM,
-    baseline_evidence_limit,
     evaluation_artifact_path,
     export_review_evidence,
     prepare_review,
     run_evaluation,
-    run_simple_rag,
     score_review,
     validate_questions,
 )
@@ -24,31 +22,16 @@ from scholar_agent.config import Settings
 
 
 class StubLLM:
-    def __init__(self, text: str) -> None:
-        self.text = text
-        self.prompts: list[str] = []
-
     def complete(self, prompt: str) -> str:
-        self.prompts.append(prompt)
-        return self.text
+        return "answer"
 
     def complete_json(self, prompt: str) -> dict[str, Any]:
-        raise AssertionError("The Simple RAG baseline must not request JSON planning")
+        return {"requirements": []}
 
 
 class FakeEngine:
     def __init__(self, chunks: list[dict]) -> None:
         self.chunks = chunks
-        self.sparse_calls: list[list[str]] = []
-        self.dense_calls: list[list[str]] = []
-
-    def sparse_search(self, queries: list[str]) -> list[dict]:
-        self.sparse_calls.append(queries)
-        return self.chunks
-
-    def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
-        self.dense_calls.append(queries)
-        return [list(reversed(self.chunks))]
 
 
 def small_questions() -> list[dict[str, Any]]:
@@ -102,198 +85,219 @@ def test_committed_benchmark_has_fifty_english_questions() -> None:
     }
 
 
-def test_simple_rag_runs_hybrid_reranking_and_validates_citations(
-    sample_chunks: list[dict],
-    monkeypatch: Any,
-) -> None:
-    engine = FakeEngine(sample_chunks[:2])
-    llm = StubLLM("Supported [E1]. Fabricated [E99] [Fake.pdf p.999].")
-    fusion_calls: list[tuple[list[str], list[str]]] = []
-
-    def fuse(sparse: list[dict], dense: list[dict]) -> list[dict]:
-        fusion_calls.append(
-            ([item["chunk_id"] for item in sparse], [item["chunk_id"] for item in dense]),
-        )
-        return sparse
-
-    rerank_calls: list[tuple[list[str], list[str]]] = []
-
-    def score(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        rerank_calls.append((queries, [item["chunk_id"] for item in candidates]))
-        return [{**item, "score": 1.0} for item in candidates]
-
-    monkeypatch.setattr(evaluation, "reciprocal_rank_fusion", fuse)
-    result = run_simple_rag(
-        "Explain Self-RAG",
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        llm,
-        evidence_limit=1,
-        rerank_function=score,
-    )
-
-    assert engine.sparse_calls == [["Explain Self-RAG"]]
-    assert engine.dense_calls == [["Explain Self-RAG"]]
-    assert fusion_calls == [(["self-1", "crag-1"], ["crag-1", "self-1"])]
-    assert rerank_calls == [(["Explain Self-RAG"], ["self-1", "crag-1"])]
-    assert [item["chunk_id"] for item in result["evidence"]] == ["self-1"]
-    assert result["answer"] == "Supported [Self-RAG.pdf p.1]. Fabricated."
-    assert len(llm.prompts) == 1
-
-
-def test_baseline_receives_at_least_the_full_evidence_budget() -> None:
-    assert baseline_evidence_limit(0) == 8
-    assert baseline_evidence_limit(8) == 8
-    assert baseline_evidence_limit(11) == 11
-
-
-def test_run_wires_the_full_evidence_count_into_the_baseline_budget(
+def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
     sample_chunks: list[dict],
     tmp_path: Path,
-    monkeypatch: Any,
 ) -> None:
     questions = small_questions()[:1]
-    engine = FakeEngine(sample_chunks[:1])
-    llm = CountingLLM(StubLLM("unused"))
-    full_evidence = [
-        {**sample_chunks[0], "chunk_id": f"full-{index}"}
-        for index in range(11)
-    ]
-    observed_limits: list[int] = []
+    llm = CountingLLM(StubLLM())
+    calls: list[str] = []
+    planner_calls: list[str] = []
+    plan = {
+        "requirements": [
+            {
+                "id": "R1",
+                "description": "Explain Method A",
+                "targets": [],
+                "query": "Method A",
+                "retrieval_strategy": "bm25",
+                "top_k": 6,
+            },
+        ],
+    }
 
-    def full_runner(question: str, engine: object, settings: Settings, llm: object) -> dict:
-        return {
-            "answer": "Full [Self-RAG.pdf p.1].",
-            "evidence": full_evidence,
-            "verification": {"status": "complete"},
-        }
+    def planner_runner(state: dict, counting_llm: CountingLLM) -> dict[str, Any]:
+        planner_calls.append(state["question"])
+        counting_llm.complete_json("plan")
+        return {"plan": plan}
 
-    def simple_runner(
+    def workflow_runner(
         question: str,
         engine: object,
         settings: Settings,
-        llm: object,
-        evidence_limit: int,
+        counting_llm: CountingLLM,
         *,
-        rerank_function: object,
-    ) -> dict:
-        observed_limits.append(evidence_limit)
-        return {"answer": "Simple [Self-RAG.pdf p.1].", "evidence": sample_chunks[:1]}
+        retrieval_mode: str,
+        shared_plan: dict,
+    ) -> dict[str, Any]:
+        calls.append(retrieval_mode)
+        counting_llm.complete("write")
+        executed_strategy = "hybrid" if retrieval_mode == "fixed_hybrid" else "bm25"
+        return {
+            "answer": "Answer [Self-RAG.pdf p.1].",
+            "retrieval_mode": retrieval_mode,
+            "plan": shared_plan,
+            "retrieval_trace": [
+                {
+                    "requirement_id": "R1",
+                    "query": "Method A",
+                    "retrieval_strategy": executed_strategy,
+                    "top_k": 6,
+                },
+            ],
+            "evidence": sample_chunks[:1],
+        }
 
-    monkeypatch.setattr(evaluation, "run_simple_rag", simple_runner)
-    run_evaluation(
-        questions,
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        llm,
-        tmp_path / "results.jsonl",
-        full_runner=full_runner,  # type: ignore[arg-type]
-    )
+    results_path = tmp_path / "results.jsonl"
+    for _ in range(2):
+        run_evaluation(
+            questions,
+            FakeEngine(sample_chunks),  # type: ignore[arg-type]
+            Settings(),
+            llm,
+            results_path,
+            workflow_runner=workflow_runner,
+            planner_runner=planner_runner,
+        )
 
-    assert observed_limits == [11]
+    records = [json.loads(line) for line in results_path.read_text().splitlines()]
+    assert planner_calls == ["Explain Method A."]
+    assert calls == ["fixed_hybrid", "adaptive"]
+    assert [record["variant"] for record in records] == ["fixed_hybrid", "adaptive"]
+    assert {record["pipeline_version"] for record in records} == {
+        evaluation.PIPELINE_VERSION,
+    }
+    assert [record["llm_calls"] for record in records] == [2, 2]
+    assert records[0]["trace"]["plan"] == records[1]["trace"]["plan"] == plan
+    assert records[0]["trace"]["shared_planner_llm_calls"] == 1
+    assert records[0]["trace"]["retrieval_decisions"] == [
+        {
+            "requirement_id": "R1",
+            "query": "Method A",
+            "retrieval_strategy": "hybrid",
+            "top_k": 6,
+        },
+    ]
+    assert records[1]["trace"]["retrieval_decisions"][0]["retrieval_strategy"] == "bm25"
+    for removed in (
+        "verification",
+        "answer_verification",
+        "retry_count",
+        "repair_count",
+    ):
+        assert removed not in records[0]["trace"]
 
 
-def test_run_is_resumable_and_does_not_repeat_successful_pairs(
+def test_evaluation_resume_reuses_the_saved_plan(
     sample_chunks: list[dict],
     tmp_path: Path,
 ) -> None:
     questions = small_questions()[:1]
-    engine = FakeEngine(sample_chunks[:1])
-    llm = CountingLLM(StubLLM("Answer [E1]."))
-    full_calls: list[str] = []
+    plan = {
+        "requirements": [
+            {
+                "id": "R1",
+                "description": "Explain Method A",
+                "targets": [],
+                "query": "shared query",
+                "retrieval_strategy": "dense",
+                "top_k": 8,
+            },
+        ],
+    }
+    results_path = tmp_path / "results.jsonl"
+    results_path.write_text(
+        json.dumps(
+            {
+                "run_id": "legacy",
+                "pipeline_version": evaluation.PIPELINE_VERSION,
+                "question_id": "Q001",
+                "variant": "fixed_hybrid",
+                "answer": "Saved answer.",
+                "evidence": [],
+                "latency_seconds": 1.0,
+                "llm_calls": 2,
+                "trace": {
+                    "plan": plan,
+                    "shared_planner_latency_seconds": 0.25,
+                    "shared_planner_llm_calls": 1,
+                    "retrieval_mode": "fixed_hybrid",
+                    "retrieval_decisions": [],
+                    "cited_pages": [],
+                },
+                "error": None,
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    observed: list[tuple[str, dict]] = []
 
-    def full_runner(question: str, engine: object, settings: Settings, llm: object) -> dict:
-        full_calls.append(question)
+    def workflow_runner(
+        question: str,
+        engine: object,
+        settings: Settings,
+        llm: CountingLLM,
+        *,
+        retrieval_mode: str,
+        shared_plan: dict,
+    ) -> dict[str, Any]:
+        observed.append((retrieval_mode, shared_plan))
+        llm.complete("write")
         return {
-            "answer": "Full [Self-RAG.pdf p.1].",
-            "coverage_mode": "none",
+            "answer": "Resumed answer.",
+            "retrieval_mode": retrieval_mode,
+            "plan": shared_plan,
+            "retrieval_trace": [],
             "evidence": sample_chunks[:1],
-            "verification": {"status": "complete"},
         }
 
-    def score(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [{**item, "score": 1.0} for item in candidates]
-
-    results_path = tmp_path / "results.jsonl"
     run_evaluation(
         questions,
-        engine,  # type: ignore[arg-type]
+        FakeEngine(sample_chunks),  # type: ignore[arg-type]
         Settings(),
-        llm,
+        CountingLLM(StubLLM()),
         results_path,
-        full_runner=full_runner,  # type: ignore[arg-type]
-        rerank_function=score,
-    )
-    first_contents = results_path.read_text(encoding="utf-8")
-    run_evaluation(
-        questions,
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        llm,
-        results_path,
-        full_runner=full_runner,  # type: ignore[arg-type]
-        rerank_function=score,
+        workflow_runner=workflow_runner,
+        planner_runner=lambda *args: pytest.fail("saved plan must be reused"),
     )
 
-    assert results_path.read_text(encoding="utf-8") == first_contents
-    assert full_calls == ["Explain Method A."]
-    assert len(first_contents.splitlines()) == 2
-    records = [json.loads(line) for line in first_contents.splitlines()]
-    assert {record["pipeline_version"] for record in records} == {
-        evaluation.PIPELINE_VERSION,
-    }
-    assert {record["run_id"] for record in records} == {"legacy"}
-    assert records[0]["trace"]["coverage_mode"] == "none"
-    assert records[0]["trace"]["verification"] == {"status": "complete"}
+    assert observed == [("adaptive", plan)]
+    records = [json.loads(line) for line in results_path.read_text().splitlines()]
+    assert len(records) == 2
+    assert records[1]["llm_calls"] == 2
+    assert records[1]["trace"]["plan"] == plan
 
 
-def test_parser_accepts_coverage_ablation_mode() -> None:
-    args = evaluation._parser().parse_args(
-        ["--run-id", "v2_no_coverage", "--coverage-mode", "none", "run"],
-    )
+def test_evaluation_parser_is_the_retrieval_ablation_only() -> None:
+    args = evaluation._parser().parse_args(["--run-id", "adaptive_v2", "run"])
 
-    assert args.run_id == "v2_no_coverage"
-    assert args.coverage_mode == "none"
+    assert args.run_id == "adaptive_v2"
     assert args.command == "run"
-
-
-def test_evaluation_defaults_to_no_coverage() -> None:
-    assert evaluation._parser().parse_args(["run"]).coverage_mode == "none"
+    with pytest.raises(SystemExit):
+        evaluation._parser().parse_args(["--coverage-mode", "soft", "run"])
 
 
 def test_versioned_artifacts_stay_inside_the_run_directory() -> None:
-    path = evaluation_artifact_path("results.jsonl", "v1_soft")
+    path = evaluation_artifact_path("results.jsonl", "adaptive_v2")
 
-    assert path == evaluation.ROOT / "evals" / "runs" / "v1_soft" / "results.jsonl"
+    assert path == evaluation.ROOT / "evals" / "runs" / "adaptive_v2" / "results.jsonl"
     with pytest.raises(evaluation.EvaluationError, match="Invalid run id"):
         evaluation_artifact_path("results.jsonl", "../outside")
 
 
-def test_blind_review_round_trip_computes_resume_metrics(tmp_path: Path) -> None:
+def test_blind_review_preserves_scoring_definitions_and_cost_metrics(
+    tmp_path: Path,
+) -> None:
     questions = small_questions()
     results_path = tmp_path / "results.jsonl"
-    records = []
-    for question in questions:
-        for variant in evaluation.VARIANTS:
-            is_full_insufficient = question["id"] == "Q002" and variant == "full"
-            records.append(
-                {
-                    "question_id": question["id"],
-                    "variant": variant,
-                    "answer": (
-                        "The corpus lacks enough evidence."
-                        if is_full_insufficient
-                        else "Claim [A.pdf p.1]."
-                    ),
-                    "verification_status": (
-                        question["expected_status"] if variant == "full" else None
-                    ),
-                    "evidence": [],
-                    "latency_seconds": 2.0 if variant == "full" else 1.0,
-                    "llm_calls": 3 if variant == "full" else 1,
-                    "error": None,
-                },
-            )
+    records = [
+        {
+            "question_id": question["id"],
+            "variant": variant,
+            "answer": (
+                "Claim [A.pdf p.1]."
+                if question["id"] == "Q001"
+                else "The corpus lacks enough evidence."
+            ),
+            "evidence": [],
+            "latency_seconds": 2.0 if variant == "adaptive" else 1.0,
+            "llm_calls": 2,
+            "error": None,
+        }
+        for question in questions
+        for variant in evaluation.VARIANTS
+    ]
     results_path.write_text(
         "".join(json.dumps(item) + "\n" for item in records),
         encoding="utf-8",
@@ -302,23 +306,20 @@ def test_blind_review_round_trip_computes_resume_metrics(tmp_path: Path) -> None
     key_path = tmp_path / "review_key.json"
     prepare_review(questions, results_path, review_path, key_path)
 
-    with review_path.open(encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    assert "variant" not in rows[0]
     keys = {
         item["review_id"]: item
         for item in json.loads(key_path.read_text(encoding="utf-8"))
     }
+    with review_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert "variant" not in rows[0]
     for row in rows:
         key = keys[row["review_id"]]
-        is_full = key["variant"] == "full"
-        is_first_simple = key["variant"] == "simple_rag" and key["question_id"] == "Q001"
-        row["requirement_scores"] = json.dumps({"G1": int(is_full or is_first_simple)})
+        passed = key["variant"] == "adaptive" or key["question_id"] == "Q002"
+        row["requirement_scores"] = json.dumps({"G1": int(passed)})
         citation_count = len(json.loads(row["citations"]))
-        row["citation_scores"] = json.dumps(
-            [int(is_full or is_first_simple)] * citation_count,
-        )
-        row["unsupported_claims"] = "0" if is_full or is_first_simple else "1"
+        row["citation_scores"] = json.dumps([int(passed)] * citation_count)
+        row["unsupported_claims"] = "0" if passed else "1"
         row["uncited_claims"] = "0"
     with review_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
@@ -336,15 +337,22 @@ def test_blind_review_round_trip_computes_resume_metrics(tmp_path: Path) -> None
         markdown_path,
     )
 
-    assert summary["variants"]["simple_rag"]["strict_success_rate"] == 0.5
-    assert summary["variants"]["simple_rag"]["requirement_accuracy"] == 0.5
-    assert summary["variants"]["simple_rag"]["citation_support_rate"] == 0.5
-    assert summary["variants"]["full"]["strict_success_rate"] == 1.0
-    assert summary["variants"]["full"]["requirement_accuracy"] == 1.0
-    assert summary["variants"]["full"]["citation_support_rate"] == 1.0
-    assert summary["delta"]["strict_success_percentage_points"] == 50.0
-    assert "| Strict Success | 50.0% | 100.0% | +50.0 pp |" in markdown_path.read_text(
-        encoding="utf-8",
+    assert summary["comparison"] == {
+        "baseline": "fixed_hybrid",
+        "treatment": "adaptive",
+    }
+    assert summary["variants"]["fixed_hybrid"]["strict_success_rate"] == 0.5
+    assert summary["variants"]["fixed_hybrid"]["requirement_accuracy"] == 0.5
+    assert summary["variants"]["fixed_hybrid"]["citation_support_rate"] == 0.0
+    assert summary["variants"]["fixed_hybrid"]["average_latency_seconds"] == 1.0
+    assert summary["variants"]["fixed_hybrid"]["average_llm_calls"] == 2.0
+    assert summary["variants"]["adaptive"]["strict_success_rate"] == 1.0
+    assert summary["variants"]["adaptive"]["requirement_accuracy"] == 1.0
+    assert summary["variants"]["adaptive"]["citation_support_rate"] == 1.0
+    assert summary["variants"]["adaptive"]["average_latency_seconds"] == 2.0
+    assert summary["variants"]["adaptive"]["average_llm_calls"] == 2.0
+    assert "| Metric | Fixed Hybrid | Adaptive Retrieval | Delta |" in (
+        markdown_path.read_text(encoding="utf-8")
     )
 
 

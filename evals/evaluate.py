@@ -12,18 +12,20 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import fitz
 
-from scholar_agent.citations import PAGE_CITATION_RE, cited_pages, validate_citations
+from scholar_agent.agents.planner import planner_node
+from scholar_agent.citations import cited_pages
 from scholar_agent.config import Settings
 from scholar_agent.llm import LLMClient
 from scholar_agent.reranker import rerank
 from scholar_agent.retrieval import RetrievalEngine, reciprocal_rank_fusion
-from scholar_agent.workflow import run_question
+from scholar_agent.workflow import initial_state, run_question
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTIONS_PATH = ROOT / "evals" / "questions.jsonl"
@@ -35,13 +37,17 @@ SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
 MODEL_NAME = "deepseek-v4-flash"
-PIPELINE_VERSION = "v2_answer_verifier"
+PIPELINE_VERSION = "adaptive_v2_shared_plan"
 EXPECTED_CORPUS_SIZE = 10_726
 EXPECTED_QUESTION_COUNT = 50
 DEFAULT_EVIDENCE_LIMIT = 8
 MAX_RERANK_CANDIDATES = 30
 REVIEW_SEED = 20260906
-VARIANTS = ("simple_rag", "full")
+VARIANTS = ("fixed_hybrid", "adaptive")
+VARIANT_LABELS = {
+    "fixed_hybrid": "Fixed Hybrid",
+    "adaptive": "Adaptive Retrieval",
+}
 CATEGORY_COUNTS = {
     "single": 15,
     "comparison": 10,
@@ -52,9 +58,6 @@ CATEGORY_COUNTS = {
 QUESTION_ID_RE = re.compile(r"Q\d{3}")
 RUN_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
-
-RerankFunction = Callable[[list[str], list[dict], str], list[dict]]
-
 
 class EvaluationError(RuntimeError):
     """Raised for actionable benchmark or run failures."""
@@ -277,73 +280,6 @@ def validate_gold_pages(questions: Sequence[dict[str, Any]], chunks: Sequence[di
                     )
 
 
-def baseline_evidence_limit(full_evidence_count: int) -> int:
-    """Give the baseline at least as many evidence slots as the full system used."""
-    return max(DEFAULT_EVIDENCE_LIMIT, full_evidence_count)
-
-
-def _baseline_evidence(
-    question: str,
-    engine: RetrievalEngine,
-    settings: Settings,
-    evidence_limit: int,
-    rerank_function: RerankFunction,
-) -> list[dict]:
-    sparse = engine.sparse_search([question])
-    dense_rankings = engine.dense_search_many([question])
-    dense = dense_rankings[0] if dense_rankings else []
-    candidates = reciprocal_rank_fusion(sparse, dense)[:MAX_RERANK_CANDIDATES]
-    ranked = rerank_function([question], candidates, settings.reranker_model)
-    return [
-        item
-        for item in ranked
-        if float(item["score"]) >= settings.min_rerank_score
-    ][:evidence_limit]
-
-
-def _baseline_prompt(question: str, evidence: Sequence[dict]) -> str:
-    evidence_text = "\n".join(
-        f"[E{index}] {item['text']}" for index, item in enumerate(evidence, start=1)
-    )
-    return f"""Answer the academic question in English using only the supplied evidence.
-
-Every factual statement must have an inline [E1], [E2], ... citation. Use only supplied
-evidence IDs. If the evidence supports only part of the question, answer that part and state
-what is missing. If it supports none of the question, give a concise abstention without
-factual claims or citations. Do not fill gaps from memory.
-
-Question: {question}
-
-Evidence:
-{evidence_text}
-"""
-
-
-def run_simple_rag(
-    question: str,
-    engine: RetrievalEngine,
-    settings: Settings,
-    llm: Any,
-    evidence_limit: int,
-    *,
-    rerank_function: RerankFunction = rerank,
-) -> dict[str, Any]:
-    """Run the single-query Hybrid RAG baseline without any agent nodes."""
-    evidence = _baseline_evidence(
-        question,
-        engine,
-        settings,
-        evidence_limit,
-        rerank_function,
-    )
-    draft = llm.complete(_baseline_prompt(question, evidence))
-    draft = PAGE_CITATION_RE.sub("", draft)
-    return {
-        "answer": validate_citations(draft, list(evidence)),
-        "evidence": evidence,
-    }
-
-
 def _public_evidence(evidence: Iterable[dict]) -> list[dict[str, Any]]:
     return [
         {
@@ -356,15 +292,18 @@ def _public_evidence(evidence: Iterable[dict]) -> list[dict[str, Any]]:
     ]
 
 
-def _trace(answer: str, state: dict[str, Any]) -> dict[str, Any]:
+def _trace(
+    answer: str,
+    state: dict[str, Any],
+    planner_latency: float,
+    planner_llm_calls: int,
+) -> dict[str, Any]:
     return {
         "plan": state.get("plan"),
-        "coverage_mode": state.get("coverage_mode"),
-        "verification": state.get("verification"),
-        "retry_count": int(state.get("retry_count", 0)),
-        "stop_reason": state.get("stop_reason", ""),
-        "answer_verification": state.get("answer_verification"),
-        "repair_count": int(state.get("repair_count", 0)),
+        "shared_planner_latency_seconds": round(planner_latency, 4),
+        "shared_planner_llm_calls": planner_llm_calls,
+        "retrieval_mode": state.get("retrieval_mode"),
+        "retrieval_decisions": state.get("retrieval_trace", []),
         "cited_pages": [
             {"paper": paper, "page": page} for paper, page in cited_pages(answer)
         ],
@@ -404,7 +343,6 @@ def _result_record(
     variant: str,
     answer: str,
     evidence: Sequence[dict],
-    verification_status: str | None,
     latency: float,
     llm_calls: int,
     trace: dict[str, Any],
@@ -415,7 +353,6 @@ def _result_record(
         "question_id": question_id,
         "variant": variant,
         "answer": answer,
-        "verification_status": verification_status,
         "evidence": _public_evidence(evidence),
         "latency_seconds": round(latency, 4),
         "llm_calls": llm_calls,
@@ -439,13 +376,29 @@ def _error_record(
         "question_id": question_id,
         "variant": variant,
         "answer": "",
-        "verification_status": None,
         "evidence": [],
         "latency_seconds": round(latency, 4),
         "llm_calls": llm_calls,
         "trace": {},
         "error": f"{type(exc).__name__}: {exc}",
     }
+
+
+def _resumable_results(
+    results_path: Path,
+    run_id: str,
+    pipeline_version: str,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    existing = _read_jsonl(results_path) if results_path.is_file() else []
+    for value in existing:
+        if value.get("run_id", run_id) != run_id:
+            raise EvaluationError(f"Existing results belong to run {value.get('run_id')}")
+        if value.get("pipeline_version", pipeline_version) != pipeline_version:
+            raise EvaluationError(
+                "Existing results use a different pipeline version: "
+                f"{value.get('pipeline_version')}",
+            )
+    return latest_results(existing)
 
 
 def run_evaluation(
@@ -457,107 +410,111 @@ def run_evaluation(
     *,
     run_id: str = "legacy",
     pipeline_version: str = PIPELINE_VERSION,
-    full_runner: Callable[[str, RetrievalEngine, Settings, Any], dict] = run_question,
-    rerank_function: RerankFunction = rerank,
+    workflow_runner: Callable[..., dict] = run_question,
+    planner_runner: Callable[..., dict] = planner_node,
 ) -> None:
-    """Run Full first, then a budget-matched baseline, with resumable JSONL output."""
-    existing = _read_jsonl(results_path) if results_path.is_file() else []
-    for value in existing:
-        if value.get("run_id", run_id) != run_id:
-            raise EvaluationError(f"Existing results belong to run {value.get('run_id')}")
-        if value.get("pipeline_version", pipeline_version) != pipeline_version:
-            raise EvaluationError(
-                "Existing results use a different pipeline version: "
-                f"{value.get('pipeline_version')}",
-            )
-    latest = latest_results(existing)
+    """Run both retrieval modes from one shared, sanitized plan per question."""
+    latest = _resumable_results(results_path, run_id, pipeline_version)
 
     for question in questions:
         question_id = question["id"]
-        full = _successful_result(latest, question_id, "full")
-        if full is None:
+        missing_modes = [
+            mode
+            for mode in VARIANTS
+            if _successful_result(latest, question_id, mode) is None
+        ]
+        if not missing_modes:
+            continue
+
+        saved_result = next(
+            (
+                result
+                for mode in VARIANTS
+                if (result := _successful_result(latest, question_id, mode)) is not None
+            ),
+            None,
+        )
+        if saved_result is not None:
+            saved_trace = saved_result.get("trace")
+            if not isinstance(saved_trace, dict) or not isinstance(
+                saved_trace.get("plan"),
+                dict,
+            ):
+                raise EvaluationError(f"Saved result has no reusable plan: {question_id}")
+            shared_plan = deepcopy(saved_trace["plan"])
+            planner_latency = float(saved_trace["shared_planner_latency_seconds"])
+            planner_llm_calls = int(saved_trace["shared_planner_llm_calls"])
+        else:
+            calls_before = llm.calls
+            planner_started = time.perf_counter()
+            try:
+                shared_plan = planner_runner(
+                    initial_state(question["question"]),
+                    llm,
+                )["plan"]
+            except Exception as exc:
+                raise EvaluationError(f"Planner failed for {question_id}: {exc}") from exc
+            planner_latency = time.perf_counter() - planner_started
+            planner_llm_calls = llm.calls - calls_before
+
+        for retrieval_mode in missing_modes:
             calls_before = llm.calls
             started = time.perf_counter()
             try:
-                state = full_runner(question["question"], engine, settings, llm)
-                full = _result_record(
+                state = workflow_runner(
+                    question["question"],
+                    engine,
+                    settings,
+                    llm,
+                    retrieval_mode=retrieval_mode,
+                    shared_plan=deepcopy(shared_plan),
+                )
+                if state.get("plan") != shared_plan:
+                    raise EvaluationError(
+                        f"{retrieval_mode} changed the shared plan for {question_id}",
+                    )
+                result = _result_record(
                     run_id,
                     pipeline_version,
                     question_id,
-                    "full",
+                    retrieval_mode,
                     state["answer"],
                     state["evidence"],
-                    state["verification"]["status"],
-                    time.perf_counter() - started,
-                    llm.calls - calls_before,
-                    _trace(state["answer"], state),
+                    planner_latency + time.perf_counter() - started,
+                    planner_llm_calls + llm.calls - calls_before,
+                    _trace(
+                        state["answer"],
+                        state,
+                        planner_latency,
+                        planner_llm_calls,
+                    ),
                 )
             except Exception as exc:
                 failed = _error_record(
                     run_id,
                     pipeline_version,
                     question_id,
-                    "full",
+                    retrieval_mode,
                     exc,
-                    time.perf_counter() - started,
-                    llm.calls - calls_before,
+                    planner_latency + time.perf_counter() - started,
+                    planner_llm_calls + llm.calls - calls_before,
                 )
                 _append_result(results_path, failed)
-                raise EvaluationError(f"Full run failed for {question_id}: {exc}") from exc
-            _append_result(results_path, full)
-            latest[(question_id, "full")] = full
-            print(f"completed {question_id} full", flush=True)
-
-        simple = _successful_result(latest, question_id, "simple_rag")
-        if simple is not None:
-            continue
-        evidence_limit = baseline_evidence_limit(len(full["evidence"]))
-        calls_before = llm.calls
-        started = time.perf_counter()
-        try:
-            state = run_simple_rag(
-                question["question"],
-                engine,
-                settings,
-                llm,
-                evidence_limit,
-                rerank_function=rerank_function,
-            )
-            simple = _result_record(
-                run_id,
-                pipeline_version,
-                question_id,
-                "simple_rag",
-                state["answer"],
-                state["evidence"],
-                None,
-                time.perf_counter() - started,
-                llm.calls - calls_before,
-                _trace(state["answer"], state),
-            )
-        except Exception as exc:
-            failed = _error_record(
-                run_id,
-                pipeline_version,
-                question_id,
-                "simple_rag",
-                exc,
-                time.perf_counter() - started,
-                llm.calls - calls_before,
-            )
-            _append_result(results_path, failed)
-            raise EvaluationError(f"Simple RAG failed for {question_id}: {exc}") from exc
-        _append_result(results_path, simple)
-        latest[(question_id, "simple_rag")] = simple
-        print(f"completed {question_id} simple_rag", flush=True)
+                raise EvaluationError(
+                    f"{retrieval_mode} run failed for {question_id}: {exc}",
+                ) from exc
+            _append_result(results_path, result)
+            latest[(question_id, retrieval_mode)] = result
+            print(f"completed {question_id} {retrieval_mode}", flush=True)
 
 
 def _complete_result_set(
     questions: Sequence[dict[str, Any]],
     results_path: Path,
+    variants: Sequence[str] = VARIANTS,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     latest = latest_results(_read_jsonl(results_path))
-    expected = {(item["id"], variant) for item in questions for variant in VARIANTS}
+    expected = {(item["id"], variant) for item in questions for variant in variants}
     missing = [
         key
         for key in sorted(expected)
@@ -574,12 +531,13 @@ def prepare_review(
     review_path: Path,
     review_key_path: Path,
     *,
+    variants: Sequence[str] = VARIANTS,
     force: bool = False,
 ) -> None:
     """Create a deterministic, variant-blinded manual review sheet."""
     if (review_path.exists() or review_key_path.exists()) and not force:
         raise EvaluationError("Review files already exist; pass --force to replace them")
-    results = _complete_result_set(questions, results_path)
+    results = _complete_result_set(questions, results_path, variants)
     questions_by_id = {item["id"]: item for item in questions}
     samples = [
         (question_id, variant, results[(question_id, variant)])
@@ -664,12 +622,14 @@ def export_review_evidence(
     review_path: Path,
     papers_dir: Path,
     output_path: Path,
+    *,
+    variants: Sequence[str] = VARIANTS,
 ) -> dict[str, int]:
     """Export variant-blinded cited and gold physical-page text for LLM judging."""
     questions_by_id = {item["id"]: item for item in questions}
     with review_path.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
-    expected_rows = len(questions) * len(VARIANTS)
+    expected_rows = len(questions) * len(variants)
     if len(rows) != expected_rows:
         raise EvaluationError(f"Expected {expected_rows} review rows")
 
@@ -800,9 +760,13 @@ def score_review(
     review_key_path: Path,
     summary_path: Path,
     summary_markdown_path: Path,
+    *,
+    variants: Sequence[str] = VARIANTS,
 ) -> dict[str, Any]:
     """Validate human labels and aggregate resume-oriented metrics."""
-    results = _complete_result_set(questions, results_path)
+    if len(variants) != 2 or len(set(variants)) != 2:
+        raise EvaluationError("Scoring requires exactly two distinct variants")
+    results = _complete_result_set(questions, results_path, variants)
     questions_by_id = {item["id"]: item for item in questions}
     raw_keys = json.loads(review_key_path.read_text(encoding="utf-8"))
     if not isinstance(raw_keys, list):
@@ -813,8 +777,8 @@ def score_review(
 
     with review_path.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
-    if len(rows) != len(questions) * len(VARIANTS):
-        raise EvaluationError(f"Expected {len(questions) * len(VARIANTS)} review rows")
+    if len(rows) != len(questions) * len(variants):
+        raise EvaluationError(f"Expected {len(questions) * len(variants)} review rows")
 
     totals = {
         variant: {
@@ -827,7 +791,7 @@ def score_review(
             "latency": 0.0,
             "llm_calls": 0,
         }
-        for variant in VARIANTS
+        for variant in variants
     }
     seen_samples: set[tuple[str, str]] = set()
 
@@ -897,7 +861,7 @@ def score_review(
         total["latency"] += float(result["latency_seconds"])
         total["llm_calls"] += int(result["llm_calls"])
 
-    expected_samples = {(item["id"], variant) for item in questions for variant in VARIANTS}
+    expected_samples = {(item["id"], variant) for item in questions for variant in variants}
     if seen_samples != expected_samples:
         raise EvaluationError("Review sheet does not cover every question and variant")
 
@@ -914,22 +878,36 @@ def score_review(
             "average_llm_calls": total["llm_calls"] / total["questions"],
         }
 
-    simple = metrics["simple_rag"]
-    full = metrics["full"]
+    baseline_name, treatment_name = variants
+    baseline = metrics[baseline_name]
+    treatment = metrics[treatment_name]
     summary = {
         "benchmark_questions": len(questions),
+        "comparison": {
+            "baseline": baseline_name,
+            "treatment": treatment_name,
+        },
         "variants": metrics,
         "delta": {
             "strict_success_percentage_points": 100
-            * (float(full["strict_success_rate"]) - float(simple["strict_success_rate"])),
+            * (
+                float(treatment["strict_success_rate"])
+                - float(baseline["strict_success_rate"])
+            ),
             "requirement_accuracy_percentage_points": 100
-            * (float(full["requirement_accuracy"]) - float(simple["requirement_accuracy"])),
+            * (
+                float(treatment["requirement_accuracy"])
+                - float(baseline["requirement_accuracy"])
+            ),
             "citation_support_percentage_points": 100
-            * (float(full["citation_support_rate"]) - float(simple["citation_support_rate"])),
-            "average_latency_seconds": float(full["average_latency_seconds"])
-            - float(simple["average_latency_seconds"]),
-            "average_llm_calls": float(full["average_llm_calls"])
-            - float(simple["average_llm_calls"]),
+            * (
+                float(treatment["citation_support_rate"])
+                - float(baseline["citation_support_rate"])
+            ),
+            "average_latency_seconds": float(treatment["average_latency_seconds"])
+            - float(baseline["average_latency_seconds"]),
+            "average_llm_calls": float(treatment["average_llm_calls"])
+            - float(baseline["average_llm_calls"]),
         },
     }
     summary_path.write_text(
@@ -941,22 +919,33 @@ def score_review(
 
 
 def _summary_markdown(summary: dict[str, Any]) -> str:
-    simple = summary["variants"]["simple_rag"]
-    full = summary["variants"]["full"]
+    comparison = summary.get(
+        "comparison",
+        {"baseline": "fixed_hybrid", "treatment": "adaptive"},
+    )
+    baseline_name = comparison["baseline"]
+    treatment_name = comparison["treatment"]
+    baseline = summary["variants"][baseline_name]
+    treatment = summary["variants"][treatment_name]
     delta = summary["delta"]
+    baseline_label = VARIANT_LABELS.get(baseline_name, baseline_name.replace("_", " ").title())
+    treatment_label = VARIANT_LABELS.get(
+        treatment_name,
+        treatment_name.replace("_", " ").title(),
+    )
 
     def percent(value: float) -> str:
         return f"{100 * value:.1f}%"
 
     return f"""# Scholar-Agent evaluation summary
 
-| Metric | Simple RAG | Scholar-Agent | Delta |
+| Metric | {baseline_label} | {treatment_label} | Delta |
 |---|---:|---:|---:|
-| Strict Success | {percent(simple['strict_success_rate'])} | {percent(full['strict_success_rate'])} | {delta['strict_success_percentage_points']:+.1f} pp |
-| Requirement Accuracy | {percent(simple['requirement_accuracy'])} | {percent(full['requirement_accuracy'])} | {delta['requirement_accuracy_percentage_points']:+.1f} pp |
-| Citation Support | {percent(simple['citation_support_rate'])} | {percent(full['citation_support_rate'])} | {delta['citation_support_percentage_points']:+.1f} pp |
-| Average latency | {simple['average_latency_seconds']:.2f}s | {full['average_latency_seconds']:.2f}s | {delta['average_latency_seconds']:+.2f}s |
-| Average LLM calls | {simple['average_llm_calls']:.2f} | {full['average_llm_calls']:.2f} | {delta['average_llm_calls']:+.2f} |
+| Strict Success | {percent(baseline['strict_success_rate'])} | {percent(treatment['strict_success_rate'])} | {delta['strict_success_percentage_points']:+.1f} pp |
+| Requirement Accuracy | {percent(baseline['requirement_accuracy'])} | {percent(treatment['requirement_accuracy'])} | {delta['requirement_accuracy_percentage_points']:+.1f} pp |
+| Citation Support | {percent(baseline['citation_support_rate'])} | {percent(treatment['citation_support_rate'])} | {delta['citation_support_percentage_points']:+.1f} pp |
+| Average latency | {baseline['average_latency_seconds']:.2f}s | {treatment['average_latency_seconds']:.2f}s | {delta['average_latency_seconds']:+.2f}s |
+| Average LLM calls | {baseline['average_llm_calls']:.2f} | {treatment['average_llm_calls']:.2f} | {delta['average_llm_calls']:+.2f} |
 """
 
 
@@ -968,7 +957,7 @@ def _runtime() -> tuple[list[dict[str, Any]], RetrievalEngine, Settings, Countin
     if configured_model and configured_model != MODEL_NAME:
         raise EvaluationError(f"SCHOLAR_AGENT_LLM_MODEL must be {MODEL_NAME}")
 
-    settings = replace(Settings.from_env(), llm_model=MODEL_NAME, max_retries=1)
+    settings = replace(Settings.from_env(), llm_model=MODEL_NAME)
     engine = RetrievalEngine.load(settings)
     if len(engine.chunks) != EXPECTED_CORPUS_SIZE:
         raise EvaluationError(
@@ -987,7 +976,14 @@ def _runtime() -> tuple[list[dict[str, Any]], RetrievalEngine, Settings, Countin
 
 
 def _warm_up(question: str, engine: RetrievalEngine, settings: Settings) -> None:
-    _baseline_evidence(question, engine, settings, DEFAULT_EVIDENCE_LIMIT, rerank)
+    sparse = engine.sparse_search([question], top_k=DEFAULT_EVIDENCE_LIMIT)
+    dense_rankings = engine.dense_search_many(
+        [question],
+        top_k=DEFAULT_EVIDENCE_LIMIT,
+    )
+    dense = dense_rankings[0] if dense_rankings else []
+    candidates = reciprocal_rank_fusion(sparse, dense)[:MAX_RERANK_CANDIDATES]
+    rerank([question], candidates, settings.reranker_model)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -996,14 +992,8 @@ def _parser() -> argparse.ArgumentParser:
         "--run-id",
         help="Store generated artifacts under evals/runs/<run-id>",
     )
-    parser.add_argument(
-        "--coverage-mode",
-        choices=("none", "soft"),
-        default="none",
-        help="Run the full agent with or without pre-write coverage analysis",
-    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("run", help="Run Full Scholar-Agent and Simple RAG")
+    subparsers.add_parser("run", help="Run Fixed Hybrid and Adaptive Retrieval")
     review = subparsers.add_parser("prepare-review", help="Create the blinded review CSV")
     review.add_argument("--force", action="store_true", help="Replace existing review files")
     subparsers.add_parser(
@@ -1030,21 +1020,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run":
             questions, engine, settings, llm = _runtime()
             _warm_up(questions[0]["question"], engine, settings)
-
-            def full_runner(
-                question: str,
-                engine: RetrievalEngine,
-                settings: Settings,
-                llm: Any,
-            ) -> dict:
-                return run_question(
-                    question,
-                    engine,
-                    settings,
-                    llm,
-                    coverage_mode=args.coverage_mode,
-                )
-
             run_evaluation(
                 questions,
                 engine,
@@ -1052,8 +1027,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 llm,
                 results_path,
                 run_id=run_id,
-                pipeline_version=f"{PIPELINE_VERSION}_{args.coverage_mode}",
-                full_runner=full_runner,
             )
         elif args.command == "prepare-review":
             questions = load_questions()

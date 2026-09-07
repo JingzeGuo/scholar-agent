@@ -9,25 +9,26 @@ import scholar_agent.workflow as workflow_module
 from scholar_agent.agents.writer import SAFE_ABSTENTION
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
-from scholar_agent.workflow import (
-    initial_state,
-    route_after_answer_verification,
-    route_after_verification,
-    run_question,
-)
+from scholar_agent.workflow import build_workflow, initial_state, run_question
 
 
 class FakeEngine:
-    def __init__(self, results: list[dict], chunks: list[dict] | None = None) -> None:
+    def __init__(self, results: list[dict]) -> None:
         self.results = results
-        self.chunks = chunks or results
-        self.calls = 0
+        self.chunks = results
+        self.sparse_calls: list[tuple[list[str], int]] = []
+        self.dense_calls: list[tuple[list[str], int]] = []
 
-    def sparse_search(self, queries: list[str]) -> list[dict]:
-        self.calls += 1
+    def sparse_search(self, queries: list[str], top_k: int = 8) -> list[dict]:
+        self.sparse_calls.append((queries, top_k))
         return self.results
 
-    def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
+    def dense_search_many(
+        self,
+        queries: list[str],
+        top_k: int = 8,
+    ) -> list[list[dict]]:
+        self.dense_calls.append((queries, top_k))
         return [self.results for _ in queries]
 
 
@@ -37,309 +38,199 @@ class FakeCrossEncoder:
 
 
 class FakeLLM:
+    def __init__(self) -> None:
+        self.json_calls = 0
+
     def complete_json(self, prompt: str) -> dict:
-        if "<user_question>" in prompt:
-            return {
-                "requirements": [
-                    {
-                        "description": "Answer the requested evidence question",
-                        "targets": [],
-                        "query": "Self-RAG CRAG retrieval",
-                    },
-                ],
-            }
-        if "You verify a final answer" in prompt:
-            requirements = {
-                "R1": {"passed": True, "issue": ""},
-            }
-            if "R2:" in prompt:
-                requirements["R2"] = {"passed": True, "issue": ""}
-            return {
-                "requirements": requirements,
-                "citation_issues": [],
-                "uncited_claims": [],
-                "unsupported_claims": [],
-                "incorrect_missing_claims": [],
-                "repair_instructions": [],
-            }
-        covered = {"R1": ["E1"], "R2": ["E2"]} if "E2 [" in prompt else {"R1": ["E1"]}
+        self.json_calls += 1
         return {
-            "covered": covered,
-            "corrective_queries": [
+            "requirements": [
                 {
-                    "requirement_id": "R2" if "R2:" in prompt else "R1",
-                    "query": "Find CRAG retrieval evidence",
+                    "description": "Answer the requested evidence question",
+                    "targets": [],
+                    "query": "Self-RAG CRAG retrieval",
+                    "retrieval_strategy": "bm25",
+                    "top_k": 6,
                 },
             ],
         }
 
     def complete(self, prompt: str) -> str:
-        if "Coverage status: complete" in prompt or "Coverage status: not_run" in prompt:
-            return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
-        if "Coverage status: partial" in prompt:
-            return "Self-RAG uses adaptive retrieval [E1]. Missing evidence: CRAG retrieval."
-        return "The corpus does not contain sufficiently relevant evidence."
+        return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
 
 
-def _retrieval_plan(state: AgentState, llm: object) -> dict:
-    return {
-        "plan": {
-            "requirements": [
-                {
-                    "id": "R1",
-                    "description": "Explain Self-RAG retrieval",
-                    "targets": ["Self-RAG"],
-                    "query": "Self-RAG retrieval",
-                },
-                {
-                    "id": "R2",
-                    "description": "Explain CRAG retrieval",
-                    "targets": ["CRAG"],
-                    "query": "CRAG retrieval",
-                },
-            ],
-        },
-    }
-
-
-def test_complete_evidence_reaches_writer(
+def test_adaptive_workflow_reaches_writer_and_validates_citations(
     sample_chunks: list[dict],
     monkeypatch: Any,
 ) -> None:
     engine = FakeEngine(sample_chunks[:2])
-    monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
-    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
+    monkeypatch.setattr(
+        scholar_agent.reranker,
+        "_cross_encoder",
+        lambda model: FakeCrossEncoder(),
+    )
 
     result = run_question(
         "Compare Self-RAG and CRAG",
         engine,  # type: ignore[arg-type]
         Settings(),
         FakeLLM(),  # type: ignore[arg-type]
-        coverage_mode="soft",
     )
 
-    assert result["verification"]["status"] == "complete"
-    assert result["retry_count"] == 0
+    assert result["retrieval_mode"] == "adaptive"
+    assert engine.sparse_calls == [(["Self-RAG CRAG retrieval"], 6)]
+    assert engine.dense_calls == []
     assert "[Self-RAG.pdf p.1]" in result["answer"]
     assert "[CRAG.pdf p.2]" in result["answer"]
+    assert result["retrieval_trace"] == [
+        {
+            "requirement_id": "R1",
+            "query": "Self-RAG CRAG retrieval",
+            "retrieval_strategy": "bm25",
+            "top_k": 6,
+        },
+    ]
 
 
-def test_no_relevant_evidence_retries_with_corrective_queries() -> None:
+def test_fixed_hybrid_workflow_ignores_planner_strategy(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    engine = FakeEngine(sample_chunks[:2])
+    monkeypatch.setattr(
+        scholar_agent.reranker,
+        "_cross_encoder",
+        lambda model: FakeCrossEncoder(),
+    )
+
+    result = run_question(
+        "Compare Self-RAG and CRAG",
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        FakeLLM(),  # type: ignore[arg-type]
+        retrieval_mode="fixed_hybrid",
+    )
+
+    assert engine.sparse_calls == [(["Self-RAG CRAG retrieval"], 6)]
+    assert engine.dense_calls == [(["Self-RAG CRAG retrieval"], 6)]
+    assert result["retrieval_trace"][0]["retrieval_strategy"] == "hybrid"
+
+
+def test_shared_plan_skips_planner_and_is_not_mutated(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    engine = FakeEngine(sample_chunks[:1])
+    monkeypatch.setattr(
+        scholar_agent.reranker,
+        "_cross_encoder",
+        lambda model: FakeCrossEncoder(),
+    )
+    shared_plan = {
+        "requirements": [
+            {
+                "id": "R1",
+                "description": "Explain Self-RAG",
+                "targets": ["Self-RAG"],
+                "query": "Self-RAG retrieval",
+                "retrieval_strategy": "bm25",
+                "top_k": 6,
+            },
+        ],
+    }
+    llm = FakeLLM()
+
+    result = run_question(
+        "Explain Self-RAG",
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        llm,  # type: ignore[arg-type]
+        shared_plan=shared_plan,
+    )
+
+    assert llm.json_calls == 0
+    assert result["plan"] == shared_plan
+    assert result["plan"] is not shared_plan
+    assert shared_plan["requirements"][0]["retrieval_strategy"] == "bm25"
+
+
+def test_empty_evidence_produces_deterministic_abstention() -> None:
     engine = FakeEngine([])
+
     result = run_question(
         "Evidence that does not exist",
         engine,  # type: ignore[arg-type]
         Settings(),
         FakeLLM(),  # type: ignore[arg-type]
-        coverage_mode="soft",
     )
 
-    assert result["verification"]["status"] == "insufficient"
-    assert result["stop_reason"] == "no_new_evidence"
-    assert result["retry_count"] == 1
-    assert engine.calls == 2
+    assert result["evidence"] == []
     assert result["answer"] == SAFE_ABSTENTION
 
 
-def test_partial_workflow_retries_exactly_once(
-    sample_chunks: list[dict],
-    monkeypatch: Any,
-) -> None:
-    engine = FakeEngine(sample_chunks[:1], sample_chunks[:2])
-    monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
-    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
-    researcher_calls = 0
-    verifier_calls = 0
-    original_researcher = workflow_module.researcher_node
-    original_verifier = workflow_module.verifier_node
+def test_run_question_starts_with_the_selected_initial_state(monkeypatch: Any) -> None:
+    captured: list[dict] = []
 
-    def counting_researcher(*args: Any, **kwargs: Any) -> dict:
-        nonlocal researcher_calls
-        researcher_calls += 1
-        return original_researcher(*args, **kwargs)
-
-    def counting_verifier(*args: Any, **kwargs: Any) -> dict:
-        nonlocal verifier_calls
-        verifier_calls += 1
-        return original_verifier(*args, **kwargs)
-
-    monkeypatch.setattr(workflow_module, "researcher_node", counting_researcher)
-    monkeypatch.setattr(workflow_module, "verifier_node", counting_verifier)
-
-    result = run_question(
-        "Compare Self-RAG and CRAG",
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        FakeLLM(),  # type: ignore[arg-type]
-        coverage_mode="soft",
-    )
-
-    assert result["verification"]["status"] == "partial"
-    assert result["retry_count"] == 1
-    assert result["stop_reason"] == "no_new_evidence"
-    assert researcher_calls == 2
-    assert verifier_calls == 1
-    assert "Missing evidence" in result["answer"]
-
-
-def test_run_question_starts_with_initial_state(monkeypatch: Any) -> None:
-    class CapturingWorkflow:
-        state: AgentState | None = None
-
-        def invoke(self, state: AgentState) -> AgentState:
-            self.state = state
+    class FakeWorkflow:
+        def invoke(self, state: dict) -> dict:
+            captured.append(state)
             return state
 
-    compiled = CapturingWorkflow()
-    monkeypatch.setattr(workflow_module, "build_workflow", lambda *args, **kwargs: compiled)
+    monkeypatch.setattr(
+        workflow_module,
+        "build_workflow",
+        lambda *args, **kwargs: FakeWorkflow(),
+    )
 
     result = run_question(
         "question",
         FakeEngine([]),  # type: ignore[arg-type]
-        Settings(),
+        Settings(retrieval_mode="fixed_hybrid"),
         FakeLLM(),  # type: ignore[arg-type]
     )
 
-    assert result == initial_state("question")
-    assert compiled.state == initial_state("question")
+    assert captured == [initial_state("question", "fixed_hybrid")]
+    assert result["retrieval_mode"] == "fixed_hybrid"
 
 
-def test_initial_state_does_not_invent_a_requirement() -> None:
-    state = initial_state("Compare two methods")
+def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
+    state = initial_state("question")
 
-    assert state["plan"] == {
-        "requirements": [],
+    assert state == {
+        "question": "question",
+        "retrieval_mode": "adaptive",
+        "plan": {"requirements": []},
+        "evidence": [],
+        "retrieval_trace": [],
+        "answer": "",
     }
-    assert state["verification"]["uncertain"] == {}
 
 
 def test_workflow_requires_an_llm() -> None:
     with pytest.raises(ValueError, match="llm is required"):
-        workflow_module.build_workflow(FakeEngine([]), Settings(), None)  # type: ignore[arg-type]
+        build_workflow(FakeEngine([]), Settings(), None)  # type: ignore[arg-type]
 
 
-def test_workflow_rejects_unknown_coverage_mode() -> None:
-    with pytest.raises(ValueError, match="Unknown coverage mode"):
-        workflow_module.build_workflow(
-            FakeEngine([]),
-            Settings(),
-            FakeLLM(),  # type: ignore[arg-type]
-            coverage_mode="hard",
-        )
+@pytest.mark.parametrize("entrypoint", ["build", "initial"])
+def test_workflow_rejects_unknown_retrieval_mode(entrypoint: str) -> None:
+    with pytest.raises(ValueError, match="Unknown retrieval mode"):
+        if entrypoint == "build":
+            build_workflow(  # type: ignore[arg-type]
+                FakeEngine([]),
+                Settings(),
+                FakeLLM(),  # type: ignore[arg-type]
+                retrieval_mode="automatic",
+            )
+        else:
+            initial_state("question", "automatic")
 
 
-def test_default_mode_skips_prewrite_verification(
-    sample_chunks: list[dict],
-    monkeypatch: Any,
-) -> None:
-    engine = FakeEngine(sample_chunks[:2])
-    monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
-    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
-    monkeypatch.setattr(
-        workflow_module,
-        "verifier_node",
-        lambda *args: pytest.fail("coverage analyzer must not run"),
-    )
-
-    result = run_question(
-        "Compare Self-RAG and CRAG",
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        FakeLLM(),  # type: ignore[arg-type]
-    )
-
-    assert result["coverage_mode"] == "none"
-    assert result["verification"]["status"] == "not_run"
-    assert result["retry_count"] == 0
-    assert "[Self-RAG.pdf p.1]" in result["answer"]
-    assert "[CRAG.pdf p.2]" in result["answer"]
-
-
-def test_verification_retry_limit_is_configurable() -> None:
-    state = initial_state("question")
-    state["verification"]["corrective_queries"] = [
-        {"requirement_id": "R1", "query": "Find missing evidence"},
-    ]
-    state["retry_count"] = 1
-
-    assert route_after_verification(state, Settings(max_retries=2)) == "researcher"
-
-    state["retry_count"] = 2
-    assert route_after_verification(state, Settings(max_retries=2)) == "writer"
-
-    state["retry_count"] = 0
-    state["verification"]["corrective_queries"] = []
-    assert route_after_verification(state, Settings(max_retries=2)) == "writer"
-
-
-def test_answer_repair_is_bounded_to_one_attempt(sample_chunks: list[dict]) -> None:
-    state = initial_state("question")
-    state["evidence"] = sample_chunks[:1]
-    state["answer_verification"]["repair_required"] = True
-
-    assert route_after_answer_verification(state) == "repair"
-
-    state["repair_count"] = 1
-    assert route_after_answer_verification(state) == "end"
-
-
-def test_workflow_repairs_and_rechecks_the_answer_once(
-    sample_chunks: list[dict],
-    monkeypatch: Any,
-) -> None:
-    class RepairingLLM(FakeLLM):
-        answer_checks = 0
-
-        def complete_json(self, prompt: str) -> dict:
-            if "You verify a final answer" not in prompt:
-                return super().complete_json(prompt)
-            self.answer_checks += 1
-            issue = self.answer_checks == 1
-            return {
-                "requirements": {
-                    "R1": {"passed": True, "issue": ""},
-                    "R2": {"passed": True, "issue": ""},
-                },
-                "citation_issues": [],
-                "uncited_claims": ["The answer has no citation."] if issue else [],
-                "unsupported_claims": [],
-                "incorrect_missing_claims": [],
-                "repair_instructions": ["Add supporting citations."] if issue else [],
-            }
-
-        def complete(self, prompt: str) -> str:
-            if "Repair an evidence-grounded" in prompt:
-                return "Self-RAG uses retrieval [E1]. CRAG uses correction [E2]."
-            return "Self-RAG uses retrieval. CRAG uses correction."
-
-    llm = RepairingLLM()
-    engine = FakeEngine(sample_chunks[:2])
-    monkeypatch.setattr(scholar_agent.reranker, "_cross_encoder", lambda model: FakeCrossEncoder())
-    monkeypatch.setattr(workflow_module, "planner_node", _retrieval_plan)
-
-    result = run_question(
-        "Compare Self-RAG and CRAG",
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        llm,  # type: ignore[arg-type]
-    )
-
-    assert result["repair_count"] == 1
-    assert result["answer_verification"]["passed"] is True
-    assert llm.answer_checks == 2
-    assert "[Self-RAG.pdf p.1]" in result["answer"]
-    assert "[CRAG.pdf p.2]" in result["answer"]
-
-def test_agent_state_has_answer_verification_fields() -> None:
+def test_agent_state_contains_only_live_workflow_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
-        "coverage_mode",
+        "retrieval_mode",
         "plan",
         "evidence",
-        "verification",
-        "retry_count",
-        "stop_reason",
-        "answer_verification",
-        "repair_count",
+        "retrieval_trace",
         "answer",
     }

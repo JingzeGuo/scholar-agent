@@ -4,26 +4,36 @@ from typing import Any
 
 import pytest
 
-from scholar_agent.agents.answer_verifier import answer_verifier_node
-from scholar_agent.agents.planner import evidence_matches_target, planner_node, target_matches
+import scholar_agent.agents.researcher as researcher_module
+from scholar_agent.agents.planner import (
+    DEFAULT_TOP_K,
+    MAX_TOP_K,
+    MIN_TOP_K,
+    evidence_matches_target,
+    planner_node,
+    target_matches,
+)
 from scholar_agent.agents.researcher import (
     _attach_requirement_scores,
-    _planned_queries,
     _select_candidates_for_reranking,
     _select_evidence,
     researcher_node,
 )
-from scholar_agent.agents.verifier import verifier_node
-from scholar_agent.agents.writer import SAFE_ABSTENTION, repair_writer_node, writer_node
+from scholar_agent.agents.writer import (
+    SAFE_ABSTENTION,
+    citation_validator_node,
+    writer_node,
+)
 from scholar_agent.config import Settings
 from scholar_agent.workflow import initial_state
 
 
 class StubLLM:
-    def __init__(self, payload: object, text: str = "") -> None:
+    def __init__(self, payload: object = None, text: str = "") -> None:
         self.payload = payload
         self.text = text
         self.last_prompt = ""
+        self.complete_calls = 0
 
     def complete_json(self, prompt: str) -> dict[str, Any]:
         self.last_prompt = prompt
@@ -33,160 +43,204 @@ class StubLLM:
 
     def complete(self, prompt: str) -> str:
         self.last_prompt = prompt
+        self.complete_calls += 1
         return self.text
 
 
-def verifier_llm(
-    covered: dict,
-    corrective_queries: list[dict] | None = None,
-    uncertain: dict | None = None,
-) -> StubLLM:
-    return StubLLM(
-        {
-            "covered": covered,
-            "uncertain": uncertain or {},
-            "corrective_queries": corrective_queries or [],
-        },
-    )
+class FakeEngine:
+    def __init__(
+        self,
+        sparse_by_query: dict[str, list[dict]],
+        dense_by_query: dict[str, list[dict]],
+    ) -> None:
+        self.sparse_by_query = sparse_by_query
+        self.dense_by_query = dense_by_query
+        self.sparse_calls: list[tuple[list[str], int]] = []
+        self.dense_calls: list[tuple[list[str], int]] = []
+
+    def sparse_search(self, queries: list[str], top_k: int = 8) -> list[dict]:
+        self.sparse_calls.append((queries, top_k))
+        return self.sparse_by_query.get(queries[0], [])[:top_k]
+
+    def dense_search_many(
+        self,
+        queries: list[str],
+        top_k: int = 8,
+    ) -> list[list[dict]]:
+        self.dense_calls.append((queries, top_k))
+        return [self.dense_by_query.get(query, [])[:top_k] for query in queries]
 
 
 def requirement(
     requirement_id: str,
     description: str,
     targets: list[str],
-    query: str | None = None,
+    query: str,
+    strategy: str = "hybrid",
+    top_k: int = DEFAULT_TOP_K,
 ) -> dict:
-    result = {"id": requirement_id, "description": description, "targets": targets}
-    if query is not None:
-        result["query"] = query
-    return result
-
-
-class FakeEngine:
-    def __init__(self, chunks: list[dict]) -> None:
-        self.chunks = chunks
-        self.sparse_calls: list[list[str]] = []
-        self.dense_calls: list[list[str]] = []
-
-    def sparse_search(self, queries: list[str]) -> list[dict]:
-        self.sparse_calls.append(queries)
-        return self.chunks
-
-    def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
-        self.dense_calls.append(queries)
-        return [self.chunks for _ in queries]
-
-
-def test_planner_returns_compact_bounded_plan() -> None:
-    payload = {
-        "requirements": [
-            {
-                "description": "Explain Alpha's retrieval trigger",
-                "targets": ["Alpha"],
-                "query": "q1",
-            },
-            {"description": "Identify Beta's limitations", "targets": ["Beta"], "query": "q2"},
-            {
-                "description": "Compare Gamma and Delta",
-                "targets": ["Gamma", "Delta"],
-                "query": "q3",
-            },
-            {"description": "Report Alpha's evaluation", "targets": ["Alpha"], "query": "q4"},
-            {"description": "Describe Beta's deployment", "targets": ["Beta"], "query": "q5"},
-            {"description": "Explain Gamma's generation", "targets": ["Gamma"], "query": "q6"},
-        ],
+    return {
+        "id": requirement_id,
+        "description": description,
+        "targets": targets,
+        "query": query,
+        "retrieval_strategy": strategy,
+        "top_k": top_k,
     }
-    llm = StubLLM(payload)
-    plan = planner_node(
-        initial_state("Compare Alpha, Beta, Gamma, and Delta"),
-        llm,  # type: ignore[arg-type]
-    )["plan"]
 
-    assert plan["requirements"] == [
-        requirement("R1", "Explain Alpha's retrieval trigger", ["Alpha"], "q1"),
-        requirement("R2", "Identify Beta's limitations", ["Beta"], "q2"),
-        requirement("R3", "Compare Gamma and Delta", ["Gamma", "Delta"], "q3"),
-        requirement("R4", "Report Alpha's evaluation", ["Alpha"], "q4"),
-        requirement("R5", "Describe Beta's deployment", ["Beta"], "q5"),
-    ]
-    assert set(plan) == {"requirements"}
-    assert "plan retrieval and verification" in llm.last_prompt
-    assert "do not answer the question" in llm.last_prompt
-    assert 'Every "requirement" is one independent' in llm.last_prompt
-    assert "both BM25 and dense retrieval" in llm.last_prompt
-    assert "Do not invent targets or requirements" in llm.last_prompt
-    assert "Keep asymmetric requests separate" in llm.last_prompt
-    assert "comparison can be synthesized" in llm.last_prompt
-    assert "Copy each target exactly" in llm.last_prompt
-    assert "<user_question>" in llm.last_prompt
 
-    open_plan = planner_node(
-        initial_state("Which retrieval methods are discussed in the corpus?"),
-        StubLLM(
-            {
-                **payload,
-                "requirements": [
-                    {
-                        "description": "Identify the retrieval methods discussed",
-                        "targets": [],
-                        "query": "retrieval methods discussed in the corpus",
-                    },
-                ],
-            },
-        ),  # type: ignore[arg-type]
-    )["plan"]
-    assert open_plan["requirements"] == [
-        requirement(
-            "R1",
-            "Identify the retrieval methods discussed",
-            [],
-            "retrieval methods discussed in the corpus",
-        ),
+def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
+    return [
+        {**item, "score": 1.0, "_query_scores": [1.0] * len(queries)}
+        for item in candidates
     ]
 
 
-def test_planner_falls_back_to_the_question_for_invalid_llm_output() -> None:
-    question = "Compare MethodA and MethodB"
-    invalid_outputs = [
-        ValueError("invalid JSON"),
+def test_planner_accepts_all_supported_retrieval_strategies() -> None:
+    state = initial_state("Compare Alpha, Beta, and Gamma")
+    llm = StubLLM(
         {
             "requirements": [
                 {
-                    "description": "Compare the methods",
-                    "targets": ["MethodA", "MethodB"],
-                    "query": "",
+                    "description": "Explain Alpha",
+                    "targets": ["Alpha"],
+                    "query": "Alpha exact method",
+                    "retrieval_strategy": "bm25",
+                    "top_k": 4,
+                },
+                {
+                    "description": "Explain Beta conceptually",
+                    "targets": ["Beta"],
+                    "query": "semantic mechanism of Beta",
+                    "retrieval_strategy": "dense",
+                    "top_k": 8,
+                },
+                {
+                    "description": "Compare Alpha and Gamma",
+                    "targets": ["Alpha", "Gamma"],
+                    "query": "Alpha Gamma comparison",
+                    "retrieval_strategy": "hybrid",
+                    "top_k": 12,
                 },
             ],
         },
-        {"requirements": []},
+    )
+
+    plan = planner_node(state, llm)["plan"]  # type: ignore[arg-type]
+
+    assert [item["retrieval_strategy"] for item in plan["requirements"]] == [
+        "bm25",
+        "dense",
+        "hybrid",
     ]
+    assert [item["top_k"] for item in plan["requirements"]] == [4, 8, 12]
+    assert set(plan["requirements"][0]) == {
+        "id",
+        "description",
+        "targets",
+        "query",
+        "retrieval_strategy",
+        "top_k",
+    }
+    assert "Exact paper titles, acronyms" in llm.last_prompt
+    assert "Conceptual mechanisms" in llm.last_prompt
+    assert "Ambiguous comparisons" in llm.last_prompt
+    assert "do not predict the answer" in llm.last_prompt
 
-    for output in invalid_outputs:
-        plan = planner_node(
-            initial_state(question),
-            StubLLM(output),  # type: ignore[arg-type]
-        )["plan"]
-        assert plan["requirements"] == [
-            requirement("R1", question, [], question),
-        ]
 
+@pytest.mark.parametrize("strategy", [None, "sparse", "", 42])
+def test_planner_invalid_or_missing_strategy_falls_back_to_hybrid(
+    strategy: object,
+) -> None:
+    payload = {
+        "requirements": [
+            {
+                "description": "Explain Alpha",
+                "targets": ["Alpha"],
+                "query": "Alpha",
+                "top_k": 8,
+            },
+        ],
+    }
+    if strategy is not None:
+        payload["requirements"][0]["retrieval_strategy"] = strategy
 
-def test_planner_preserves_asymmetric_atomic_requirements() -> None:
-    state = initial_state("Explain Self-RAG retrieval triggers and CRAG limitations")
     plan = planner_node(
-        state,
+        initial_state("Explain Alpha"),
+        StubLLM(payload),  # type: ignore[arg-type]
+    )["plan"]
+
+    assert plan["requirements"][0]["retrieval_strategy"] == "hybrid"
+
+
+@pytest.mark.parametrize(
+    ("raw_top_k", "expected"),
+    [
+        (MIN_TOP_K, MIN_TOP_K),
+        (MAX_TOP_K, MAX_TOP_K),
+        (1, MIN_TOP_K),
+        (100, MAX_TOP_K),
+        (8.5, DEFAULT_TOP_K),
+        ("9", DEFAULT_TOP_K),
+        (True, DEFAULT_TOP_K),
+        (None, DEFAULT_TOP_K),
+    ],
+)
+def test_planner_clamps_or_falls_back_for_invalid_top_k(
+    raw_top_k: object,
+    expected: int,
+) -> None:
+    plan = planner_node(
+        initial_state("Explain Alpha"),
         StubLLM(
             {
                 "requirements": [
                     {
-                        "description": "Explain Self-RAG retrieval triggers",
-                        "targets": ["Self-RAG"],
-                        "query": "Self-RAG retrieval triggers",
+                        "description": "Explain Alpha",
+                        "targets": ["Alpha"],
+                        "query": "Alpha",
+                        "retrieval_strategy": "bm25",
+                        "top_k": raw_top_k,
+                    },
+                ],
+            },
+        ),  # type: ignore[arg-type]
+    )["plan"]
+
+    assert plan["requirements"][0]["top_k"] == expected
+
+
+def test_planner_sanitizes_empty_queries_duplicates_and_malformed_requirements() -> None:
+    plan = planner_node(
+        initial_state("Explain Alpha and Beta"),
+        StubLLM(
+            {
+                "requirements": [
+                    {
+                        "description": "Explain Alpha",
+                        "targets": ["Alpha"],
+                        "query": "",
+                        "retrieval_strategy": "dense",
+                        "top_k": 9,
                     },
                     {
-                        "description": "Identify CRAG limitations",
-                        "targets": ["CRAG"],
-                        "query": "CRAG limitations",
+                        "description": "Explain Alpha",
+                        "targets": ["Alpha"],
+                        "query": "duplicate",
+                        "retrieval_strategy": "bm25",
+                        "top_k": 4,
+                    },
+                    {"description": "", "targets": [], "query": "bad"},
+                    "not an object",
+                    {
+                        "description": "Malformed targets",
+                        "targets": [42],
+                        "query": "bad",
+                    },
+                    {
+                        "description": "Invent Gamma",
+                        "targets": ["Gamma"],
+                        "query": "Gamma",
                     },
                 ],
             },
@@ -194,259 +248,185 @@ def test_planner_preserves_asymmetric_atomic_requirements() -> None:
     )["plan"]
 
     assert plan["requirements"] == [
-        requirement(
-            "R1",
-            "Explain Self-RAG retrieval triggers",
-            ["Self-RAG"],
-            "Self-RAG retrieval triggers",
-        ),
-        requirement("R2", "Identify CRAG limitations", ["CRAG"], "CRAG limitations"),
+        requirement("R1", "Explain Alpha", ["Alpha"], "Explain Alpha", "dense", 9),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [ValueError("bad JSON"), {}, {"requirements": []}, {"requirements": [None]}],
+)
+def test_planner_json_errors_fall_back_to_a_safe_requirement(payload: object) -> None:
+    question = "Explain Alpha"
+
+    plan = planner_node(
+        initial_state(question),
+        StubLLM(payload),  # type: ignore[arg-type]
+    )["plan"]
+
+    assert plan["requirements"] == [
+        requirement("R1", question, [], question, "hybrid", DEFAULT_TOP_K),
     ]
 
 
 def test_target_matching_preserves_method_identity() -> None:
     assert target_matches("Self-RAG", "Self RAG uses reflection tokens.")
-    assert target_matches("CRAG", "CRAG uses a retrieval evaluator.")
-    assert not target_matches("CRAG", "Self-CRAG combines both methods.")
-    assert not target_matches("DPR", "ANCE uses one dense embedding.")
     assert not target_matches("RAG", "CRAG and Self-RAG are methods.")
     assert evidence_matches_target(
         "Self-RAG",
-        {"paper": "Self-RAG.pdf", "text": "The proposed method retrieves passages."},
+        {"paper": "Self-RAG.pdf", "text": "The method retrieves passages."},
     )
 
 
-def test_researcher_selection_uses_score_not_filename_age() -> None:
-    items = [
-        {
-            "chunk_id": "older",
-            "paper": "2020.1.pdf",
-            "page": 1,
-            "text": "MethodA retrieval evidence.",
-            "score": 0.2,
-        },
-        {
-            "chunk_id": "newer",
-            "paper": "2025.9.pdf",
-            "page": 1,
-            "text": "MethodA retrieval evidence.",
-            "score": 0.9,
-        },
+def _state_with(requirements: list[dict], mode: str = "adaptive") -> dict:
+    state = initial_state("Compare Self-RAG and CRAG", mode)
+    state["plan"] = {"requirements": requirements}
+    return state
+
+
+def test_fixed_hybrid_mode_always_runs_bm25_and_dense(
+    sample_chunks: list[dict],
+) -> None:
+    requirements = [
+        requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self", "bm25", 4),
+        requirement("R2", "Explain CRAG", ["CRAG"], "crag", "dense", 4),
     ]
-
-    selected = _select_evidence(items, [])
-
-    assert selected[0]["score"] == 0.9
-
-
-def test_researcher_runs_bm25_and_dense_for_every_query(sample_chunks: list[dict]) -> None:
-    state = initial_state("Explain Self-RAG")
-    state["plan"].update(
-        requirements=[
-            requirement(
-                "R1",
-                "Explain Self-RAG's retrieval",
-                ["Self-RAG"],
-                "Self-RAG retrieval",
-            ),
-            requirement(
-                "R2",
-                "Explain Self-RAG's reflection tokens",
-                ["Self-RAG"],
-                "reflection tokens",
-            ),
-        ],
+    engine = FakeEngine(
+        {"self": sample_chunks[:1], "crag": sample_chunks[1:2]},
+        {"self": sample_chunks[:1], "crag": sample_chunks[1:2]},
     )
-    rerank_inputs: list[list[str]] = []
 
-    def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        rerank_inputs.append([item["chunk_id"] for item in candidates])
-        return [
-            {**item, "score": 1.0, "_query_scores": [1.0] * len(queries)}
-            for item in candidates
-        ]
-
-    engine = FakeEngine(sample_chunks[:2])
     result = researcher_node(
-        state,
+        _state_with(requirements, "fixed_hybrid"),  # type: ignore[arg-type]
         engine,  # type: ignore[arg-type]
         Settings(),
         scored,
     )
 
-    assert engine.sparse_calls == [["Self-RAG retrieval"], ["reflection tokens"]]
-    assert engine.dense_calls == [["Self-RAG retrieval", "reflection tokens"]]
-    assert rerank_inputs == [["self-1", "crag-1"]]
-    assert [item["chunk_id"] for item in result["evidence"]] == ["self-1", "crag-1"]
-
-
-def test_researcher_keeps_one_query_per_requirement() -> None:
-    plan = {
-        "requirements": [
-            requirement(
-                "R1",
-                "Explain Self-RAG's retrieval mechanism",
-                ["Self-RAG"],
-                "Self-RAG retrieval mechanism",
-            ),
-            requirement(
-                "R2",
-                "Describe when Self-RAG retrieves",
-                ["Self-RAG"],
-                "  self-rag   retrieval mechanism  ",
-            ),
-        ],
-    }
-
-    queries, query_requirement_ids = _planned_queries(plan)
-
-    assert queries == [
-        "Self-RAG retrieval mechanism",
-        "self-rag   retrieval mechanism",
+    assert engine.sparse_calls == [(["self"], 4), (["crag"], 4)]
+    assert engine.dense_calls == [(["self", "crag"], 4)]
+    assert [item["retrieval_strategy"] for item in result["retrieval_trace"]] == [
+        "hybrid",
+        "hybrid",
     ]
-    assert query_requirement_ids == [["R1"], ["R2"]]
 
 
-def test_researcher_deduplicates_physical_pages(sample_chunks: list[dict]) -> None:
-    duplicate_page = {
-        **sample_chunks[0],
-        "chunk_id": "self-2",
-        "text": "Self-RAG also uses reflection tokens.",
-        "score": 0.8,
-    }
+def test_adaptive_bm25_requirement_does_not_call_dense(sample_chunks: list[dict]) -> None:
+    request = requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self", "bm25", 7)
+    engine = FakeEngine({"self": sample_chunks[:1]}, {"self": sample_chunks[1:]})
 
-    selected = _select_evidence(
-        [{**sample_chunks[0], "score": 0.9}, duplicate_page, sample_chunks[1]],
-        [],
+    result = researcher_node(
+        _state_with([request]),  # type: ignore[arg-type]
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        scored,
     )
 
-    assert [item["chunk_id"] for item in selected] == ["self-1", "crag-1"]
+    assert engine.sparse_calls == [(["self"], 7)]
+    assert engine.dense_calls == []
+    assert result["retrieval_trace"][0]["retrieval_strategy"] == "bm25"
 
 
-def test_researcher_allows_same_page_and_paper_for_requirement_coverage() -> None:
+def test_adaptive_dense_requirement_does_not_call_bm25(sample_chunks: list[dict]) -> None:
+    request = requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self", "dense", 6)
+    engine = FakeEngine({"self": sample_chunks[1:]}, {"self": sample_chunks[:1]})
+
+    result = researcher_node(
+        _state_with([request]),  # type: ignore[arg-type]
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        scored,
+    )
+
+    assert engine.sparse_calls == []
+    assert engine.dense_calls == [(["self"], 6)]
+    assert result["retrieval_trace"][0]["retrieval_strategy"] == "dense"
+
+
+def test_adaptive_hybrid_requirement_runs_both_and_rrf(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    request = requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self", "hybrid", 10)
+    engine = FakeEngine({"self": sample_chunks[:1]}, {"self": sample_chunks[1:2]})
+    fusion_inputs: list[list[list[str]]] = []
+    real_fusion = researcher_module.reciprocal_rank_fusion
+
+    def fuse(*rankings: list[dict]) -> list[dict]:
+        fusion_inputs.append(
+            [[item["chunk_id"] for item in ranking] for ranking in rankings],
+        )
+        return real_fusion(*rankings)
+
+    monkeypatch.setattr(researcher_module, "reciprocal_rank_fusion", fuse)
+    result = researcher_node(
+        _state_with([request]),  # type: ignore[arg-type]
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        scored,
+    )
+
+    assert engine.sparse_calls == [(["self"], 10)]
+    assert engine.dense_calls == [(["self"], 10)]
+    assert [["self-1"], ["crag-1"]] in fusion_inputs
+    assert {item["chunk_id"] for item in result["evidence"]} == {"self-1", "crag-1"}
+
+
+def test_one_question_can_mix_all_retrieval_strategies(sample_chunks: list[dict]) -> None:
     requirements = [
-        requirement(f"R{index}", f"Explain aspect {index}", []) for index in range(1, 6)
+        requirement("R1", "Explain Self-RAG", ["Self-RAG"], "q1", "bm25", 4),
+        requirement("R2", "Explain CRAG", ["CRAG"], "q2", "dense", 8),
+        requirement("R3", "Compare both", [], "q3", "hybrid", 8),
+    ]
+    engine = FakeEngine(
+        {"q1": sample_chunks[:1], "q3": sample_chunks[:2]},
+        {"q2": sample_chunks[1:2], "q3": sample_chunks[:2]},
+    )
+
+    result = researcher_node(
+        _state_with(requirements),  # type: ignore[arg-type]
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        scored,
+    )
+
+    assert engine.sparse_calls == [(["q1"], 4), (["q3"], 8)]
+    assert engine.dense_calls == [(["q2", "q3"], 8)]
+    assert result["retrieval_trace"] == [
+        {
+            "requirement_id": "R1",
+            "query": "q1",
+            "retrieval_strategy": "bm25",
+            "top_k": 4,
+        },
+        {
+            "requirement_id": "R2",
+            "query": "q2",
+            "retrieval_strategy": "dense",
+            "top_k": 8,
+        },
+        {
+            "requirement_id": "R3",
+            "query": "q3",
+            "retrieval_strategy": "hybrid",
+            "top_k": 8,
+        },
+    ]
+
+
+def test_requirement_aware_evidence_selection_still_reserves_each_requirement() -> None:
+    requirements = [
+        requirement("R1", "Explain mechanism", [], "mechanism"),
+        requirement("R2", "Explain limitations", [], "limitations"),
     ]
     items = [
-        {
-            "chunk_id": f"aspect-{index}",
-            "paper": "Method.pdf",
-            "page": min(index, 4),
-            "text": f"Evidence for aspect {index}.",
-            "score": 1.0,
-            "_requirement_scores": {
-                requirement["id"]: 1.0 if requirement["id"] == f"R{index}" else 0.0
-                for requirement in requirements
-            },
-        }
-        for index in range(1, 6)
-    ]
-
-    selected = _select_evidence(items, requirements, min_score=0.5)
-
-    assert {item["chunk_id"] for item in selected} == {
-        "aspect-1",
-        "aspect-2",
-        "aspect-3",
-        "aspect-4",
-        "aspect-5",
-    }
-
-
-def test_researcher_expands_evidence_limit_for_multi_target_coverage() -> None:
-    requirements = [
-        requirement(
-            f"R{requirement_index}",
-            f"Compare group {requirement_index}",
-            [f"Target-{requirement_index}-{target_index}" for target_index in range(1, 4)],
-        )
-        for requirement_index in range(1, 4)
-    ]
-    items = [
-        {
-            "chunk_id": target,
-            "paper": f"{target}.pdf",
-            "page": 1,
-            "text": f"{target} evidence.",
-            "score": 1.0,
-            "_requirement_scores": {
-                requirement["id"]: 1.0 if target in requirement["targets"] else 0.0
-                for requirement in requirements
-            },
-        }
-        for requirement in requirements
-        for target in requirement["targets"]
-    ]
-
-    selected = _select_evidence(items, requirements, min_score=0.5)
-
-    assert len(selected) == 9
-
-
-def test_researcher_does_not_reuse_a_retry_score_for_unscored_requirements() -> None:
-    requirements = [
-        requirement("R1", "Explain the mechanism", []),
-        requirement("R2", "Explain the limitations", []),
-    ]
-    mechanism = {
-        "chunk_id": "mechanism",
-        "paper": "Method.pdf",
-        "page": 1,
-        "text": "Mechanism evidence.",
-        "score": 0.6,
-        "_requirement_scores": {"R1": 0.6, "R2": 0.0},
-    }
-    retry_items = [
-        {
-            "chunk_id": f"limitation-{index}",
-            "paper": f"Limitations-{index}.pdf",
-            "page": 1,
-            "text": f"Limitation evidence {index}.",
-            "score": 0.99 - index / 100,
-            "_requirement_scores": {"R2": 0.99 - index / 100},
-        }
-        for index in range(8)
-    ]
-
-    selected = _select_evidence([mechanism, *retry_items], requirements, min_score=0.5)
-
-    assert "mechanism" in {item["chunk_id"] for item in selected}
-
-
-def test_researcher_requires_per_query_reranker_scores() -> None:
-    with pytest.raises(ValueError, match="one query score per query"):
-        _attach_requirement_scores(
-            [{"chunk_id": "c1", "score": 1.0}],
-            [["R1"], ["R2"]],
-        )
-
-
-def test_researcher_reserves_evidence_for_requirements_with_the_same_target() -> None:
-    requirements = [
-        requirement(
-            "R1",
-            "Explain Self-RAG's retrieval mechanism",
-            ["Self-RAG"],
-            "Self-RAG retrieval mechanism",
-        ),
-        requirement(
-            "R2",
-            "Identify Self-RAG's limitations",
-            ["Self-RAG"],
-            "Self-RAG limitations",
-        ),
-    ]
-    mechanism_items = [
         {
             "chunk_id": f"mechanism-{index}",
             "paper": f"Mechanism-{index}.pdf",
             "page": 1,
-            "text": f"Self-RAG retrieval mechanism detail {index}.",
-            "score": 0.99 - index / 100,
-            "_requirement_scores": {
-                "R1": 0.99 - index / 100,
-                "R2": 0.1,
-            },
+            "text": "Mechanism evidence.",
+            "score": 1.0 - index / 100,
+            "_requirement_scores": {"R1": 1.0, "R2": 0.1},
         }
         for index in range(8)
     ]
@@ -454,712 +434,121 @@ def test_researcher_reserves_evidence_for_requirements_with_the_same_target() ->
         "chunk_id": "limitation",
         "paper": "Limitations.pdf",
         "page": 1,
-        "text": "Self-RAG limitations and failure cases.",
+        "text": "Limitation evidence.",
         "score": 0.9,
         "_requirement_scores": {"R1": 0.1, "R2": 0.9},
     }
 
-    selected = _select_evidence(mechanism_items + [limitation], requirements, min_score=0.5)
+    selected = _select_evidence(items + [limitation], requirements, min_score=0.5)
 
     assert len(selected) == 8
     assert "limitation" in {item["chunk_id"] for item in selected}
 
 
-def test_researcher_selects_reranking_candidates_for_every_query() -> None:
-    sparse_rankings: list[list[dict]] = []
-    dense_rankings: list[list[dict]] = []
-    for query_index in range(4):
-        shared = [
+def test_target_aware_allocation_and_page_diversity_still_work(
+    sample_chunks: list[dict],
+) -> None:
+    duplicate_page = {
+        **sample_chunks[0],
+        "chunk_id": "self-duplicate",
+        "score": 0.8,
+        "_requirement_scores": {"R1": 0.8},
+    }
+    self_item = {
+        **sample_chunks[0],
+        "score": 0.9,
+        "_requirement_scores": {"R1": 0.9},
+    }
+    crag_item = {
+        **sample_chunks[1],
+        "score": 0.7,
+        "_requirement_scores": {"R1": 0.7},
+    }
+    requirements = [
+        requirement("R1", "Compare Self-RAG and CRAG", ["Self-RAG", "CRAG"], "compare"),
+    ]
+
+    selected = _select_evidence(
+        [self_item, duplicate_page, crag_item],
+        requirements,
+        min_score=0.5,
+    )
+
+    assert {item["chunk_id"] for item in selected} == {"self-1", "crag-1"}
+
+
+def test_reranker_scores_remain_requirement_specific() -> None:
+    result = _attach_requirement_scores(
+        [
             {
-                "chunk_id": f"frequent-{query_index}-{rank}",
-                "paper": "Frequent.pdf",
+                "chunk_id": "c1",
+                "score": 0.9,
+                "_query_scores": [0.9, 0.2],
+            },
+        ],
+        [["R1"], ["R2"]],
+    )
+
+    assert result[0]["_requirement_scores"] == {"R1": 0.9, "R2": 0.2}
+    assert "_query_scores" not in result[0]
+
+    with pytest.raises(ValueError, match="one query score per query"):
+        _attach_requirement_scores([{"chunk_id": "c1", "score": 1.0}], [["R1"]])
+
+
+def test_candidate_pool_reserves_local_results_before_global_fill() -> None:
+    rankings = [
+        [
+            {
+                "chunk_id": f"q{query_index}-{rank}",
+                "paper": "A.pdf",
                 "page": rank + 1,
-                "text": "frequent evidence",
+                "text": "evidence",
                 "score": 0.0,
             }
             for rank in range(8)
         ]
-        sparse_rankings.append(shared)
-        dense_rankings.append(shared)
+        for query_index in range(5)
+    ]
 
-    sparse_rankings.append(
-        sparse_rankings[0][:4]
-        + [
-            {
-                "chunk_id": f"rare-{rank}",
-                "paper": "Rare.pdf",
-                "page": rank + 1,
-                "text": "rare requirement evidence",
-                "score": 0.0,
-            }
-            for rank in range(4)
-        ],
-    )
-    dense_rankings.append([])
-
-    candidates = _select_candidates_for_reranking(sparse_rankings, dense_rankings)
+    candidates = _select_candidates_for_reranking(rankings)
 
     assert len(candidates) == 30
-    assert "rare-0" in {item["chunk_id"] for item in candidates}
+    for query_index in range(5):
+        assert f"q{query_index}-0" in {item["chunk_id"] for item in candidates}
 
 
-def test_researcher_accepts_target_identity_from_paper_name() -> None:
-    item = {
-        "chunk_id": "method-a",
-        "paper": "MethodA.pdf",
-        "page": 3,
-        "text": "The proposed method retrieves passages dynamically.",
-        "score": 0.9,
-        "_requirement_scores": {"R1": 0.9},
-    }
-
-    selected = _select_evidence(
-        [item],
-        [requirement("R1", "Explain MethodA retrieval", ["MethodA"])],
-        min_score=0.5,
-    )
-
-    assert selected == [item]
-
-
-def test_researcher_rejects_every_below_threshold_chunk(sample_chunks: list[dict]) -> None:
-    state = initial_state("Compare Self-RAG and CRAG")
-    state["plan"] = {
-        "requirements": [
-            requirement(
-                "R1",
-                "Explain Self-RAG's mechanism",
-                ["Self-RAG"],
-                "Self-RAG CRAG",
-            ),
-            requirement("R2", "Explain CRAG's mechanism", ["CRAG"], "Self-RAG CRAG"),
-        ],
-    }
-
-    def low_scores(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [
-            {**item, "score": 0.4, "_query_scores": [0.4] * len(queries)}
-            for item in candidates
-        ]
-
-    result = researcher_node(
-        state,
-        FakeEngine(sample_chunks),  # type: ignore[arg-type]
-        Settings(min_rerank_score=0.5),
-        low_scores,
-    )
-
-    assert result["evidence"] == []
-    assert result["stop_reason"] == "no_relevant_evidence"
-
-    state["plan"]["requirements"] = [
-        requirement(
-            "R1",
-            "Explain RoseTTAFold All-Atom",
-            ["RoseTTAFold All-Atom"],
-            "RoseTTAFold All-Atom",
-        ),
-    ]
-
-    def high_scores(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [
-            {**item, "score": 9.0, "_query_scores": [9.0] * len(queries)}
-            for item in candidates
-        ]
-
-    absent_target = researcher_node(
-        state,
-        FakeEngine(sample_chunks),  # type: ignore[arg-type]
-        Settings(),
-        high_scores,
-    )
-    assert absent_target["evidence"]
-    assert absent_target["stop_reason"] == ""
-
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain Self-RAG", ["Self-RAG"], "Self-RAG CRAG"),
-        requirement(
-            "R2",
-            "Explain RoseTTAFold All-Atom",
-            ["RoseTTAFold All-Atom"],
-            "Self-RAG CRAG",
-        ),
-    ]
-    partial_target = researcher_node(
-        state,
-        FakeEngine(sample_chunks),  # type: ignore[arg-type]
-        Settings(),
-        high_scores,
-    )
-    assert partial_target["evidence"]
-    assert partial_target["stop_reason"] == ""
-
-    state["plan"]["requirements"] = [
-        requirement("R1", "Identify relevant methods", [], "Self-RAG CRAG"),
-    ]
-    open_question = researcher_node(
-        state,
-        FakeEngine(sample_chunks),  # type: ignore[arg-type]
-        Settings(),
-        high_scores,
-    )
-    assert open_question["evidence"]
-
-
-def test_researcher_merges_retry_and_balances_targets(sample_chunks: list[dict]) -> None:
-    old = [
-        {
-            **sample_chunks[0],
-            "chunk_id": f"self-{index}",
-            "paper": "2310.11511.pdf" if index < 2 else "2312.10997.pdf",
-            "page": index + 1,
-            "score": 1.0 if index < 2 else 5.0,
-        }
-        for index in range(4)
-    ]
-    new = [
-        {
-            **sample_chunks[1],
-            "chunk_id": f"crag-{index}",
-            "paper": "2401.15884.pdf",
-            "page": index + 2,
-            "score": 2.0 - index,
-        }
-        for index in range(2)
-    ]
-    state = initial_state("Compare Self-RAG and CRAG")
-    state["plan"] = {
-        "requirements": [
-            requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
-            requirement("R2", "Explain CRAG's mechanism", ["CRAG"]),
-        ],
-    }
-    state["evidence"] = old
-    state["verification"]["missing"] = ["R2"]
-    state["verification"]["corrective_queries"] = [
-        {"requirement_id": "R2", "query": "CRAG correction mechanism"},
-    ]
-
-    def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [{**item, "_query_scores": [item["score"]]} for item in new]
-
-    engine = FakeEngine(old + new)
-    result = researcher_node(
-        state,
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        scored,
-    )
-
-    assert sum(target_matches("Self-RAG", item["text"]) for item in result["evidence"]) >= 2
-    assert sum(target_matches("CRAG", item["text"]) for item in result["evidence"]) >= 2
-    assert sum(item["paper"] == "2310.11511.pdf" for item in result["evidence"]) == 2
-    assert result["retry_count"] == 1
-    assert engine.sparse_calls == [["CRAG correction mechanism"]]
-    assert engine.dense_calls == [["CRAG correction mechanism"]]
-    assert next(
-        item for item in result["evidence"] if item["chunk_id"] == "crag-0"
-    )["_requirement_scores"] == {"R2": 2.0}
-    assert len({(item["paper"], item["page"]) for item in result["evidence"]}) == len(
-        result["evidence"],
-    )
-
-
-def test_researcher_marks_identical_retry_evidence(sample_chunks: list[dict]) -> None:
-    state = initial_state("Explain Self-RAG")
-    state["plan"].update(
-        requirements=[requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"])],
-    )
-    state["evidence"] = [{**sample_chunks[0], "score": 1.0}]
-    state["verification"]["missing"] = ["R1"]
-    state["verification"]["corrective_queries"] = [
-        {"requirement_id": "R1", "query": "Self-RAG mechanism"},
-    ]
-
-    def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [
-            {**item, "score": 1.0, "_query_scores": [1.0] * len(queries)}
-            for item in candidates
-        ]
-
-    result = researcher_node(
-        state,
-        FakeEngine(sample_chunks[:1]),  # type: ignore[arg-type]
-        Settings(),
-        scored,
-    )
-
-    assert result["evidence"] == state["evidence"]
-    assert result["retry_count"] == 1
-    assert result["stop_reason"] == "no_new_evidence"
-
-
-def test_researcher_batches_corrective_queries(sample_chunks: list[dict]) -> None:
-    state = initial_state("Compare Self-RAG and CRAG")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain Self-RAG retrieval", ["Self-RAG"]),
-        requirement("R2", "Explain CRAG retrieval", ["CRAG"]),
-    ]
-    state["verification"].update(
-        missing=["R1", "R2"],
-        corrective_queries=[
-            {"requirement_id": "R1", "query": "Self-RAG retrieval evidence"},
-            {"requirement_id": "R2", "query": "CRAG retrieval evidence"},
-        ],
-    )
-
-    def scored(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
-        return [
-            {
-                **item,
-                "score": 2.0,
-                "_query_scores": [2.0, -1.0]
-                if item["chunk_id"] == "self-1"
-                else [-1.0, 2.0],
-            }
-            for item in candidates
-        ]
-
-    engine = FakeEngine(sample_chunks[:2])
-    result = researcher_node(
-        state,
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        scored,
-    )
-
-    assert engine.sparse_calls == [
-        ["Self-RAG retrieval evidence"],
-        ["CRAG retrieval evidence"],
-    ]
-    assert engine.dense_calls == [
-        ["Self-RAG retrieval evidence", "CRAG retrieval evidence"],
-    ]
-    assert result["retry_count"] == 1
-    assert {item["chunk_id"] for item in result["evidence"]} == {"self-1", "crag-1"}
-
-
-def test_verifier_rejects_target_mismatch_and_invalid_ids(
+def test_writer_and_deterministic_citation_validation_do_not_regress(
     sample_chunks: list[dict],
 ) -> None:
-    state = initial_state("Compare Self-RAG and CRAG")
-    state["plan"].update(
-        requirements=[
-            requirement("R1", "Explain Self-RAG retrieval", ["Self-RAG"]),
-            requirement("R2", "Explain CRAG retrieval", ["CRAG"]),
-        ],
+    state = _state_with(
+        [requirement("R1", "Explain Self-RAG", ["Self-RAG"], "Self-RAG", "bm25")],
     )
-    state["evidence"] = sample_chunks[:2]
-    complete = verifier_llm(
-        {
-            "R1": ["E1"],
-            "R2": ["E2"],
-        },
-    )
-    assert verifier_node(state, complete)["verification"]["status"] == "complete"  # type: ignore[arg-type]
-
-    mismatched = StubLLM(
-        {
-            "covered": {
-                "R1": ["E2"],
-                "R2": ["E1", "E99"],
-            },
-            "missing": [],
-            "corrective_queries": [],
-        },
-    )
-    result = verifier_node(state, mismatched)  # type: ignore[arg-type]
-    assert result["verification"]["status"] == "insufficient"
-
-    malformed = verifier_node(
-        state,
-        StubLLM({"covered": None}),  # type: ignore[arg-type]
-    )["verification"]
-    assert malformed["status"] == "insufficient"
-
-
-def test_verifier_rejects_shared_acronym_as_target_substitution(
-    sample_chunks: list[dict],
-) -> None:
-    state = initial_state("Compare CRAG with Comprehensive RAG Benchmark.")
-    state["plan"].update(
-        requirements=[
-            requirement("R1", "Identify CRAG", ["CRAG"]),
-            requirement(
-                "R2",
-                "Identify Comprehensive RAG Benchmark",
-                ["Comprehensive RAG Benchmark"],
-            ),
-        ],
-    )
-    state["evidence"] = [
-        sample_chunks[1],
-        {
-            **sample_chunks[2],
-            "text": "Comprehensive RAG Benchmark (CRAG) is a benchmark dataset.",
-        },
-    ]
-    ambiguous = verifier_node(
-        state,
-        StubLLM(
-            {
-                "covered": {
-                    "R1": ["E2"],
-                    "R2": ["E2"],
-                },
-                "corrective_queries": [],
-            },
-        ),  # type: ignore[arg-type]
-    )["verification"]
-    assert ambiguous["status"] == "partial"
-    assert "R1" not in ambiguous["covered"]
-    assert ambiguous["covered"]["R2"] == ["E2"]
-
-
-def test_verifier_requires_evidence_for_every_target_in_one_requirement(
-    sample_chunks: list[dict],
-) -> None:
-    state = initial_state("Compare Self-RAG and CRAG retrieval")
-    state["plan"]["requirements"] = [
-        requirement(
-            "R1",
-            "Compare Self-RAG and CRAG retrieval",
-            ["Self-RAG", "CRAG"],
-        ),
-    ]
-    state["evidence"] = sample_chunks[:2]
-
-    partial = verifier_node(
-        state,
-        verifier_llm({"R1": ["E1"]}),  # type: ignore[arg-type]
-    )["verification"]
-    complete = verifier_node(
-        state,
-        verifier_llm({"R1": ["E1", "E2"]}),  # type: ignore[arg-type]
-    )["verification"]
-
-    assert partial["status"] == "insufficient"
-    assert partial["missing"] == ["R1"]
-    assert complete["status"] == "complete"
-    assert complete["covered"] == {"R1": ["E1", "E2"]}
-
-
-def test_verifier_returns_partial_for_missing_requirement() -> None:
-    state = initial_state("Explain MethodA retrieval and generation")
-    state["plan"].update(
-        requirements=[
-            requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
-            requirement("R2", "Explain MethodA generation", ["MethodA"]),
-        ],
-    )
-    state["evidence"] = [
-        {
-            "chunk_id": "method-a",
-            "paper": "MethodA.pdf",
-            "page": 1,
-            "text": "MethodA uses dynamic retrieval of passages.",
-            "score": 1.0,
-        },
-    ]
-
-    verification = verifier_node(
-        state,
-        verifier_llm({"R1": ["E1"]}),  # type: ignore[arg-type]
-    )["verification"]
-
-    assert verification["status"] == "partial"
-    assert verification["missing"] == ["R2"]
-
-
-def test_verifier_preserves_uncertain_evidence_as_advice() -> None:
-    state = initial_state("Explain MethodA retrieval")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
-    ]
-    state["evidence"] = [
-        {
-            "chunk_id": "method-a",
-            "paper": "MethodA.pdf",
-            "page": 1,
-            "text": "MethodA may retrieve passages dynamically.",
-            "score": 1.0,
-        },
-    ]
-
-    verification = verifier_node(
-        state,
-        verifier_llm({}, uncertain={"R1": ["E1"]}),  # type: ignore[arg-type]
-    )["verification"]
-
-    assert verification["status"] == "partial"
-    assert verification["covered"] == {}
-    assert verification["uncertain"] == {"R1": ["E1"]}
-    assert verification["missing"] == []
-
-
-def test_verifier_batches_queries_for_missing_requirements() -> None:
-    state = initial_state("Explain MethodA retrieval, generation, and evaluation")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
-        requirement("R2", "Explain MethodA generation", ["MethodA"]),
-        requirement("R3", "Explain MethodA evaluation", ["MethodA"]),
-    ]
-    state["evidence"] = [
-        {
-            "chunk_id": "retrieval",
-            "paper": "MethodA.pdf",
-            "page": 1,
-            "text": "The proposed method retrieves passages dynamically.",
-            "score": 1.0,
-        },
-    ]
-
-    verification = verifier_node(
-        state,
-        verifier_llm(
-            {"R1": ["E1"]},
-            [
-                {"requirement_id": "r3", "query": "MethodA evaluation evidence"},
-                {"requirement_id": "r2", "query": "MethodA generation evidence"},
-            ],
-        ),  # type: ignore[arg-type]
-    )["verification"]
-
-    assert verification["corrective_queries"] == [
-        {"requirement_id": "R2", "query": "MethodA generation evidence"},
-        {"requirement_id": "R3", "query": "MethodA evaluation evidence"},
-    ]
-
-    malformed = verifier_node(
-        state,
-        verifier_llm(
-            {"R1": ["E1"]},
-            [{"requirement_id": "R1", "query": "MethodA generation evidence"}],
-        ),  # type: ignore[arg-type]
-    )["verification"]
-    assert malformed["corrective_queries"] == []
-
-
-def test_verifier_accepts_target_identity_from_paper_name() -> None:
-    state = initial_state("Explain MethodA retrieval")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
-    ]
-    state["evidence"] = [
-        {
-            "chunk_id": "method-a",
-            "paper": "MethodA.pdf",
-            "page": 1,
-            "text": "The proposed method retrieves passages dynamically.",
-            "score": 1.0,
-        },
-    ]
-
-    llm = verifier_llm({"R1": ["E1"]})
-    verification = verifier_node(state, llm)["verification"]  # type: ignore[arg-type]
-
-    assert verification["status"] == "complete"
-    assert (
-        "E1 [MethodA.pdf p.1]: The proposed method retrieves passages dynamically."
-        in llm.last_prompt
+    state["evidence"] = sample_chunks[:1]
+    llm = StubLLM(
+        text="Supported [E1]. Unknown [E99]. Fabricated [Fake.pdf p.999].",
     )
 
+    draft = writer_node(state, llm)  # type: ignore[arg-type]
+    state.update(draft)
+    validated = citation_validator_node(state)  # type: ignore[arg-type]
 
-def test_verifier_accepts_semantic_support_when_the_target_name_is_not_repeated() -> None:
-    state = initial_state("Explain MethodA retrieval")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain MethodA retrieval", ["MethodA"]),
-    ]
-    state["evidence"] = [
-        {
-            "chunk_id": "method-a-title",
-            "paper": "1234.56789.pdf",
-            "page": 1,
-            "text": "MethodA is a retrieval system.",
-            "score": 1.0,
-        },
-        {
-            "chunk_id": "method-a-detail",
-            "paper": "1234.56789.pdf",
-            "page": 4,
-            "text": "The proposed approach retrieves passages dynamically.",
-            "score": 1.0,
-        },
-    ]
-
-    verification = verifier_node(
-        state,
-        verifier_llm({"R1": ["E2"]}),  # type: ignore[arg-type]
-    )["verification"]
-
-    assert verification["status"] == "complete"
-    assert verification["covered"] == {"R1": ["E2"]}
-
-
-def test_verifier_prefers_insufficient_to_false_coverage() -> None:
-    state = initial_state("Explain MethodA retrieval")
-    state["plan"].update(
-        requirements=[requirement("R1", "Explain MethodA retrieval", ["MethodA"])],
-    )
-    state["evidence"] = [
-        {
-            "chunk_id": "unrelated",
-            "paper": "Other.pdf",
-            "page": 1,
-            "text": "This paragraph is unrelated.",
-            "score": 1.0,
-        },
-    ]
-
-    verification = verifier_node(state, verifier_llm({}))["verification"]  # type: ignore[arg-type]
-
-    assert verification["status"] == "insufficient"
-    assert verification["missing"] == ["R1"]
-
-
-def test_writer_sees_all_evidence_and_treats_coverage_as_advisory(
-    sample_chunks: list[dict],
-) -> None:
-    state = initial_state("Compare Self-RAG and CRAG")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
-        requirement("R2", "Explain CRAG's mechanism", ["CRAG"]),
-    ]
-    state["evidence"] = sample_chunks[:2]
-    state["verification"] = {
-        "status": "partial",
-        "covered": {"R1": ["E1"]},
-        "uncertain": {"R2": ["E2"]},
-        "missing": [],
-        "corrective_queries": [],
-    }
-    partial = writer_node(
-        state,
-        StubLLM(
-            {},
-            "Self-RAG uses adaptive retrieval [E1]. CRAG uses correction [E2].",
-        ),  # type: ignore[arg-type]
-    )["answer"]
-    assert "[Self-RAG.pdf p.1]" in partial
-    assert "[CRAG.pdf p.2]" in partial
-
-    state["verification"] = {
-        "status": "insufficient",
-        "covered": {},
-        "uncertain": {},
-        "missing": ["R1", "R2"],
-        "corrective_queries": [],
-    }
-    llm = StubLLM({}, SAFE_ABSTENTION)
-    abstention = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
-    assert abstention == SAFE_ABSTENTION
-    assert ".pdf p." not in abstention
-    assert "[E1]" in llm.last_prompt
-    assert "[E2]" in llm.last_prompt
-
-
-def test_writer_always_requests_english() -> None:
-    state = initial_state("Cette preuve existe-t-elle ?")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain the evidence", [], "evidence"),
-    ]
-    state["evidence"] = [
-        {
-            "chunk_id": "evidence",
-            "paper": "Evidence.pdf",
-            "page": 1,
-            "text": "The evidence supports the answer.",
-            "score": 1.0,
-        },
-    ]
-    state["verification"] = {
-        "status": "complete",
-        "covered": {"R1": ["E1"]},
-        "uncertain": {},
-        "missing": [],
-        "corrective_queries": [],
-    }
-    llm = StubLLM({}, "The evidence supports the answer [E1].")
-
-    answer = writer_node(state, llm)["answer"]  # type: ignore[arg-type]
-
-    assert answer == "The evidence supports the answer [Evidence.pdf p.1]."
+    assert draft["answer"] == "Supported [E1]. Unknown [E99]. Fabricated [Fake.pdf p.999]."
+    assert validated["answer"] == "Supported [Self-RAG.pdf p.1]. Unknown. Fabricated."
     assert "Answer in English" in llm.last_prompt
-    assert "Answer in French" not in llm.last_prompt
-    assert "Coverage status: complete" in llm.last_prompt
+    assert "Requirements:" in llm.last_prompt
+    assert "do not add an introductory overview" in llm.last_prompt
+    assert "Do not end with a summary or conclusion" in llm.last_prompt
+    assert "A citation in a neighboring sentence never supports" in llm.last_prompt
 
 
-def test_answer_verifier_requests_repair_for_grounding_issues(
-    sample_chunks: list[dict],
-) -> None:
-    state = initial_state("Explain Self-RAG")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
-    ]
-    state["evidence"] = sample_chunks[:2]
-    state["verification"] = {
-        "status": "complete",
-        "covered": {"R1": ["E1"]},
-        "uncertain": {},
-        "missing": [],
-        "corrective_queries": [],
-    }
+def test_writer_abstains_without_evidence_or_an_llm_call() -> None:
+    state = initial_state("Missing evidence")
+    llm = StubLLM(text="must not be used")
 
-    state["answer"] = "Self-RAG uses retrieval."
-    result = answer_verifier_node(
-        state,
-        StubLLM(
-            {
-                "requirements": {"R1": {"passed": True, "issue": ""}},
-                "citation_issues": [],
-                "uncited_claims": ["Self-RAG uses retrieval."],
-                "unsupported_claims": [],
-                "incorrect_missing_claims": [],
-                "repair_instructions": ["Cite E1 after the claim."],
-            },
-        ),  # type: ignore[arg-type]
-    )["answer_verification"]
+    draft = writer_node(state, llm)  # type: ignore[arg-type]
+    state.update(draft)
 
-    assert result["passed"] is False
-    assert result["repair_required"] is True
-    assert result["uncited_claims"] == ["Self-RAG uses retrieval."]
-
-
-def test_writer_repair_runs_once_and_malformed_verification_fails_open(
-    sample_chunks: list[dict],
-) -> None:
-    state = initial_state("Explain Self-RAG")
-    state["plan"]["requirements"] = [
-        requirement("R1", "Explain Self-RAG's mechanism", ["Self-RAG"]),
-    ]
-    state["evidence"] = sample_chunks[:2]
-    state["verification"] = {
-        "status": "complete",
-        "covered": {"R1": ["E1"]},
-        "uncertain": {},
-        "missing": [],
-        "corrective_queries": [],
-    }
-
-    state["answer"] = "Unsupported."
-    state["answer_verification"] = {
-        **state["answer_verification"],
-        "repair_required": True,
-        "repair_instructions": ["Replace the claim with the supported mechanism."],
-    }
-    repaired = repair_writer_node(
-        state,
-        StubLLM({}, "Self-RAG uses adaptive retrieval [E1]."),  # type: ignore[arg-type]
-    )
-    assert repaired == {
-        "answer": "Self-RAG uses adaptive retrieval [Self-RAG.pdf p.1].",
-        "repair_count": 1,
-    }
-
-    invalid = answer_verifier_node(
-        state,
-        StubLLM({}),  # type: ignore[arg-type]
-    )["answer_verification"]
-    assert invalid["passed"] is None
-    assert invalid["repair_required"] is False
-    assert invalid["error"]
+    assert draft["answer"] == SAFE_ABSTENTION
+    assert citation_validator_node(state)["answer"] == SAFE_ABSTENTION
+    assert llm.complete_calls == 0

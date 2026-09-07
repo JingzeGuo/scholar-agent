@@ -2,42 +2,18 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from scholar_agent.agents.answer_verifier import answer_verifier_node
 from scholar_agent.agents.planner import planner_node
 from scholar_agent.agents.researcher import researcher_node
-from scholar_agent.agents.verifier import verifier_node
-from scholar_agent.agents.writer import repair_writer_node, writer_node
+from scholar_agent.agents.writer import citation_validator_node, writer_node
 from scholar_agent.config import Settings
 from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
 from scholar_agent.retrieval import RetrievalEngine
-
-
-def route_after_research(state: AgentState) -> str:
-    return "writer" if state["stop_reason"] == "no_new_evidence" else "verifier"
-
-
-def route_after_verification(state: AgentState, settings: Settings) -> str:
-    if (
-        not state["verification"]["corrective_queries"]
-        or state["retry_count"] >= settings.max_retries
-    ):
-        return "writer"
-    return "researcher"
-
-
-def route_after_answer_verification(state: AgentState) -> str:
-    if (
-        state["evidence"]
-        and state["answer_verification"]["repair_required"]
-        and state["repair_count"] == 0
-    ):
-        return "repair"
-    return "end"
 
 
 def build_workflow(
@@ -45,79 +21,44 @@ def build_workflow(
     settings: Settings,
     llm: LLMClient | None,
     *,
-    coverage_mode: str = "none",
+    retrieval_mode: str | None = None,
+    shared_plan: dict | None = None,
 ) -> Any:
     if llm is None:
         raise ValueError("llm is required")
-    if coverage_mode not in {"none", "soft"}:
-        raise ValueError(f"Unknown coverage mode: {coverage_mode}")
+    mode = retrieval_mode or settings.retrieval_mode
+    if mode not in {"fixed_hybrid", "adaptive"}:
+        raise ValueError(f"Unknown retrieval mode: {mode}")
     workflow = StateGraph(AgentState)
-    workflow.add_node("planner", lambda state: planner_node(state, llm))
     workflow.add_node(
         "researcher",
         lambda state: researcher_node(state, engine, settings),
     )
     workflow.add_node("writer", lambda state: writer_node(state, llm))
-    workflow.add_node(
-        "answer_verifier",
-        lambda state: answer_verifier_node(state, llm),
-    )
-    workflow.add_node("repair", lambda state: repair_writer_node(state, llm))
-    workflow.set_entry_point("planner")
-    workflow.add_edge("planner", "researcher")
-    if coverage_mode == "soft":
-        workflow.add_node("verifier", lambda state: verifier_node(state, llm))
-        workflow.add_conditional_edges(
-            "researcher",
-            route_after_research,
-            {"verifier": "verifier", "writer": "writer"},
-        )
-        workflow.add_conditional_edges(
-            "verifier",
-            lambda state: route_after_verification(state, settings),
-            {"researcher": "researcher", "writer": "writer"},
-        )
+    workflow.add_node("citation_validator", citation_validator_node)
+    if shared_plan is None:
+        workflow.add_node("planner", lambda state: planner_node(state, llm))
+        workflow.set_entry_point("planner")
+        workflow.add_edge("planner", "researcher")
     else:
-        workflow.add_edge("researcher", "writer")
-    workflow.add_edge("writer", "answer_verifier")
-    workflow.add_conditional_edges(
-        "answer_verifier",
-        route_after_answer_verification,
-        {"repair": "repair", "end": END},
-    )
-    workflow.add_edge("repair", "answer_verifier")
+        workflow.set_entry_point("researcher")
+    workflow.add_edge("researcher", "writer")
+    workflow.add_edge("writer", "citation_validator")
+    workflow.add_edge("citation_validator", END)
     return workflow.compile()
 
 
-def initial_state(question: str, coverage_mode: str = "none") -> AgentState:
+def initial_state(question: str, retrieval_mode: str = "adaptive") -> AgentState:
+    if retrieval_mode not in {"fixed_hybrid", "adaptive"}:
+        raise ValueError(f"Unknown retrieval mode: {retrieval_mode}")
     return {
         "question": question,
-        "coverage_mode": coverage_mode,
+        "retrieval_mode": retrieval_mode,
         "plan": {
             "requirements": [],
         },
         "evidence": [],
-        "verification": {
-            "status": "insufficient" if coverage_mode == "soft" else "not_run",
-            "covered": {},
-            "uncertain": {},
-            "missing": [],
-            "corrective_queries": [],
-        },
-        "retry_count": 0,
-        "stop_reason": "",
-        "answer_verification": {
-            "passed": None,
-            "repair_required": False,
-            "requirements": {},
-            "citation_issues": [],
-            "uncited_claims": [],
-            "unsupported_claims": [],
-            "incorrect_missing_claims": [],
-            "repair_instructions": [],
-            "error": "",
-        },
-        "repair_count": 0,
+        "retrieval_trace": [],
         "answer": "",
     }
 
@@ -128,12 +69,18 @@ def run_question(
     settings: Settings,
     llm: LLMClient | None,
     *,
-    coverage_mode: str = "none",
+    retrieval_mode: str | None = None,
+    shared_plan: dict | None = None,
 ) -> AgentState:
+    mode = retrieval_mode or settings.retrieval_mode
+    state = initial_state(question, mode)
+    if shared_plan is not None:
+        state["plan"] = deepcopy(shared_plan)
     result = build_workflow(
         engine,
         settings,
         llm,
-        coverage_mode=coverage_mode,
-    ).invoke(initial_state(question, coverage_mode))
+        retrieval_mode=mode,
+        shared_plan=shared_plan,
+    ).invoke(state)
     return AgentState(**result)

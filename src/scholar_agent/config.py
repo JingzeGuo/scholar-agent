@@ -20,7 +20,7 @@ class Settings:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     min_rerank_score: float = -1.0
-    max_retries: int = 1
+    retrieval_mode: str = "adaptive"
     data_dir: Path = Path("data")
 
     def __post_init__(self) -> None:
@@ -32,8 +32,8 @@ class Settings:
             raise ValueError("reranker_model cannot be empty")
         if not math.isfinite(self.min_rerank_score):
             raise ValueError("min_rerank_score must be finite")
-        if self.max_retries < 0:
-            raise ValueError("max_retries cannot be negative")
+        if self.retrieval_mode not in {"fixed_hybrid", "adaptive"}:
+            raise ValueError(f"Unknown retrieval mode: {self.retrieval_mode}")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -50,7 +50,10 @@ class Settings:
             min_rerank_score=float(
                 os.getenv("SCHOLAR_AGENT_MIN_RERANK_SCORE", str(cls.min_rerank_score)),
             ),
-            max_retries=int(os.getenv("SCHOLAR_AGENT_MAX_RETRIES", str(cls.max_retries))),
+            retrieval_mode=os.getenv(
+                "SCHOLAR_AGENT_RETRIEVAL_MODE",
+                cls.retrieval_mode,
+            ),
             data_dir=Path(os.getenv("SCHOLAR_AGENT_DATA_DIR", str(cls.data_dir))),
         )
 
