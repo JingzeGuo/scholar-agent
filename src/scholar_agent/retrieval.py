@@ -10,7 +10,7 @@ PER_QUERY_CANDIDATES = 8
 
 
 class RetrievalEngine:
-    """Load and call the two indexes used by the fixed hybrid retrieval path."""
+    """Load and call the lexical and semantic indexes."""
 
     def __init__(
         self,
@@ -29,11 +29,19 @@ class RetrievalEngine:
         dense = DenseIndex.load(chunks, settings.index_dir)
         return cls(chunks, bm25, dense)
 
-    def sparse_search(self, queries: list[str]) -> list[dict]:
-        return self.bm25.search(queries, PER_QUERY_CANDIDATES)
+    def sparse_search(
+        self,
+        queries: list[str],
+        top_k: int = PER_QUERY_CANDIDATES,
+    ) -> list[dict]:
+        return self.bm25.search(queries, top_k)
 
-    def dense_search_many(self, queries: list[str]) -> list[list[dict]]:
-        return self.dense.search_many(queries, PER_QUERY_CANDIDATES)
+    def dense_search_many(
+        self,
+        queries: list[str],
+        top_k: int = PER_QUERY_CANDIDATES,
+    ) -> list[list[dict]]:
+        return self.dense.search_many(queries, top_k)
 
 
 def reciprocal_rank_fusion(*result_lists: list[dict], k: int = 60) -> list[dict]:

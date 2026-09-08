@@ -1,191 +1,148 @@
-# ScholarAgent
+# Scholar-Agent
 
 A compact agentic RAG workflow for evidence-grounded academic research.
 
-ScholarAgent answers questions over a small collection of academic PDFs while
-keeping the full retrieval and grounding path easy to inspect. It combines
-lexical and semantic search, reranks the fused candidates, optionally checks
-whether the evidence covers the question, and renders only validated
-physical-page citations.
-
-On a 50-question English benchmark, the default workflow improved strict
-answer success from 46% to 62% (+16 percentage points) and requirement
-accuracy from 73.2% to 90.1% (+16.9 points) over a hybrid RAG baseline, while
-achieving 87.8% citation support.
-
-## Problem
-
-Academic question answering needs more than a plausible response. The system
-must retrieve evidence for each requested method and aspect, detect incomplete
-support, restrict generation to approved passages, and preserve page-level
-provenance. ScholarAgent implements that path without a vector database,
-dynamic routing, or an open-ended tool loop.
+Scholar-Agent answers questions over a local collection of academic PDFs. The
+Planner makes bounded retrieval decisions before generation; the remaining
+retrieval, reranking, evidence allocation, and citation-validation steps are
+deterministic.
 
 ## Architecture
 
 ```text
 Question
    ↓
-Planner
+Planner (atomic requirements + bounded retrieval decisions)
    ↓
 Researcher
-   ├── BM25
-   ├── Dense retrieval
-   ├── Reciprocal Rank Fusion
-   └── Cross-encoder reranking
+   ├── BM25, dense, or hybrid per requirement
+   ├── RRF for hybrid requirements only
+   ├── shared cross-encoder reranker
+   └── requirement- and target-aware evidence selection
    ↓
-Writer (all evidence)
+Writer
    ↓
-Answer Verifier
-   ├── pass ────────────────────────┐
-   └── fail → Writer repair once → recheck
-                                    ↓
 Deterministic physical-page citation validation
    ↓
 Answer
-
-Optional soft-coverage path:
-
-Researcher → Coverage Analyzer → corrective retrieval at most once → Writer
 ```
 
-LangGraph connects the workflow nodes:
+LangGraph connects four production nodes: Planner, Researcher, Writer, and
+Citation Validator. There is no LLM verifier, answer repair loop, reflection
+loop, or open-ended tool loop.
 
-- Planner: LLM-based planning node.
-- Researcher: deterministic retrieval, fusion, reranking, and
-  evidence-selection node.
-- Coverage Analyzer: optional LLM-based evidence annotation and
-  corrective-query node; disabled by default.
-- Writer: LLM-based grounded-answer node.
-- Answer Verifier: LLM-based final requirement and grounding check.
+## Adaptive retrieval planning
 
-The Researcher is a deterministic workflow node, not an autonomous LLM agent.
-When soft coverage is explicitly enabled, the bounded retry loop runs one batch
-of corrective retrievals requested by the Coverage Analyzer.
-
-## Planner
-
-The Planner decomposes the question into this compact plan:
+The Planner produces one to five atomic requirements:
 
 ```python
 {
-    "requirements": [             # 1–5 independent coverage checks
+    "requirements": [
         {
-            "id": str,            # assigned by code: R1, R2, ...
-            "description": str,
-            "targets": list[str], # 0–3 methods or papers named in the question
-            "query": str,         # evidence query dedicated to this requirement
-        },
-    ],
+            "id": "R1",             # assigned by Python
+            "description": "...",
+            "targets": ["..."],     # 0–3 names copied from the question
+            "query": "...",
+            "retrieval_strategy": "bm25",  # bm25 | dense | hybrid
+            "top_k": 8,
+        }
+    ]
 }
 ```
 
-Each requirement owns its retrieval query and is verified independently, so
-asymmetric questions do not create unrequested target/aspect combinations and
-different aspects of the same target retain separate retrieval signals. Targets
-must be explicitly present in the question; open-ended requirements use
-`targets=[]`. Queries preserve names and constraints but retrieve evidence
-instead of proposing an answer. Retrieval plans and final answers are always in
-English. Comparisons are synthesized from separately supported target facts;
-the Planner does not require a source that already states the comparison. If
-the model returns no usable plan, the original question becomes one conservative
-target-free requirement instead of terminating the workflow.
+The LLM chooses each strategy from the requirement's evidence need. Exact
+titles, acronyms, or method names may favor BM25; conceptual mechanisms may
+favor dense retrieval; mixed or ambiguous needs may favor hybrid retrieval.
+Broad exploratory requirements may choose a larger depth. These are prompt
+examples, not Python routing rules.
 
-## Hybrid retrieval
+Planner output is sanitized before use:
 
-Every query always follows the same readable path:
+- unknown or missing strategies fall back to `hybrid`;
+- integer `top_k` values are clamped to 4–12, while malformed values fall back
+  to 8;
+- empty queries fall back to the requirement description;
+- malformed or duplicate requirements are removed;
+- if no requirement survives, the original question becomes one target-free
+  hybrid requirement with `top_k=8`.
 
-```text
-BM25(query) ───┐
-               ├── RRF ──→ at most 30 candidates ──→ cross-encoder
-Dense(query) ──┘
+## Retrieval modes
+
+One Researcher implementation supports both experiment modes:
+
+- `adaptive` (production default): execute each requirement's planned
+  `retrieval_strategy` and `top_k`.
+- `fixed_hybrid`: ignore the planned strategy and run BM25 plus dense retrieval
+  with RRF for every requirement. Planned `top_k` is retained so the ablation
+  isolates strategy routing.
+
+Configure production with:
+
+```bash
+export SCHOLAR_AGENT_RETRIEVAL_MODE=adaptive
+# or
+export SCHOLAR_AGENT_RETRIEVAL_MODE=fixed_hybrid
 ```
 
-For multiple queries, each BM25 and dense result remains an independent ranking
-of at most eight candidates before fusion. Up to four reranking candidates are
-reserved per requirement query before the 30-candidate pool is filled by global
-RRF rank. Dense queries are encoded together in one batch.
+The Python API also accepts an explicit override:
 
-BM25 supplies exact lexical matching for titles, acronyms, and technical terms.
-Dense retrieval uses normalized Sentence Transformer embeddings and cosine
-similarity for semantic matches.
-
-## Reciprocal Rank Fusion
-
-Reciprocal Rank Fusion (RRF) combines rankings without learned or dynamic
-weights. Each appearance contributes:
-
-```text
-1 / (60 + rank)
+```python
+state = run_question(
+    question,
+    engine,
+    settings,
+    llm,
+    retrieval_mode="fixed_hybrid",
+)
 ```
 
-A chunk found by both BM25 and dense retrieval therefore receives more support
-than a chunk found in only one ranking. The fused list is capped at 30 candidates.
+## Researcher
 
-## Cross-encoder reranking and evidence selection
+Each atomic requirement follows exactly one route:
 
-The cross-encoder scores each query/chunk pair, and each chunk keeps its best
-query score for global ranking while retaining its per-requirement scores for
-coverage selection. Candidates below the configured relevance threshold are
-removed. The remaining evidence is selected with explicit, deterministic
-bounds:
+```text
+bm25:   BM25(query) ───────────────────────→ rerank
+dense:  Dense(query) ──────────────────────→ rerank
+hybrid: BM25(query) ─┐
+                     ├→ RRF ───────────────→ rerank
+        Dense(query) ┘
+```
 
-- normally at most eight evidence chunks, expanding up to fifteen when distinct
-  requirement or comparison-target coverage needs more slots;
-- after requirement coverage, at most four chunks per paper and no duplicate
-  physical page when filling diversity slots;
-- one relevant slot per requirement when matching evidence exists;
-- comparison requirements receive evidence for each named target when possible;
-- up to two early slots per explicitly named target when matching evidence exists.
+Every route uses the same cross-encoder. The reranker retains a separate score
+for every requirement, so adaptive candidates enter the same requirement-aware
+selection pipeline regardless of their initial retrieval route. Selection
+preserves:
 
-When a target name is not repeated verbatim in any candidate, the top semantic
-candidates still reach the Coverage Analyzer instead of being discarded as a group.
+- one relevant slot per atomic requirement when available;
+- target-aware allocation for comparisons;
+- per-paper and physical-page diversity while filling remaining slots;
+- a normal global limit of eight evidence chunks, expanding only when distinct
+  requirement/target coverage requires it;
+- at most 30 cross-encoder candidates, with local candidates reserved for each
+  requirement before global fusion fills the pool.
 
-During corrective retrieval, useful new evidence is merged with the existing
-selection. If the retry produces the same evidence IDs, the workflow terminates
-without repeating verification.
-
-## Coverage Analyzer
-
-The Coverage Analyzer checks every atomic requirement against supplied evidence IDs. It
-rejects unknown IDs, evidence explicitly belonging to a different named target,
-and unsupported coverage annotations. It can combine separately supported facts across
-papers and does not require every evidence passage to repeat the target name.
-Each requirement is annotated as supported, uncertain, or missing; the aggregate
-status remains:
-
-- `complete`: every requirement has direct support;
-- `partial`: some requested coverage is supported;
-- `insufficient`: none of the required coverage is supported.
-
-For uncertain or missing coverage it may return one concise corrective query per
-requirement. The default retry budget is one, so the workflow cannot become an
-unrestricted loop. Its annotations never remove evidence or force an abstention.
-If no useful query exists or the budget is exhausted, processing continues to
-the Writer.
+Dense queries with the same `top_k` are encoded together. A BM25-only
+requirement never invokes dense retrieval, and a dense-only requirement never
+invokes BM25.
 
 ## Writer and citation validation
 
-The Writer sees every selected evidence chunk and treats coverage annotations as
-advice. It cites temporary IDs such as `[E1]`. Only an actually empty evidence
-set causes an immediate abstention.
+The Writer sees all selected evidence and may cite only temporary IDs such as
+`[E1]`. An empty evidence set produces a deterministic abstention without an
+LLM call. The prompt forbids introductory summaries and concluding
+restatements: the answer starts with a directly supported claim, every factual
+sentence must carry its own adjacent evidence ID, and the answer ends after the
+last cited detail.
 
-The Answer Verifier then checks planned requirement coverage, uncited and
-unsupported claims, citation support, and incorrect claims that evidence is
-missing. It sees no benchmark answer keys or gold pages. A failed answer receives
-one constrained repair and one final check; it cannot enter an unrestricted
-loop. Malformed verifier output is recorded without discarding the answer.
-
-After writing, deterministic validation converts known IDs to citations copied
-from stored metadata:
+The final deterministic node converts known IDs to physical-page citations
+copied from stored metadata:
 
 ```text
 [E1] → [Self-RAG.pdf p.1]
 ```
 
-Invented IDs and fabricated page citations are removed. This establishes
-provenance to a retrieved physical page; it does not prove that every generated
-claim is semantically true.
+Unknown evidence IDs and fabricated page citations are removed. This proves
+provenance to a retrieved page; it is not a semantic entailment verifier.
 
 ## Page-aware ingestion and indexes
 
@@ -193,33 +150,24 @@ PyMuPDF extracts each physical page independently. Character chunks are about
 1,200 characters with about 150 characters of overlap and never cross a page
 boundary. Every stored chunk has `chunk_id`, `paper`, `page`, and `text`.
 
-Indexing writes a small BM25 token file plus a NumPy dense-embedding matrix and
+Indexing writes a BM25 token file plus a NumPy dense-embedding matrix and
 metadata. Both indexes store an ordered corpus fingerprint and refuse to load
-after the chunks change. The configured local embedding and reranker models
-download on first use and fail explicitly if unavailable.
+after the chunks change. Local embedding and reranker models download on first
+use and fail explicitly if unavailable.
 
-## Installation
+## Installation and CLI
 
 Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-```
-
-Set `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` before asking a question. Ingestion
-and indexing do not require a paid API.
-
-## CLI
-
-```bash
+export DEEPSEEK_API_KEY=...
 uv run scholar-agent ingest tests/fixtures/papers
 uv run scholar-agent index
 uv run scholar-agent ask "Compare Self-RAG and CRAG"
 ```
 
-The public CLI intentionally contains only `ingest`, `index`, and `ask`.
-
-Configuration uses environment variables:
+The CLI intentionally contains only `ingest`, `index`, and `ask`.
 
 | Variable | Default |
 |---|---|
@@ -227,15 +175,14 @@ Configuration uses environment variables:
 | `SCHOLAR_AGENT_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |
-| `SCHOLAR_AGENT_MAX_RETRIES` | `1` |
+| `SCHOLAR_AGENT_RETRIEVAL_MODE` | `adaptive` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
 ## Tests
 
-The default suite is deterministic and makes no paid provider calls. It covers
-page provenance, BM25 and dense retrieval, batched query encoding, RRF,
-reranking, evidence selection, atomic-requirement verification, retry bounds,
-strict abstention, and physical-page citation validation.
+The deterministic suite covers Planner sanitization, all adaptive routes,
+fixed-hybrid behavior, mixed per-requirement strategies, reranking and evidence
+allocation, page provenance, and citation validation.
 
 ```bash
 uv run ruff check .
@@ -243,16 +190,15 @@ uv run pytest -q
 make quality
 ```
 
-Provider-dependent tests belong behind the `live` pytest marker.
-
 ## Evaluation
 
-The small, resume-oriented benchmark compares Simple RAG with the full
-Scholar-Agent workflow on 50 English questions. See
-[`evals/README.md`](evals/README.md) for the run, blinded review, and scoring
-workflow, including the `none` versus `soft` Coverage Analyzer ablation.
-Evaluation stays outside the production CLI and the default test suite never
-calls DeepSeek.
+The benchmark calls the Planner once per question and reuses that exact
+sanitized plan for both `fixed_hybrid` and `adaptive`. Only retrieval execution
+differs: fixed mode overrides every strategy to hybrid, while adaptive mode
+uses the planned strategy. Blinded scoring reports Strict Success, Requirement
+Accuracy, Citation Support, average latency, and average LLM calls. Each trace
+records the shared plan and the executed query, strategy, and depth per
+requirement. See [evals/README.md](evals/README.md).
 
 The benchmark uses 10,726 page-aware corpus chunks, `deepseek-v4-flash` with
 temperature zero, and variant-blinded external LLM review against extracted
@@ -283,9 +229,8 @@ or a claim of statistical significance.
 
 ## Limitations
 
-- The corpus and NumPy indexes are intended for laptop-scale use.
-- Retrieval is always BM25 plus dense search rather than adaptive routing.
-- Coverage annotations rely on an LLM and are not formal entailment checks.
+- Planner strategy choice is LLM-based and can still be wrong.
 - Citation validation establishes provenance, not semantic truth.
+- The corpus and NumPy indexes are intended for laptop-scale use.
 - Indexes are rebuilt as a unit rather than updated incrementally.
 - Local embedding and reranker models require a download on first use.

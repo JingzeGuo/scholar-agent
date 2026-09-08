@@ -7,10 +7,13 @@ from collections import Counter
 from collections.abc import Callable
 
 from scholar_agent.agents.planner import (
+    DEFAULT_TOP_K,
     MAX_REQUIREMENTS,
     MAX_TARGETS_PER_REQUIREMENT,
+    RETRIEVAL_STRATEGIES,
     evidence_matches_target,
     requirement_targets,
+    sanitize_top_k,
 )
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
@@ -86,7 +89,7 @@ def _select_evidence(
         for requirement in requirements
     }
 
-    # Reserve one relevant evidence slot for every independently verified requirement.
+    # Reserve one relevant evidence slot for every planned requirement.
     for requirement in requirements:
         for item in requirement_rankings[requirement["id"]]:
             if requirement_score(item, requirement["id"]) < min_score:
@@ -152,6 +155,29 @@ def _planned_queries(plan: dict) -> tuple[list[str], list[list[str]]]:
     return queries, query_requirement_ids
 
 
+def _retrieval_requests(plan: dict, retrieval_mode: str) -> list[dict]:
+    if retrieval_mode not in {"fixed_hybrid", "adaptive"}:
+        raise ValueError(f"Unknown retrieval mode: {retrieval_mode}")
+
+    requests: list[dict] = []
+    for requirement in plan["requirements"]:
+        planned_strategy = requirement.get("retrieval_strategy")
+        strategy = (
+            planned_strategy
+            if retrieval_mode == "adaptive" and planned_strategy in RETRIEVAL_STRATEGIES
+            else "hybrid"
+        )
+        requests.append(
+            {
+                "requirement_id": requirement["id"],
+                "query": requirement["query"].strip(),
+                "retrieval_strategy": strategy,
+                "top_k": sanitize_top_k(requirement.get("top_k", DEFAULT_TOP_K)),
+            },
+        )
+    return requests
+
+
 def _attach_requirement_scores(
     items: list[dict],
     query_requirement_ids: list[list[str]],
@@ -182,40 +208,53 @@ def _attach_requirement_scores(
     return scored
 
 
-def _merge_evidence(existing: list[dict], new: list[dict]) -> list[dict]:
-    by_id = {item["chunk_id"]: dict(item) for item in existing}
-    for item in new:
-        previous = by_id.get(item["chunk_id"])
-        if previous is None:
-            by_id[item["chunk_id"]] = item
-            continue
-
-        winner = item if item["score"] > previous["score"] else previous
-        merged = dict(winner)
-        merged["score"] = max(float(previous["score"]), float(item["score"]))
-        requirement_scores: dict[str, float] = {}
-        for source in (previous, item):
-            raw_scores = source.get("_requirement_scores", {})
-            if not isinstance(raw_scores, dict):
-                continue
-            for requirement_id, score in raw_scores.items():
-                if isinstance(requirement_id, str) and isinstance(score, int | float):
-                    requirement_scores[requirement_id] = max(
-                        float(score),
-                        requirement_scores.get(requirement_id, float("-inf")),
-                    )
-        merged["_requirement_scores"] = requirement_scores
-        by_id[item["chunk_id"]] = merged
-    return list(by_id.values())
-
-
-def _query_rankings(
+def _execute_retrieval(
     engine: RetrievalEngine,
-    queries: list[str],
+    requests: list[dict],
 ) -> tuple[list[list[dict]], list[list[dict]]]:
-    sparse = [engine.sparse_search([query]) for query in queries]
-    dense = engine.dense_search_many(queries)
-    return sparse, dense
+    """Return one effective ranking per requirement plus raw rankings for global RRF."""
+    sparse: dict[int, list[dict]] = {}
+    dense: dict[int, list[dict]] = {}
+
+    for index, request in enumerate(requests):
+        if request["retrieval_strategy"] in {"bm25", "hybrid"}:
+            sparse[index] = engine.sparse_search(
+                [request["query"]],
+                top_k=request["top_k"],
+            )
+
+    dense_groups: dict[int, list[tuple[int, str]]] = {}
+    for index, request in enumerate(requests):
+        if request["retrieval_strategy"] in {"dense", "hybrid"}:
+            dense_groups.setdefault(request["top_k"], []).append(
+                (index, request["query"]),
+            )
+    for top_k, group in dense_groups.items():
+        rankings = engine.dense_search_many(
+            [query for _, query in group],
+            top_k=top_k,
+        )
+        if len(rankings) != len(group):
+            raise ValueError("Dense retrieval must return one ranking per query")
+        for (index, _), ranking in zip(group, rankings, strict=True):
+            dense[index] = ranking
+
+    effective_rankings: list[list[dict]] = []
+    source_rankings: list[list[dict]] = []
+    for index, request in enumerate(requests):
+        strategy = request["retrieval_strategy"]
+        if strategy == "bm25":
+            ranking = sparse[index]
+            sources = [ranking]
+        elif strategy == "dense":
+            ranking = dense[index]
+            sources = [ranking]
+        else:
+            sources = [sparse[index], dense[index]]
+            ranking = reciprocal_rank_fusion(*sources)
+        effective_rankings.append(ranking)
+        source_rankings.extend(sources)
+    return effective_rankings, source_rankings
 
 
 def _unique_count(rankings: list[list[dict]]) -> int:
@@ -223,16 +262,10 @@ def _unique_count(rankings: list[list[dict]]) -> int:
 
 
 def _select_candidates_for_reranking(
-    sparse_rankings: list[list[dict]],
-    dense_rankings: list[list[dict]],
+    requirement_rankings: list[list[dict]],
+    source_rankings: list[list[dict]] | None = None,
 ) -> list[dict]:
-    global_ranking = reciprocal_rank_fusion(
-        *(
-            ranking
-            for pair in zip(sparse_rankings, dense_rankings, strict=True)
-            for ranking in pair
-        ),
-    )
+    global_ranking = reciprocal_rank_fusion(*(source_rankings or requirement_rankings))
     selected: list[dict] = []
     selected_ids: set[str] = set()
 
@@ -244,9 +277,9 @@ def _select_candidates_for_reranking(
         return False
 
     # Keep local candidates before global fusion can favor evidence repeated by other queries.
-    for sparse, dense in zip(sparse_rankings, dense_rankings, strict=True):
+    for ranking in requirement_rankings:
         added = 0
-        for item in reciprocal_rank_fusion(sparse, dense):
+        for item in ranking:
             if add(item):
                 added += 1
             if added >= PER_QUERY_RERANK_CANDIDATES:
@@ -263,24 +296,36 @@ def researcher_node(
     settings: Settings,
     rerank_function: RerankFunction = rerank,
 ) -> dict:
-    """Run fixed hybrid retrieval, RRF, reranking, and evidence selection."""
+    """Execute each planned retrieval strategy, then rerank and select evidence."""
     plan = state["plan"]
-    corrective_queries = state["verification"]["corrective_queries"]
-    if corrective_queries:
-        queries = [item["query"] for item in corrective_queries]
-        query_requirement_ids = [[item["requirement_id"]] for item in corrective_queries]
-    else:
-        queries, query_requirement_ids = _planned_queries(plan)
-
-    sparse_rankings, dense_rankings = _query_rankings(engine, queries)
+    queries, query_requirement_ids = _planned_queries(plan)
+    requests = _retrieval_requests(plan, state["retrieval_mode"])
+    requirement_rankings, source_rankings = _execute_retrieval(engine, requests)
+    sparse_rankings = [
+        ranking
+        for request, ranking in zip(requests, requirement_rankings, strict=True)
+        if request["retrieval_strategy"] == "bm25"
+    ]
+    dense_rankings = [
+        ranking
+        for request, ranking in zip(requests, requirement_rankings, strict=True)
+        if request["retrieval_strategy"] == "dense"
+    ]
     LOGGER.info(
-        "[researcher] queries=%d sparse_candidates=%d dense_candidates=%d",
+        "[researcher] mode=%s queries=%d single_bm25=%d single_dense=%d hybrid=%d "
+        "candidates=%d",
+        state["retrieval_mode"],
         len(queries),
-        _unique_count(sparse_rankings),
-        _unique_count(dense_rankings),
+        len(sparse_rankings),
+        len(dense_rankings),
+        sum(request["retrieval_strategy"] == "hybrid" for request in requests),
+        _unique_count(source_rankings),
     )
 
-    candidates = _select_candidates_for_reranking(sparse_rankings, dense_rankings)
+    candidates = _select_candidates_for_reranking(
+        requirement_rankings,
+        source_rankings,
+    )
     LOGGER.info("[fusion] %d candidates for reranking", len(candidates))
     reranked = rerank_function(
         queries,
@@ -295,10 +340,8 @@ def researcher_node(
         len(reranked) - len(retained),
         settings.min_rerank_score,
     )
-    merged = _merge_evidence(state["evidence"], retained)
-    eligible = [item for item in merged if item["score"] >= settings.min_rerank_score]
     evidence = _select_evidence(
-        eligible,
+        retained,
         plan["requirements"],
         settings.min_rerank_score,
     )
@@ -312,16 +355,7 @@ def researcher_node(
             item["score"],
         )
 
-    retry_count = state["retry_count"] + bool(corrective_queries)
-    stop_reason = "" if evidence else "no_relevant_evidence"
-    if corrective_queries and {item["chunk_id"] for item in evidence} == {
-        item["chunk_id"] for item in state["evidence"]
-    }:
-        evidence = state["evidence"]
-        stop_reason = "no_new_evidence"
-        LOGGER.info("[researcher] retry produced no new evidence")
     return {
         "evidence": evidence,
-        "retry_count": retry_count,
-        "stop_reason": stop_reason,
+        "retrieval_trace": requests,
     }
