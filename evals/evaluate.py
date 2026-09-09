@@ -47,6 +47,8 @@ VARIANTS = ("fixed_hybrid", "adaptive")
 VARIANT_LABELS = {
     "fixed_hybrid": "Fixed Hybrid",
     "adaptive": "Adaptive Retrieval",
+    "flat": "Flat Evidence",
+    "blackboard": "Evidence Blackboard",
 }
 RECALL_STAGES = {
     "retrieval": "Retrieval Recall",
@@ -1060,14 +1062,24 @@ Rerank Recall measures entry into the candidate pool, before score filtering and
 """
 
 
-def _runtime() -> tuple[list[dict[str, Any]], RetrievalEngine, Settings, CountingLLM]:
-    questions = load_questions()
+def evaluation_llm() -> CountingLLM:
+    """Use the same provider and model for retrieval and Writer experiments."""
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise EvaluationError("DEEPSEEK_API_KEY is required")
     configured_model = os.getenv("SCHOLAR_AGENT_LLM_MODEL")
     if configured_model and configured_model != MODEL_NAME:
         raise EvaluationError(f"SCHOLAR_AGENT_LLM_MODEL must be {MODEL_NAME}")
 
+    settings = replace(Settings.from_env(), llm_model=MODEL_NAME)
+    llm = LLMClient.from_env(settings)
+    if llm is None or llm.model != MODEL_NAME:
+        raise EvaluationError(f"Evaluation requires the {MODEL_NAME} model")
+    return CountingLLM(llm)
+
+
+def _runtime() -> tuple[list[dict[str, Any]], RetrievalEngine, Settings, CountingLLM]:
+    questions = load_questions()
+    llm = evaluation_llm()
     settings = replace(Settings.from_env(), llm_model=MODEL_NAME)
     engine = RetrievalEngine.load(settings)
     if len(engine.chunks) != EXPECTED_CORPUS_SIZE:
@@ -1080,10 +1092,7 @@ def _runtime() -> tuple[list[dict[str, Any]], RetrievalEngine, Settings, Countin
         raise EvaluationError("Dense index size does not match the expected corpus")
     validate_gold_pages(questions, engine.chunks)
 
-    llm = LLMClient.from_env(settings)
-    if llm is None or llm.model != MODEL_NAME:
-        raise EvaluationError(f"Evaluation requires the {MODEL_NAME} model")
-    return questions, engine, settings, CountingLLM(llm)
+    return questions, engine, settings, llm
 
 
 def _warm_up(question: str, engine: RetrievalEngine, settings: Settings) -> None:

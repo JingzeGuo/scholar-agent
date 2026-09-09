@@ -16,7 +16,7 @@ LOGGER = logging.getLogger(__name__)
 SAFE_ABSTENTION = "The supplied evidence is insufficient to provide a citation-grounded answer."
 
 
-def _writer_prompt(state: AgentState) -> str:
+def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
     evidence_by_id = {item["id"]: item for item in state["evidence"]}
 
     def passage(evidence_id: str) -> str:
@@ -26,6 +26,14 @@ def _writer_prompt(state: AgentState) -> str:
             source = f"{item['title']} ({source})"
         section = f" — {item['section']}" if item.get("section") else ""
         return f"[{evidence_id}] {source} — p.{item['page']}{section}\n{item['text']}"
+
+    if not use_evidence_board:
+        requirements = "\n\n".join(
+            f"Requirement {item['id']}:\n{item['description']}"
+            for item in state["plan"]["requirements"]
+        )
+        evidence = "\n\n".join(passage(evidence_id) for evidence_id in evidence_by_id)
+        return f"Requirements:\n{requirements}\n\nEvidence:\n{evidence}"
 
     blocks = []
     assigned_ids: set[str] = set()
@@ -40,7 +48,12 @@ def _writer_prompt(state: AgentState) -> str:
     unassigned = [passage(evidence_id) for evidence_id in evidence_by_id if evidence_id not in assigned_ids]
     if unassigned:
         blocks.append("Additional selected evidence (no requirement match):\n" + "\n\n".join(unassigned))
-    evidence_text = "\n\n".join(blocks)
+    return "Requirement–Evidence Blackboard:\n" + "\n\n".join(blocks)
+
+
+def _writer_prompt(state: AgentState, *, use_evidence_board: bool = True) -> str:
+    """Keep answer policy identical when ablating only the evidence layout."""
+    context = _writer_context(state, use_evidence_board)
     return f"""You are the Writer in an evidence-grounded research workflow.
 
 Answer in English using only the supplied evidence.
@@ -60,14 +73,14 @@ Do not substitute related methods for explicitly named targets.
 Respect constraints in the original question only when supported by evidence.
 Answer only supported aspects and do not fill missing gaps from memory.
 Organize the answer around the user's question rather than around evidence chunks.
-Use the Requirement–Evidence Blackboard to address each requirement. Its evidence links are
+Address each requirement using the supplied evidence. Any requirement–evidence links are
 retrieval relevance hints, not proof that a passage supports every part of the requirement.
 Check the passage text before making a claim. The same evidence ID always identifies the same
 passage, even when it appears under multiple requirements. You may use any supplied passage
 that directly supports the claim, including evidence listed under another requirement.
 When some requirements are supported, explicitly state which remaining requirements lack
 support in the supplied evidence. These evidence-gap statements need no citation; do not
-invent facts or evidence IDs to fill the gaps, and do not turn an empty board entry into a
+invent facts or evidence IDs to fill the gaps, and do not turn an empty evidence list into a
 claim that the information does not exist in the corpus or elsewhere.
 Inspect all evidence yourself, and do not claim that an item is missing when any supplied
 evidence supports it.
@@ -79,8 +92,7 @@ If no supplied evidence supports any requested factual answer, return exactly:
 
 Question: {state["question"]}
 
-Requirement–Evidence Blackboard:
-{evidence_text}
+{context}
 """
 
 
