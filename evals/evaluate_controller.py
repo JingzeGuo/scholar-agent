@@ -218,6 +218,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
     useful_actions = 0
     missed_pages = recovered_pages = 0
     baseline_operations = controller_operations = 0
+    rejected_actions = 0
     triggered_questions = set()
     for question in questions:
         question_id = question["id"]
@@ -226,6 +227,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
         controller_actions = treatment["trace"]["controller"].get("actions", [])
         recovery_traces = treatment["trace"].get("recovery_actions", [])
         actions.extend(item["action"] for item in controller_actions)
+        rejected_actions += int(treatment["trace"]["controller"].get("rejected_actions", 0))
         useful_actions += sum(any(result.get("added") for result in item["results"]) for item in recovery_traces)
         if controller_actions:
             triggered_questions.add(question_id)
@@ -266,6 +268,12 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
         "triggered_questions": len(triggered_questions),
         "follow_up_trigger_rate": len(triggered_questions) / count,
         "actions": len(actions),
+        "rejected_actions": rejected_actions,
+        "rejected_action_rate": (
+            rejected_actions / (len(actions) + rejected_actions)
+            if actions or rejected_actions
+            else None
+        ),
         "action_distribution": action_distribution,
         "useful_action_rate": useful_actions / len(actions) if actions else None,
         "initially_missed_gold_pages": missed_pages,
@@ -278,6 +286,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
     }
     summary["controller_diagnostics"] = metrics
     recovery_rate = metrics["retrieval_recovery_rate"]
+    rejected_rate = metrics["rejected_action_rate"]
     useful_rate = metrics["useful_action_rate"]
     distribution = ", ".join(f"{key}: {value}" for key, value in action_distribution.items()) or "none"
     return f"""\
@@ -287,6 +296,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
 | Metric | Result |
 |---|---:|
 | Follow-up trigger rate | {100 * metrics['follow_up_trigger_rate']:.1f}% ({metrics['triggered_questions']}/{count}) |
+| Rejected action rate | {f'{100 * rejected_rate:.1f}%' if rejected_rate is not None else 'N/A'} ({rejected_actions}/{len(actions) + rejected_actions}) |
 | Retrieval Recovery Rate | {f'{100 * recovery_rate:.1f}%' if recovery_rate is not None else 'N/A'} ({recovered_pages}/{missed_pages} initially missed gold pages) |
 | Useful action rate | {f'{100 * useful_rate:.1f}%' if useful_rate is not None else 'N/A'} |
 | Average retrieval operations, baseline | {metrics['average_baseline_retrieval_operations']:.2f} |

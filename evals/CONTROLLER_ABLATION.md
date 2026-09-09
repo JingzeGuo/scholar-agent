@@ -45,7 +45,7 @@ uv run python -m evals.evaluate_controller --run-id controller_e3_v1 score
 The summary reports Strict Success, Requirement Accuracy, Citation Support, stage recall, latency,
 and LLM calls, plus:
 
-- follow-up trigger rate and action distribution;
+- follow-up trigger rate, rejected action rate, and action distribution;
 - Retrieval Recovery Rate over gold pages missed by initial retrieval;
 - useful action rate, where an action adds at least one new evidence chunk;
 - average retrieval operations;

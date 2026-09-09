@@ -148,6 +148,7 @@ def test_controller_experiment_freezes_observation_and_runs_one_round(
     note = experiment.controller_summary(summary, [question], results_path)
     diagnostics = summary["controller_diagnostics"]
     assert diagnostics["retrieval_recovery_rate"] == 1
+    assert diagnostics["rejected_action_rate"] == 0
     assert diagnostics["useful_action_rate"] == 1
     assert diagnostics["answer_requirement_repairs"] == ["Q001/G1"]
     assert "Retrieval Recovery Rate" in note
