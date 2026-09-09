@@ -91,6 +91,20 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
         "R1": {
             "requirement": "Answer the requested evidence question",
             "evidence_ids": ["E1", "E2"],
+            "candidate_papers": [
+                {
+                    "paper": "CRAG.pdf",
+                    "title": None,
+                    "best_score": 5.0,
+                    "selected": True,
+                },
+                {
+                    "paper": "Self-RAG.pdf",
+                    "title": None,
+                    "best_score": 5.0,
+                    "selected": True,
+                },
+            ],
         },
     }
     assert llm.json_calls == llm.complete_calls == 1
@@ -230,6 +244,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "evidence": [],
         "evidence_board": {},
         "retrieval_trace": [],
+        "controller_trace": {"actions": [], "rejected_actions": 0},
         "recovery_trace": [],
         "retrieval_stages": {},
         "answer": "",
@@ -263,6 +278,7 @@ def test_agent_state_contains_only_live_workflow_fields() -> None:
         "evidence",
         "evidence_board",
         "retrieval_trace",
+        "controller_trace",
         "recovery_trace",
         "retrieval_stages",
         "answer",

@@ -44,10 +44,10 @@ def target_matches(target: str, text: str) -> bool:
 
 
 def evidence_matches_target(target: str, item: dict) -> bool:
-    """Match a target in either the passage text or its source filename."""
+    """Match a target in the passage or its source identity."""
     return any(
         isinstance(value, str) and target_matches(target, value)
-        for value in (item.get("text"), item.get("paper"))
+        for value in (item.get("text"), item.get("title"), item.get("paper"))
     )
 
 

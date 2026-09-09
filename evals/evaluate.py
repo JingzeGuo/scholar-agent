@@ -352,6 +352,7 @@ def _trace(
         "shared_planner_llm_calls": planner_llm_calls,
         "retrieval_mode": state.get("retrieval_mode"),
         "retrieval_decisions": state.get("retrieval_trace", []),
+        "controller": state.get("controller_trace", {}),
         "recovery_actions": state.get("recovery_trace", []),
         "retrieval_stages": state.get("retrieval_stages", {}),
         "cited_pages": [

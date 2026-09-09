@@ -28,6 +28,7 @@ MAX_RERANK_CANDIDATES = 30
 PER_QUERY_RERANK_CANDIDATES = 4
 PER_TARGET = 2
 PER_PAPER = 4
+MAX_CANDIDATE_PAPERS = 6
 
 
 def _requirement_score(item: dict, requirement_id: str) -> float:
@@ -309,6 +310,36 @@ def _page_refs(items: Iterable[dict]) -> list[dict]:
     ]
 
 
+def _candidate_papers(
+    items: list[dict],
+    requirements: list[dict],
+    evidence: list[dict],
+) -> dict[str, list[dict]]:
+    """Summarize the reranker observation without exposing every candidate chunk."""
+    result = {}
+    for requirement in requirements:
+        requirement_id = requirement["id"]
+        selected = {
+            item["paper"] for item in evidence if requirement_id in item["supports"]
+        }
+        papers: dict[str, dict] = {}
+        for item in items:
+            score = _requirement_score(item, requirement_id)
+            current = papers.get(item["paper"])
+            if current is None or score > current["best_score"]:
+                papers[item["paper"]] = {
+                    "paper": item["paper"],
+                    "title": item.get("title"),
+                    "best_score": score,
+                    "selected": item["paper"] in selected,
+                }
+        result[requirement_id] = sorted(
+            papers.values(),
+            key=lambda item: (not item["selected"], -item["best_score"], item["paper"]),
+        )[:MAX_CANDIDATE_PAPERS]
+    return result
+
+
 def recovery_trace_entry(
     requirement_id: str,
     action: str,
@@ -437,6 +468,12 @@ def researcher_node(
         plan["requirements"],
         settings.min_rerank_score,
     )
+    for requirement_id, papers in _candidate_papers(
+        reranked,
+        plan["requirements"],
+        evidence,
+    ).items():
+        evidence_board[requirement_id]["candidate_papers"] = papers
     LOGGER.info("[reranker] selected %d evidence chunks", len(evidence))
     for index, item in enumerate(evidence, start=1):
         LOGGER.info(

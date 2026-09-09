@@ -18,6 +18,7 @@ class AgentState(TypedDict):
     evidence: list[dict]
     evidence_board: dict[str, dict]
     retrieval_trace: list[dict]
+    controller_trace: dict
     recovery_trace: list[dict]
     retrieval_stages: dict[str, list[dict]]
     answer: str
