@@ -4,6 +4,10 @@ For a controlled **flat vs blackboard Writer** experiment, use
 [WRITER_ABLATION.md](WRITER_ABLATION.md). It freezes the plan, evidence and common
 answer policy, then compares the two context layouts with fresh answers.
 
+For the three-case **targeted retrieval recovery** validation, use
+[RECOVERY_ABLATION.md](RECOVERY_ABLATION.md). It compares the current Blackboard system with
+manual paper navigation or increased retrieval depth before building a Controller.
+
 This directory compares the two production retrieval modes on the same 50
 hand-authored English questions:
 

@@ -76,19 +76,26 @@ def prepare_inputs(
     return inputs
 
 
-def load_inputs(path: Path) -> tuple[dict, str]:
+def load_inputs(path: Path, pipeline_version: str = PIPELINE_VERSION) -> tuple[dict, str]:
     payload = path.read_bytes()
     inputs = json.loads(payload)
-    if inputs["pipeline_version"] != PIPELINE_VERSION or inputs["model"] != evaluation.MODEL_NAME:
+    if inputs["pipeline_version"] != pipeline_version or inputs["model"] != evaluation.MODEL_NAME:
         raise evaluation.EvaluationError("Frozen inputs use a different experiment version or model")
     return inputs, hashlib.sha256(payload).hexdigest()
 
 
-def _existing_results(results_path: Path, run_id: str, input_hash: str) -> dict:
-    latest = evaluation._resumable_results(results_path, run_id, PIPELINE_VERSION)
+def _existing_results(
+    results_path: Path,
+    run_id: str,
+    input_hash: str,
+    *,
+    pipeline_version: str = PIPELINE_VERSION,
+    variants: Sequence[str] = VARIANTS,
+) -> dict:
+    latest = evaluation._resumable_results(results_path, run_id, pipeline_version)
     if any(result.get("input_sha256") != input_hash for result in latest.values()):
         raise evaluation.EvaluationError("Frozen inputs changed after this run started; use a new --run-id")
-    if any(variant not in VARIANTS for _, variant in latest):
+    if any(variant not in variants for _, variant in latest):
         raise evaluation.EvaluationError("Results contain an unexpected Writer variant")
     return latest
 
@@ -99,18 +106,26 @@ def run_experiment(
     llm: evaluation.CountingLLM,
     *,
     run_id: str,
+    pipeline_version: str = PIPELINE_VERSION,
+    variants: Sequence[str] = VARIANTS,
 ) -> None:
     """Alternate Writer order and resume only against the exact same frozen input file."""
-    inputs, input_hash = load_inputs(inputs_path)
-    latest = _existing_results(results_path, run_id, input_hash)
+    inputs, input_hash = load_inputs(inputs_path, pipeline_version)
+    latest = _existing_results(
+        results_path,
+        run_id,
+        input_hash,
+        pipeline_version=pipeline_version,
+        variants=variants,
+    )
     questions = {question["id"]: question for question in inputs["questions"]}
     for index, sample in enumerate(inputs["samples"]):
         question_id = sample["question_id"]
-        order = VARIANTS if index % 2 == 0 else tuple(reversed(VARIANTS))
+        order = variants if index % 2 == 0 else tuple(reversed(variants))
         for variant in order:
             if evaluation._successful_result(latest, question_id, variant) is not None:
                 continue
-            state = deepcopy(sample["state"])
+            state = deepcopy(sample.get("states", {}).get(variant, sample.get("state")))
             prompt = sample["prompts"][variant]
             calls_before = llm.calls
             started = time.perf_counter()
@@ -125,8 +140,9 @@ def run_experiment(
                     prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
                     latency_scope="writer_and_citation_validation",
                 )
+                trace.update(sample.get("trace_fields", {}).get(variant, {}))
                 result = evaluation._result_record(
-                    run_id, PIPELINE_VERSION, question_id, variant, state["answer"],
+                    run_id, pipeline_version, question_id, variant, state["answer"],
                     state["evidence"], time.perf_counter() - started, llm.calls - calls_before, trace,
                 )
                 result["requirement_metrics"] = evaluation.requirement_stage_metrics(
@@ -134,7 +150,7 @@ def run_experiment(
                 )
             except Exception as exc:
                 failed = evaluation._error_record(
-                    run_id, PIPELINE_VERSION, question_id, variant, exc,
+                    run_id, pipeline_version, question_id, variant, exc,
                     time.perf_counter() - started, llm.calls - calls_before,
                 )
                 failed["input_sha256"] = input_hash
