@@ -28,8 +28,10 @@ Answer
 ```
 
 LangGraph connects four production nodes: Planner, Researcher, Writer, and
-Citation Validator. There is no LLM verifier, answer repair loop, reflection
-loop, or open-ended tool loop.
+Citation Validator. A paired 50-question ablation found that adding an LLM
+answer verifier and repair step reduced Strict Success from 88% to 78% and
+increased average latency from 17.99s to 50.32s, with no improvement in
+Requirement Accuracy. The production workflow therefore omits these steps.
 
 ## Adaptive retrieval planning
 
@@ -191,6 +193,16 @@ make quality
 ```
 
 ## Evaluation
+
+The blinded 50-question evaluation pipeline supports two main findings from
+separate experiments:
+
+- **Adaptive retrieval reduced dense retrieval operations by 22.4%**, from 76
+  to 59.
+- **Scholar-Agent improved Strict Success by 16.0 percentage points over a
+  conventional hybrid RAG baseline**, from 46% to 62%. 
+
+### Adaptive retrieval (`adaptive_v2`)
 
 The benchmark calls the Planner once per question and reuses that exact
 sanitized plan for both `fixed_hybrid` and `adaptive`. Only retrieval execution
