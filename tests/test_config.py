@@ -44,6 +44,11 @@ def test_config_rejects_unknown_retrieval_mode() -> None:
         Settings(retrieval_mode="automatic")
 
 
+def test_config_rejects_unknown_recovery_mode() -> None:
+    with pytest.raises(ValueError, match="Unknown recovery mode"):
+        Settings(recovery_mode="automatic")
+
+
 def test_llm_client_uses_provider_specific_default_models(monkeypatch) -> None:
     clients: list[dict[str, str]] = []
 

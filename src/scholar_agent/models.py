@@ -14,6 +14,7 @@ class AgentState(TypedDict):
 
     question: str
     retrieval_mode: str
+    recovery_mode: str
     plan: dict
     evidence: list[dict]
     evidence_board: dict[str, dict]

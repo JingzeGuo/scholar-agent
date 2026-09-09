@@ -13,9 +13,10 @@ from scholar_agent.workflow import build_workflow, initial_state, run_question
 
 
 class FakeEngine:
-    def __init__(self, results: list[dict]) -> None:
+    def __init__(self, results: list[dict], neighbors: list[dict] | None = None) -> None:
         self.results = results
-        self.chunks = results
+        self.neighbors = results if neighbors is None else neighbors
+        self.chunks = self.neighbors
         self.sparse_calls: list[tuple[list[str], int]] = []
         self.dense_calls: list[tuple[list[str], int]] = []
 
@@ -30,6 +31,12 @@ class FakeEngine:
     ) -> list[list[dict]]:
         self.dense_calls.append((queries, top_k))
         return [self.results for _ in queries]
+
+    def search_within_paper(self, paper: str, query: str, top_k: int = 4) -> list[dict]:
+        return [item for item in self.results if item["paper"] == paper][:top_k]
+
+    def expand_neighbors(self, chunk_id: str, radius: int = 1) -> list[dict]:
+        return self.neighbors
 
 
 class FakeCrossEncoder:
@@ -61,6 +68,20 @@ class FakeLLM:
         self.complete_calls += 1
         self.last_prompt = prompt
         return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
+
+
+class ControllerLLM(FakeLLM):
+    def complete_json(self, prompt: str) -> dict:
+        self.json_calls += 1
+        return {
+            "actions": [{
+                "requirement_id": "R1",
+                "action": "expand_neighbors",
+                "chunk_id": "self-1",
+                "query": "Self-RAG and adjacent correction evidence",
+                "reason": "The selected passage may need adjacent context.",
+            }],
+        }
 
 
 def test_adaptive_workflow_reaches_writer_and_validates_citations(
@@ -193,6 +214,38 @@ def test_shared_plan_skips_planner_and_is_not_mutated(
     assert shared_plan["requirements"][0]["retrieval_strategy"] == "bm25"
 
 
+def test_controller_workflow_executes_one_recovery_round(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    engine = FakeEngine(sample_chunks[:1], sample_chunks[:2])
+    monkeypatch.setattr(
+        scholar_agent.reranker,
+        "_cross_encoder",
+        lambda model: FakeCrossEncoder(),
+    )
+    plan = {"requirements": [{
+        "id": "R1", "description": "Explain Self-RAG", "targets": ["Self-RAG"],
+        "query": "Self-RAG", "retrieval_strategy": "bm25", "top_k": 8,
+    }]}
+    llm = ControllerLLM()
+
+    result = run_question(
+        "Explain Self-RAG",
+        engine,  # type: ignore[arg-type]
+        Settings(recovery_mode="controller"),
+        llm,  # type: ignore[arg-type]
+        shared_plan=plan,
+    )
+
+    assert result["recovery_mode"] == "controller"
+    assert llm.json_calls == llm.complete_calls == 1
+    assert result["controller_trace"]["actions"][0]["action"] == "expand_neighbors"
+    assert len(result["recovery_trace"]) == 1
+    assert result["recovery_trace"][0]["results"][1]["added"] is True
+    assert [item["chunk_id"] for item in result["evidence"]] == ["self-1", "crag-1"]
+
+
 def test_empty_evidence_produces_deterministic_abstention() -> None:
     engine = FakeEngine([])
 
@@ -240,6 +293,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
     assert state == {
         "question": "question",
         "retrieval_mode": "adaptive",
+        "recovery_mode": "none",
         "plan": {"requirements": []},
         "evidence": [],
         "evidence_board": {},
@@ -270,10 +324,18 @@ def test_workflow_rejects_unknown_retrieval_mode(entrypoint: str) -> None:
             initial_state("question", "automatic")
 
 
+def test_workflow_rejects_unknown_recovery_mode() -> None:
+    with pytest.raises(ValueError, match="Unknown recovery mode"):
+        build_workflow(  # type: ignore[arg-type]
+            FakeEngine([]), Settings(), FakeLLM(), recovery_mode="automatic",  # type: ignore[arg-type]
+        )
+
+
 def test_agent_state_contains_only_live_workflow_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
         "retrieval_mode",
+        "recovery_mode",
         "plan",
         "evidence",
         "evidence_board",

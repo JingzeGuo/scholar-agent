@@ -34,6 +34,10 @@ answer verifier and repair step reduced Strict Success from 88% to 78% and
 increased average latency from 17.99s to 50.32s, with no improvement in
 Requirement Accuracy. The production workflow therefore omits these steps.
 
+An optional bounded evidence-gap Controller can inspect the first Researcher observation and
+choose up to two recovery actions in one round before writing. It is disabled by default while its
+paired evaluation is pending.
+
 ## Adaptive retrieval planning
 
 The Planner produces one to five atomic requirements:
@@ -85,6 +89,9 @@ Configure production with:
 export SCHOLAR_AGENT_RETRIEVAL_MODE=adaptive
 # or
 export SCHOLAR_AGENT_RETRIEVAL_MODE=fixed_hybrid
+
+# Optional single-round evidence recovery
+export SCHOLAR_AGENT_RECOVERY_MODE=controller
 ```
 
 The Python API also accepts an explicit override:
@@ -216,6 +223,7 @@ The CLI intentionally contains only `ingest`, `index`, and `ask`.
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |
 | `SCHOLAR_AGENT_RETRIEVAL_MODE` | `adaptive` |
+| `SCHOLAR_AGENT_RECOVERY_MODE` | `none` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
 ## Tests
