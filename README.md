@@ -128,6 +128,10 @@ Dense queries with the same `top_k` are encoded together. A BM25-only
 requirement never invokes dense retrieval, and a dense-only requirement never
 invokes BM25.
 
+The retrieval engine also exposes deterministic paper-local hybrid search and
+an inclusive neighboring-chunk window within one paper. These primitives return
+candidates only; follow-up policy remains outside them.
+
 After selection, the Researcher assigns stable `E1`, `E2`, ... IDs and builds a
 Requirement–Evidence Blackboard:
 

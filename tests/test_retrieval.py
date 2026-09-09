@@ -103,6 +103,55 @@ def test_retrieval_engine_uses_fixed_per_query_candidate_limit(
     assert limits == [8, 8]
 
 
+def test_search_within_paper_restricts_hybrid_results(sample_chunks: list[dict]) -> None:
+    dense = DenseIndex(
+        sample_chunks,
+        np.eye(len(sample_chunks), dtype=np.float32),
+        "test",
+        "sentence-transformers",
+    )
+    dense._encode_queries = lambda queries: np.asarray(  # type: ignore[method-assign]
+        [[0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    engine = RetrievalEngine(sample_chunks, BM25Index(sample_chunks), dense)
+
+    results = engine.search_within_paper("CRAG.pdf", "corrective")
+
+    assert [item["chunk_id"] for item in results] == ["crag-1"]
+    assert engine.search_within_paper("Missing.pdf", "corrective") == []
+
+
+def test_expand_neighbors_stays_inside_seed_paper(sample_chunks: list[dict]) -> None:
+    neighbors = [
+        {
+            **sample_chunks[0],
+            "chunk_id": f"self-{index}",
+            "chunk_index": index,
+            "page": index + 1,
+        }
+        for index in range(3)
+    ]
+    chunks = [*neighbors, sample_chunks[1]]
+    engine = RetrievalEngine(
+        chunks,
+        BM25Index(chunks),
+        DenseIndex(chunks, np.eye(len(chunks)), "test", "sentence-transformers"),
+    )
+
+    assert [item["chunk_id"] for item in engine.expand_neighbors("self-1")] == [
+        "self-0",
+        "self-1",
+        "self-2",
+    ]
+    assert [item["chunk_id"] for item in engine.expand_neighbors("self-0")] == [
+        "self-0",
+        "self-1",
+    ]
+    with pytest.raises(KeyError, match="Unknown chunk_id"):
+        engine.expand_neighbors("missing")
+
+
 def test_embedding_model_is_cached_by_name(monkeypatch) -> None:
     constructed: list[tuple[str, bool]] = []
 
@@ -170,6 +219,7 @@ def test_rrf_rewards_chunks_found_by_both_rankings(sample_chunks: list[dict]) ->
     fused = reciprocal_rank_fusion(sparse, dense)
 
     assert [item["chunk_id"] for item in fused] == ["crag-1", "self-1", "other-1"]
+    assert fused[0]["score"] == pytest.approx(1 / 62 + 1 / 61)
 
 
 def test_reranker_reorders_candidates(sample_chunks: list[dict]) -> None:

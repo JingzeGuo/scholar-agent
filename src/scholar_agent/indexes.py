@@ -136,20 +136,30 @@ class DenseIndex:
     def _encode_queries(self, queries: list[str]) -> np.ndarray:
         return _sentence_embeddings(queries, self.model_name)
 
-    def search_many(self, queries: list[str], top_k: int = 20) -> list[list[dict]]:
+    def search_many(
+        self,
+        queries: list[str],
+        top_k: int = 20,
+        candidate_indices: list[int] | None = None,
+    ) -> list[list[dict]]:
         """Return one dense ranking per query after encoding the query batch once."""
         if not queries:
             return []
-        if not self.chunks:
+        indices = (
+            list(range(len(self.chunks)))
+            if candidate_indices is None
+            else candidate_indices
+        )
+        if not indices:
             return [[] for _ in queries]
         query_vectors = self._encode_queries(queries)
-        score_rows = query_vectors @ self.embeddings.T
+        score_rows = query_vectors @ self.embeddings[indices].T
         rankings: list[list[dict]] = []
         for scores in score_rows:
             ranked = np.argsort(-scores, kind="stable")[:top_k]
             rankings.append(
                 [
-                    {**self.chunks[int(i)], "score": float(scores[int(i)])}
+                    {**self.chunks[indices[int(i)]], "score": float(scores[int(i)])}
                     for i in ranked
                     if scores[int(i)] > 0
                 ],
