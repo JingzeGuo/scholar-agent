@@ -69,11 +69,15 @@ def test_controller_keeps_two_bounded_actions_for_distinct_requirements(sample_c
         },
     ]}
 
-    actions, rejected = sanitize_actions(payload, state)  # type: ignore[arg-type]
+    actions, rejections = sanitize_actions(payload, state)  # type: ignore[arg-type]
 
     assert [item["action"] for item in actions] == ["search_within_paper", "expand_neighbors"]
     assert [item["requirement_id"] for item in actions] == ["R1", "R2"]
-    assert rejected == 1
+    assert rejections == [{
+        "requirement_id": "R1",
+        "action": "expand_neighbors",
+        "reason": "duplicate_requirement",
+    }]
 
 
 def test_controller_prompt_contains_observation_and_no_answer_labels(sample_chunks):
@@ -82,8 +86,11 @@ def test_controller_prompt_contains_observation_and_no_answer_labels(sample_chun
 
     result = controller_node(state, llm)  # type: ignore[arg-type]
 
-    assert result == {"controller_trace": {"actions": [], "rejected_actions": 0}}
+    assert result == {
+        "controller_trace": {"actions": [], "rejected_actions": 0, "rejections": []},
+    }
     assert "Self-RAG uses adaptive retrieval" in llm.prompt
+    assert "chunk_id=self-1" in llm.prompt
     assert "Observed candidate papers" in llm.prompt
     assert "gold_pages" not in llm.prompt
     assert "answer_key" not in llm.prompt

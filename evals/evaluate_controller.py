@@ -24,7 +24,7 @@ from scholar_agent.retrieval import RetrievalEngine
 from scholar_agent.workflow import initial_state
 
 VARIANTS = ("baseline", "controller")
-PIPELINE_VERSION = "evidence_gap_controller_e3_v1"
+PIPELINE_VERSION = "evidence_gap_controller_e3_v2"
 
 
 def prepare_inputs(
@@ -219,6 +219,8 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
     missed_pages = recovered_pages = 0
     baseline_operations = controller_operations = 0
     rejected_actions = 0
+    rejected_types: Counter = Counter()
+    rejection_reasons: Counter = Counter()
     triggered_questions = set()
     for question in questions:
         question_id = question["id"]
@@ -227,7 +229,10 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
         controller_actions = treatment["trace"]["controller"].get("actions", [])
         recovery_traces = treatment["trace"].get("recovery_actions", [])
         actions.extend(item["action"] for item in controller_actions)
-        rejected_actions += int(treatment["trace"]["controller"].get("rejected_actions", 0))
+        controller_trace = treatment["trace"]["controller"]
+        rejected_actions += int(controller_trace.get("rejected_actions", 0))
+        rejected_types.update(item.get("action") or "unknown" for item in controller_trace.get("rejections", []))
+        rejection_reasons.update(item["reason"] for item in controller_trace.get("rejections", []))
         useful_actions += sum(any(result.get("added") for result in item["results"]) for item in recovery_traces)
         if controller_actions:
             triggered_questions.add(question_id)
@@ -274,6 +279,8 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
             if actions or rejected_actions
             else None
         ),
+        "rejected_action_distribution": dict(sorted(rejected_types.items())),
+        "rejection_reason_distribution": dict(sorted(rejection_reasons.items())),
         "action_distribution": action_distribution,
         "useful_action_rate": useful_actions / len(actions) if actions else None,
         "initially_missed_gold_pages": missed_pages,
@@ -289,6 +296,12 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
     rejected_rate = metrics["rejected_action_rate"]
     useful_rate = metrics["useful_action_rate"]
     distribution = ", ".join(f"{key}: {value}" for key, value in action_distribution.items()) or "none"
+    rejected_distribution = ", ".join(
+        f"{key}: {value}" for key, value in rejected_types.items()
+    ) or "none"
+    reason_distribution = ", ".join(
+        f"{key}: {value}" for key, value in rejection_reasons.items()
+    ) or "none"
     return f"""\
 
 ## Controller diagnostics
@@ -304,6 +317,8 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
 | Requirement repairs / regressions | {len(repairs)} / {len(regressions)} |
 
 Action distribution: {distribution}.  
+Rejected action distribution: {rejected_distribution}.
+Rejection reasons: {reason_distribution}.
 Repairs: {', '.join(repairs) or 'none'}.  
 Regressions: {', '.join(regressions) or 'none'}.
 

@@ -85,7 +85,7 @@ def initial_state(
         "evidence": [],
         "evidence_board": {},
         "retrieval_trace": [],
-        "controller_trace": {"actions": [], "rejected_actions": 0},
+        "controller_trace": {"actions": [], "rejected_actions": 0, "rejections": []},
         "recovery_trace": [],
         "retrieval_stages": {},
         "answer": "",

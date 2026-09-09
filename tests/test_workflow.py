@@ -298,7 +298,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "evidence": [],
         "evidence_board": {},
         "retrieval_trace": [],
-        "controller_trace": {"actions": [], "rejected_actions": 0},
+        "controller_trace": {"actions": [], "rejected_actions": 0, "rejections": []},
         "recovery_trace": [],
         "retrieval_stages": {},
         "answer": "",

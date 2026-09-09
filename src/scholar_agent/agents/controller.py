@@ -13,6 +13,15 @@ ACTIONS = frozenset({"search_within_paper", "expand_neighbors", "increase_depth"
 MAX_ACTIONS = 2
 
 
+def _rejection(raw: object, reason: str) -> dict:
+    action = raw if isinstance(raw, dict) else {}
+    return {
+        "requirement_id": action.get("requirement_id"),
+        "action": action.get("action"),
+        "reason": reason,
+    }
+
+
 def _controller_prompt(state: AgentState) -> str:
     evidence = {item["id"]: item for item in state["evidence"]}
     blocks = []
@@ -23,7 +32,8 @@ def _controller_prompt(state: AgentState) -> str:
         for evidence_id in board["evidence_ids"]:
             item = evidence[evidence_id]
             passages.append(
-                f"[{evidence_id}] {item.get('title') or item['paper']} "
+                f"[{evidence_id}] chunk_id={item['chunk_id']} | "
+                f"{item.get('title') or item['paper']} "
                 f"({item['paper']}) p.{item['page']} score="
                 f"{item['requirement_scores'][requirement_id]:.3f}\n{item['text']}",
             )
@@ -51,7 +61,7 @@ Use at most one action per requirement. Every action must contain a requirement_
 from {sorted(ACTIONS)}, a concise evidence-seeking query, and a brief reason.
 
 - search_within_paper: also provide a paper from that requirement's observed candidate papers.
-- expand_neighbors: also provide an evidence chunk_id listed for that requirement.
+- expand_neighbors: copy the exact evidence chunk_id shown for that requirement.
 - increase_depth: use only when its current top_k is below {MAX_TOP_K}; Python fixes top_k to
   {MAX_TOP_K}.
 
@@ -65,31 +75,37 @@ Question: {state['question']}
 """
 
 
-def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], int]:
+def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], list[dict]]:
     raw_actions = payload.get("actions") if isinstance(payload, dict) else None
     if not isinstance(raw_actions, list):
-        return [], 1
+        return [], [_rejection(payload, "invalid_actions_payload")]
 
     requirements = {item["id"]: item for item in state["plan"]["requirements"]}
     actions = []
     used_requirements = set()
-    rejected = 0
+    rejections = []
     for raw in raw_actions:
         if not isinstance(raw, dict):
-            rejected += 1
+            rejections.append(_rejection(raw, "invalid_action_object"))
             continue
         requirement_id = raw.get("requirement_id")
         action = raw.get("action")
         query = raw.get("query")
-        if (
-            len(actions) >= MAX_ACTIONS
-            or requirement_id not in requirements
-            or requirement_id in used_requirements
-            or action not in ACTIONS
-            or not isinstance(query, str)
-            or not query.strip()
-        ):
-            rejected += 1
+
+        if len(actions) >= MAX_ACTIONS:
+            rejections.append(_rejection(raw, "action_limit"))
+            continue
+        if requirement_id not in requirements:
+            rejections.append(_rejection(raw, "unknown_requirement"))
+            continue
+        if requirement_id in used_requirements:
+            rejections.append(_rejection(raw, "duplicate_requirement"))
+            continue
+        if action not in ACTIONS:
+            rejections.append(_rejection(raw, "unknown_action"))
+            continue
+        if not isinstance(query, str) or not query.strip():
+            rejections.append(_rejection(raw, "invalid_query"))
             continue
 
         board = state["evidence_board"][requirement_id]
@@ -101,7 +117,7 @@ def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], in
         if action == "search_within_paper":
             paper = raw.get("paper")
             if paper not in {item["paper"] for item in board.get("candidate_papers", [])}:
-                rejected += 1
+                rejections.append(_rejection(raw, "unobserved_paper"))
                 continue
             clean["paper"] = paper
         elif action == "expand_neighbors":
@@ -112,11 +128,11 @@ def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], in
                 if item["id"] in board["evidence_ids"]
             }
             if chunk_id not in allowed_ids:
-                rejected += 1
+                rejections.append(_rejection(raw, "unlinked_chunk"))
                 continue
             clean["chunk_id"] = chunk_id
         elif requirements[requirement_id]["top_k"] >= MAX_TOP_K:
-            rejected += 1
+            rejections.append(_rejection(raw, "depth_at_max"))
             continue
 
         reason = raw.get("reason")
@@ -124,7 +140,7 @@ def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], in
             clean["reason"] = reason.strip()
         actions.append(clean)
         used_requirements.add(requirement_id)
-    return actions, rejected
+    return actions, rejections
 
 
 def controller_node(state: AgentState, llm: LLMClient) -> dict:
@@ -133,7 +149,15 @@ def controller_node(state: AgentState, llm: LLMClient) -> dict:
         payload = llm.complete_json(_controller_prompt(state))
     except ValueError:
         LOGGER.warning("[controller] invalid JSON; continuing without recovery")
-        payload = None
-    actions, rejected = sanitize_actions(payload, state)
-    LOGGER.info("[controller] actions=%d rejected=%d", len(actions), rejected)
-    return {"controller_trace": {"actions": actions, "rejected_actions": rejected}}
+        actions = []
+        rejections = [{"requirement_id": None, "action": None, "reason": "invalid_json"}]
+    else:
+        actions, rejections = sanitize_actions(payload, state)
+    LOGGER.info("[controller] actions=%d rejected=%d", len(actions), len(rejections))
+    return {
+        "controller_trace": {
+            "actions": actions,
+            "rejected_actions": len(rejections),
+            "rejections": rejections,
+        },
+    }
