@@ -18,7 +18,8 @@ Researcher
    ├── BM25, dense, or hybrid per requirement
    ├── RRF for hybrid requirements only
    ├── shared cross-encoder reranker
-   └── requirement- and target-aware evidence selection
+   ├── requirement- and target-aware evidence selection
+   └── Requirement–Evidence Blackboard
    ↓
 Writer
    ↓
@@ -127,11 +128,40 @@ Dense queries with the same `top_k` are encoded together. A BM25-only
 requirement never invokes dense retrieval, and a dense-only requirement never
 invokes BM25.
 
+After selection, the Researcher assigns stable `E1`, `E2`, ... IDs and builds a
+Requirement–Evidence Blackboard:
+
+```python
+evidence_board = {
+    "R1": {"requirement": "Explain Self-RAG retrieval", "evidence_ids": ["E1", "E3"]},
+    "R2": {"requirement": "Report unavailable results", "evidence_ids": []},
+}
+```
+
+Each selected evidence item retains `chunk_id`, `paper`, `page`, `text`, and
+`score`, and adds `id`, `paper_id` (the source filename), optional `title` and
+`section`, `supports`, and public `requirement_scores`. A link requires the
+requirement's rerank score to meet `SCHOLAR_AGENT_MIN_RERANK_SCORE`. Board links
+do not require a literal target-name match, so aliases such as CRAG and Corrective
+RAG do not hide relevant selected passages. Scores are raw cross-encoder relevance
+scores, not probabilities or proof of support. One passage may link to several
+requirements; requirements with no matches remain on the board with an empty
+list. Each board entry orders its evidence by that requirement's score. This
+step preserves selected chunks and their global citation IDs.
+
 ## Writer and citation validation
 
-The Writer sees all selected evidence and may cite only temporary IDs such as
-`[E1]`. An empty evidence set produces a deterministic abstention without an
-LLM call. The prompt forbids introductory summaries and concluding
+The Writer sees each requirement followed by its linked passages, with source
+filename, physical page, and title/section when available. Shared passages keep
+the same evidence ID across requirements. Selected passages without a requirement
+match appear as additional evidence, so none of the selected context is lost.
+The Writer checks the text for actual support and may cite any supplied passage
+that supports the claim. It explicitly identifies unsupported requirements when
+answering a partially supported question.
+
+The Writer may cite only temporary IDs such as `[E1]`. An empty evidence set
+produces a deterministic abstention without an LLM call. Building the board adds
+no LLM calls. The prompt forbids introductory summaries and concluding
 restatements: the answer starts with a directly supported claim, every factual
 sentence must carry its own adjacent evidence ID, and the answer ends after the
 last cited detail.
@@ -151,6 +181,9 @@ provenance to a retrieved page; it is not a semantic entailment verifier.
 PyMuPDF extracts each physical page independently. Character chunks are about
 1,200 characters with about 150 characters of overlap and never cross a page
 boundary. Every stored chunk has `chunk_id`, `paper`, `page`, and `text`.
+PDF metadata titles are retained during ingestion. Chunk records also accept an
+optional `section` when supplied; section headings are not inferred. Older chunk
+stores remain valid and display the filename when a title is absent.
 
 Indexing writes a BM25 token file plus a NumPy dense-embedding matrix and
 metadata. Both indexes store an ordered corpus fingerprint and refuse to load
@@ -216,7 +249,8 @@ New runs also evaluate each gold requirement through **Retrieval Recall → Rera
 Recall → Selected Evidence Recall → Answer Requirement Accuracy**. The first
 three metrics use the existing `gold_pages` automatically; the last reuses the
 answer review score. Summaries include both aggregate recall and a per-requirement
-stage table. Use a new run ID such as `adaptive_v3` to collect the stage traces.
+stage table. Use a new run ID such as `adaptive_v4` to collect stage traces and
+the Writer's evidence board without mixing results from earlier Writer prompts.
 
 The benchmark uses 50 hand-authored English questions, 10,726 page-aware corpus
 chunks, and `deepseek-v4-flash` with temperature zero. Both variants use the same

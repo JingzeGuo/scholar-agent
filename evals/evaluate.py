@@ -37,7 +37,7 @@ SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
 MODEL_NAME = "deepseek-v4-flash"
-PIPELINE_VERSION = "adaptive_v3_retrieval_stages"
+PIPELINE_VERSION = "adaptive_v4_evidence_board"
 EXPECTED_CORPUS_SIZE = 10_726
 EXPECTED_QUESTION_COUNT = 50
 DEFAULT_EVIDENCE_LIMIT = 8
@@ -292,6 +292,11 @@ def _public_evidence(evidence: Iterable[dict]) -> list[dict[str, Any]]:
             "page": item["page"],
             "chunk_id": item["chunk_id"],
             "score": round(float(item["score"]), 6),
+            **{
+                key: item[key]
+                for key in ("id", "paper_id", "title", "section", "supports", "requirement_scores")
+                if key in item
+            },
         }
         for item in evidence
     ]
@@ -340,6 +345,7 @@ def _trace(
 ) -> dict[str, Any]:
     return {
         "plan": state.get("plan"),
+        "evidence_board": state.get("evidence_board", {}),
         "shared_planner_latency_seconds": round(planner_latency, 4),
         "shared_planner_llm_calls": planner_llm_calls,
         "retrieval_mode": state.get("retrieval_mode"),

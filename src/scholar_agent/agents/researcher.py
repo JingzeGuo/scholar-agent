@@ -30,6 +30,56 @@ PER_TARGET = 2
 PER_PAPER = 4
 
 
+def _requirement_score(item: dict, requirement_id: str) -> float:
+    scores = item.get("_requirement_scores")
+    if isinstance(scores, dict):
+        score = scores.get(requirement_id)
+        if isinstance(score, int | float):
+            return float(score)
+        return float("-inf")
+    return float(item["score"])
+
+
+def _build_evidence_board(
+    items: list[dict],
+    requirements: list[dict],
+    min_score: float,
+) -> tuple[list[dict], dict[str, dict]]:
+    """Link selected passages to requirements without changing selection or citation order."""
+    board = {
+        requirement["id"]: {"requirement": requirement["description"], "evidence_ids": []}
+        for requirement in requirements
+    }
+    evidence = []
+    for index, item in enumerate(items, start=1):
+        evidence_id = f"E{index}"
+        supports = [
+            requirement["id"]
+            for requirement in requirements
+            if _requirement_score(item, requirement["id"]) >= min_score
+        ]
+        evidence.append(
+            {
+                **{key: value for key, value in item.items() if key != "_requirement_scores"},
+                "id": evidence_id,
+                "paper_id": item["paper"],
+                "title": item.get("title"),
+                "section": item.get("section"),
+                "supports": supports,
+                "requirement_scores": dict(item["_requirement_scores"]),
+            },
+        )
+        for requirement_id in supports:
+            board[requirement_id]["evidence_ids"].append(evidence_id)
+    evidence_by_id = {item["id"]: item for item in evidence}
+    for requirement_id, entry in board.items():
+        entry["evidence_ids"].sort(
+            key=lambda evidence_id: evidence_by_id[evidence_id]["requirement_scores"][requirement_id],
+            reverse=True,
+        )
+    return evidence, board
+
+
 def _select_evidence(
     items: list[dict],
     requirements: list[dict],
@@ -66,15 +116,6 @@ def _select_evidence(
         paper_counts[item["paper"]] += 1
         return True
 
-    def requirement_score(item: dict, requirement_id: str) -> float:
-        scores = item.get("_requirement_scores")
-        if isinstance(scores, dict):
-            score = scores.get(requirement_id)
-            if isinstance(score, int | float):
-                return float(score)
-            return float("-inf")
-        return float(item["score"])
-
     def matches_requirement(item: dict, requirement: dict) -> bool:
         return not requirement["targets"] or any(
             evidence_matches_target(target, item) for target in requirement["targets"]
@@ -83,7 +124,7 @@ def _select_evidence(
     requirement_rankings: dict[str, list[dict]] = {
         requirement["id"]: sorted(
             items,
-            key=lambda item: requirement_score(item, requirement["id"]),
+            key=lambda item: _requirement_score(item, requirement["id"]),
             reverse=True,
         )
         for requirement in requirements
@@ -92,7 +133,7 @@ def _select_evidence(
     # Reserve one relevant evidence slot for every planned requirement.
     for requirement in requirements:
         for item in requirement_rankings[requirement["id"]]:
-            if requirement_score(item, requirement["id"]) < min_score:
+            if _requirement_score(item, requirement["id"]) < min_score:
                 break
             if not matches_requirement(item, requirement):
                 continue
@@ -108,12 +149,12 @@ def _select_evidence(
         for target in requirement["targets"]:
             if any(
                 evidence_matches_target(target, item)
-                and requirement_score(item, requirement["id"]) >= min_score
+                and _requirement_score(item, requirement["id"]) >= min_score
                 for item in selected
             ):
                 continue
             for item in requirement_rankings[requirement["id"]]:
-                if requirement_score(item, requirement["id"]) < min_score:
+                if _requirement_score(item, requirement["id"]) < min_score:
                     break
                 if evidence_matches_target(target, item) and add(
                     item,
@@ -356,6 +397,11 @@ def researcher_node(
         plan["requirements"],
         settings.min_rerank_score,
     )
+    evidence, evidence_board = _build_evidence_board(
+        evidence,
+        plan["requirements"],
+        settings.min_rerank_score,
+    )
     LOGGER.info("[reranker] selected %d evidence chunks", len(evidence))
     for index, item in enumerate(evidence, start=1):
         LOGGER.info(
@@ -368,6 +414,7 @@ def researcher_node(
 
     return {
         "evidence": evidence,
+        "evidence_board": evidence_board,
         "retrieval_trace": requests,
         "retrieval_stages": retrieval_stages,
     }

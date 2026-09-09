@@ -16,6 +16,7 @@ class AgentState(TypedDict):
     retrieval_mode: str
     plan: dict
     evidence: list[dict]
+    evidence_board: dict[str, dict]
     retrieval_trace: list[dict]
     retrieval_stages: dict[str, list[dict]]
     answer: str
@@ -30,15 +31,11 @@ class ChunkRecord(BaseModel):
     paper: str = Field(min_length=1)
     page: int = Field(ge=1)
     text: str = Field(min_length=1)
+    title: str | None = None
+    section: str | None = None
 
     def evidence(self, score: float = 0.0) -> dict:
-        return {
-            "chunk_id": self.chunk_id,
-            "paper": self.paper,
-            "page": self.page,
-            "text": self.text,
-            "score": float(score),
-        }
+        return {**self.model_dump(exclude_none=True), "score": float(score)}
 
 
 def load_chunks(path: Path) -> list[dict]:
@@ -75,4 +72,4 @@ def save_chunks(chunks: list[dict], path: Path) -> None:
             if record.chunk_id in seen_ids:
                 raise ValueError(f"Duplicate chunk_id: {record.chunk_id}")
             seen_ids.add(record.chunk_id)
-            handle.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
+            handle.write(json.dumps(record.model_dump(exclude_none=True), ensure_ascii=False) + "\n")

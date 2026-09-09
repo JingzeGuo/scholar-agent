@@ -136,7 +136,12 @@ def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
                     "top_k": 6,
                 },
             ],
-            "evidence": sample_chunks[:1],
+            "evidence": [{**sample_chunks[0], "id": "E1", "paper_id": "Self-RAG.pdf",
+                          "title": None, "section": None, "supports": ["R1"],
+                          "requirement_scores": {"R1": 2.0}}],
+            "evidence_board": {
+                "R1": {"requirement": "Explain Method A", "evidence_ids": ["E1"]},
+            },
             "retrieval_stages": {
                 "retrieval": [{"paper": "A.pdf", "page": 1}],
                 "rerank": [{"paper": "A.pdf", "page": 1}],
@@ -165,6 +170,12 @@ def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
     assert [record["llm_calls"] for record in records] == [2, 2]
     assert records[0]["trace"]["plan"] == records[1]["trace"]["plan"] == plan
     assert records[0]["trace"]["shared_planner_llm_calls"] == 1
+    assert records[0]["trace"]["evidence_board"] == {
+        "R1": {"requirement": "Explain Method A", "evidence_ids": ["E1"]},
+    }
+    assert records[0]["evidence"][0]["id"] == "E1"
+    assert records[0]["evidence"][0]["supports"] == ["R1"]
+    assert records[0]["evidence"][0]["requirement_scores"] == {"R1": 2.0}
     assert records[0]["trace"]["retrieval_decisions"] == [
         {
             "requirement_id": "R1",
@@ -458,7 +469,7 @@ def test_requirement_recall_deduplicates_pages_and_requires_matching_papers() ->
     assert unanswerable["answer_requirement_accuracy"] == 1
 
 
-@pytest.mark.parametrize("version", ["adaptive_v2_shared_plan", None])
+@pytest.mark.parametrize("version", ["adaptive_v2_shared_plan", "adaptive_v3_retrieval_stages", None])
 def test_resume_rejects_results_without_the_new_pipeline_version(
     tmp_path: Path,
     version: str | None,

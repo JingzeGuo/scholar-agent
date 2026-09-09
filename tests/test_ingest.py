@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import fitz
+
 from scholar_agent.ingest import ingest_directory, ingest_pdf, split_page
-from scholar_agent.models import load_chunks
+from scholar_agent.models import load_chunks, save_chunks
 
 
 def test_split_page_respects_size_and_overlap() -> None:
@@ -34,3 +36,23 @@ def test_ingest_directory_writes_plain_jsonl(papers_dir: Path, tmp_path: Path) -
 
     assert len(written) == len(loaded) == 4
     assert set(loaded[0]) == {"chunk_id", "paper", "page", "text", "score"}
+
+
+def test_source_metadata_survives_ingestion_and_chunk_storage(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    with fitz.open() as document:
+        document.set_metadata({"title": "Self-RAG: Learning to Retrieve"})
+        document.new_page().insert_text((72, 72), "Self-RAG controls retrieval.")
+        document.save(pdf_path)
+
+    chunks = ingest_pdf(pdf_path)
+    assert chunks[0]["title"] == "Self-RAG: Learning to Retrieve"
+    assert "section" not in chunks[0]
+    chunks[0]["section"] = "2. Method"
+    output = tmp_path / "chunks.jsonl"
+    save_chunks(chunks, output)
+    loaded = load_chunks(output)
+
+    assert loaded[0]["title"] == chunks[0]["title"]
+    assert loaded[0]["section"] == "2. Method"
+    assert loaded[0]["chunk_id"] == chunks[0]["chunk_id"]

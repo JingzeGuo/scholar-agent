@@ -40,6 +40,8 @@ class FakeCrossEncoder:
 class FakeLLM:
     def __init__(self) -> None:
         self.json_calls = 0
+        self.complete_calls = 0
+        self.last_prompt = ""
 
     def complete_json(self, prompt: str) -> dict:
         self.json_calls += 1
@@ -56,6 +58,8 @@ class FakeLLM:
         }
 
     def complete(self, prompt: str) -> str:
+        self.complete_calls += 1
+        self.last_prompt = prompt
         return "Self-RAG uses adaptive retrieval [E1]. CRAG uses corrective retrieval [E2]."
 
 
@@ -70,11 +74,12 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
         lambda model: FakeCrossEncoder(),
     )
 
+    llm = FakeLLM()
     result = run_question(
         "Compare Self-RAG and CRAG",
         engine,  # type: ignore[arg-type]
         Settings(),
-        FakeLLM(),  # type: ignore[arg-type]
+        llm,  # type: ignore[arg-type]
     )
 
     assert result["retrieval_mode"] == "adaptive"
@@ -82,6 +87,16 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
     assert engine.dense_calls == []
     assert "[Self-RAG.pdf p.1]" in result["answer"]
     assert "[CRAG.pdf p.2]" in result["answer"]
+    assert result["evidence_board"] == {
+        "R1": {
+            "requirement": "Answer the requested evidence question",
+            "evidence_ids": ["E1", "E2"],
+        },
+    }
+    assert llm.json_calls == llm.complete_calls == 1
+    assert "Requirement R1:" in llm.last_prompt
+    assert "[E1] Self-RAG.pdf — p.1" in llm.last_prompt
+    assert [item["supports"] for item in result["evidence"]] == [["R1"], ["R1"]]
     assert result["retrieval_stages"] == {
         "retrieval": [
             {"paper": "CRAG.pdf", "page": 2},
@@ -175,6 +190,7 @@ def test_empty_evidence_produces_deterministic_abstention() -> None:
     )
 
     assert result["evidence"] == []
+    assert result["evidence_board"]["R1"]["evidence_ids"] == []
     assert result["retrieval_stages"] == {"retrieval": [], "rerank": []}
     assert result["answer"] == SAFE_ABSTENTION
 
@@ -212,6 +228,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "retrieval_mode": "adaptive",
         "plan": {"requirements": []},
         "evidence": [],
+        "evidence_board": {},
         "retrieval_trace": [],
         "retrieval_stages": {},
         "answer": "",
@@ -243,6 +260,7 @@ def test_agent_state_contains_only_live_workflow_fields() -> None:
         "retrieval_mode",
         "plan",
         "evidence",
+        "evidence_board",
         "retrieval_trace",
         "retrieval_stages",
         "answer",

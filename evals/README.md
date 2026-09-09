@@ -23,9 +23,9 @@ indexes must be current. Evaluation uses `deepseek-v4-flash`.
 ```bash
 export DEEPSEEK_API_KEY=...
 export SCHOLAR_AGENT_LLM_MODEL=deepseek-v4-flash
-uv run python evals/evaluate.py --run-id adaptive_v3 run
-uv run python evals/evaluate.py --run-id adaptive_v3 prepare-review
-uv run python evals/evaluate.py --run-id adaptive_v3 extract-pages
+uv run python evals/evaluate.py --run-id adaptive_v4 run
+uv run python evals/evaluate.py --run-id adaptive_v4 prepare-review
+uv run python evals/evaluate.py --run-id adaptive_v4 extract-pages
 ```
 
 `run` writes one resumable record per question and mode to
@@ -37,6 +37,10 @@ Every trace includes:
 ```python
 {
     "plan": {...},
+    "evidence_board": {
+        "R1": {"requirement": "...", "evidence_ids": ["E1", "E3"]},
+        "R2": {"requirement": "...", "evidence_ids": []},
+    },
     "shared_planner_latency_seconds": 1.23,
     "shared_planner_llm_calls": 1,
     "retrieval_mode": "fixed_hybrid" | "adaptive",
@@ -60,6 +64,13 @@ For `fixed_hybrid`, the recorded executed strategy is always `hybrid`; the
 Planner's original choice remains in `plan`. These fields support analysis of
 strategy proportions, successes by requirement type, retrieval-cost savings,
 and failed routing choices.
+
+Saved `evidence` items also retain their stable `id`, `paper_id`, optional
+`title`/`section`, `supports`, and `requirement_scores`, so the Writer's grouped
+context can be inspected alongside the board. Links use the per-requirement
+score threshold without requiring literal target-name matches; they are relevance
+hints, not semantic support labels. The Writer sees empty requirements explicitly
+and also receives any selected passages that were not linked to a requirement.
 
 ## Requirement-level stage evaluation
 
@@ -99,7 +110,7 @@ chunks. A page hit establishes page coverage; it does not guarantee that the
 selected chunk contains the supporting passage. Loss between Rerank Recall and
 Selected Evidence Recall includes both score filtering and evidence allocation.
 
-Use a new run ID for the new `adaptive_v3_retrieval_stages` pipeline version;
+Use a new run ID for the new `adaptive_v4_evidence_board` pipeline version;
 resuming an older version is rejected to avoid mixing trace formats. Old results
 can still be scored: missing stage snapshots are `null`/`N/A`, not zero, and
 Selected Evidence Recall can be recovered from their saved evidence.
@@ -130,7 +141,7 @@ it. `--force` is available only when replacement is intentional.
 After all 100 answers are labeled, run:
 
 ```bash
-uv run python evals/evaluate.py --run-id adaptive_v3 score
+uv run python evals/evaluate.py --run-id adaptive_v4 score
 ```
 
 The scoring definitions are unchanged. A question is a Strict Success only

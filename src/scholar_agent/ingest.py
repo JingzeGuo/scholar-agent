@@ -61,6 +61,7 @@ def ingest_pdf(
     """Extract and chunk one PDF while retaining its physical page number."""
     chunks: list[dict] = []
     with fitz.open(pdf_path) as document:
+        title = clean_text(document.metadata.get("title") or "")
         for page_number, page in enumerate(document, start=1):
             for position, text in enumerate(
                 split_page(page.get_text("text"), max_chars, overlap),
@@ -71,6 +72,7 @@ def ingest_pdf(
                         "paper": pdf_path.name,
                         "page": page_number,
                         "text": text,
+                        **({"title": title} if title else {}),
                     },
                 )
     return chunks

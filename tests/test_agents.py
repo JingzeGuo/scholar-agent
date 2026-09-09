@@ -15,6 +15,7 @@ from scholar_agent.agents.planner import (
 )
 from scholar_agent.agents.researcher import (
     _attach_requirement_scores,
+    _build_evidence_board,
     _select_candidates_for_reranking,
     _select_evidence,
     researcher_node,
@@ -496,6 +497,109 @@ def test_reranker_scores_remain_requirement_specific() -> None:
         _attach_requirement_scores([{"chunk_id": "c1", "score": 1.0}], [["R1"]])
 
 
+def test_evidence_board_preserves_shared_matches_gaps_and_unassigned_evidence(
+    sample_chunks: list[dict],
+) -> None:
+    requirements = [
+        requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self"),
+        requirement("R2", "Explain limitations", [], "limitations"),
+        requirement("R3", "Explain CRAG", ["CRAG"], "crag"),
+        requirement("R4", "Report unavailable results", [], "missing"),
+    ]
+    items = [
+        {**sample_chunks[0], "title": "Self-RAG: Learning to Retrieve", "section": "2. Method",
+         "_requirement_scores": {"R1": 0.8, "R2": 0.5, "R3": 0.1, "R4": -2.0}},
+        {**sample_chunks[1], "_requirement_scores": {"R1": 0.1, "R2": 0.49, "R3": 0.7, "R4": -2.0}},
+        {**sample_chunks[2], "_requirement_scores": {"R1": 0.1, "R2": 0.2, "R3": 0.1, "R4": -2.0}},
+    ]
+
+    evidence, board = _build_evidence_board(items, requirements, min_score=0.5)
+
+    assert board == {
+        "R1": {"requirement": "Explain Self-RAG", "evidence_ids": ["E1"]},
+        "R2": {"requirement": "Explain limitations", "evidence_ids": ["E1"]},
+        "R3": {"requirement": "Explain CRAG", "evidence_ids": ["E2"]},
+        "R4": {"requirement": "Report unavailable results", "evidence_ids": []},
+    }
+    assert [item["chunk_id"] for item in evidence] == [item["chunk_id"] for item in items]
+    assert [item["id"] for item in evidence] == ["E1", "E2", "E3"]
+    assert [item["supports"] for item in evidence] == [["R1", "R2"], ["R3"], []]
+    assert evidence[0]["paper_id"] == "Self-RAG.pdf"
+    assert evidence[0]["title"] == "Self-RAG: Learning to Retrieve"
+    assert evidence[0]["section"] == "2. Method"
+    assert evidence[1]["title"] is None
+    assert evidence[1]["section"] is None
+    assert evidence[0]["requirement_scores"] == items[0]["_requirement_scores"]
+    assert all("_requirement_scores" not in item for item in evidence)
+    assert all("id" not in item for item in items)
+
+
+def test_evidence_board_links_relevant_aliases_without_literal_target_matching(
+    sample_chunks: list[dict],
+) -> None:
+    requirements = [
+        requirement("R1", "Explain Corrective RAG", ["Corrective RAG"], "corrective retrieval"),
+    ]
+    item = {**sample_chunks[1], "_requirement_scores": {"R1": 5.8}}
+    assert not evidence_matches_target("Corrective RAG", item)
+
+    evidence, board = _build_evidence_board([item], requirements, min_score=-1.0)
+
+    assert board["R1"]["evidence_ids"] == ["E1"]
+    assert evidence[0]["supports"] == ["R1"]
+
+
+def test_board_orders_shared_evidence_by_each_requirement_score(sample_chunks: list[dict]) -> None:
+    requirements = [
+        requirement("R1", "First aspect", [], "first"),
+        requirement("R2", "Second aspect", [], "second"),
+    ]
+    items = [
+        {**sample_chunks[0], "_requirement_scores": {"R1": 2.0, "R2": 1.0}},
+        {**sample_chunks[1], "_requirement_scores": {"R1": 1.0, "R2": 2.0}},
+    ]
+
+    evidence, board = _build_evidence_board(items, requirements, min_score=-1.0)
+
+    assert board["R1"]["evidence_ids"] == ["E1", "E2"]
+    assert board["R2"]["evidence_ids"] == ["E2", "E1"]
+    assert [item["chunk_id"] for item in evidence] == ["self-1", "crag-1"]
+
+
+def test_writer_uses_board_without_renumbering_or_hiding_selected_evidence(
+    sample_chunks: list[dict],
+) -> None:
+    requirements = [
+        requirement("R1", "Explain CRAG", ["CRAG"], "crag"),
+        requirement("R2", "Explain Self-RAG", ["Self-RAG"], "self"),
+        requirement("R3", "Report unavailable results", [], "missing"),
+    ]
+    items = [
+        {**sample_chunks[0], "title": "Self-RAG: Learning to Retrieve", "section": "2. Method",
+         "_requirement_scores": {"R1": -3.0, "R2": 2.0, "R3": -3.0}},
+        {**sample_chunks[1], "_requirement_scores": {"R1": 2.0, "R2": -3.0, "R3": -3.0}},
+        {**sample_chunks[2], "_requirement_scores": {"R1": -3.0, "R2": -3.0, "R3": -3.0}},
+    ]
+    state = _state_with(requirements)
+    state["evidence"], state["evidence_board"] = _build_evidence_board(items, requirements, -1.0)
+    llm = StubLLM(text="CRAG corrects retrieval [E2]. Self-RAG reflects [E1].")
+
+    state.update(writer_node(state, llm))  # type: ignore[arg-type]
+    answer = citation_validator_node(state)["answer"]
+
+    assert answer == "CRAG corrects retrieval [CRAG.pdf p.2]. Self-RAG reflects [Self-RAG.pdf p.1]."
+    assert llm.complete_calls == 1
+    prompt = llm.last_prompt
+    assert "Requirement R1:\nExplain CRAG\n\nSupporting evidence:\n[E2] CRAG.pdf — p.2" in prompt
+    assert "[E1] Self-RAG: Learning to Retrieve (Self-RAG.pdf) — p.1 — 2. Method" in prompt
+    assert "Requirement R3:\nReport unavailable results\n\nSupporting evidence:\nNo matching evidence" in prompt
+    assert "Additional selected evidence (no requirement match):\n[E3] Other.pdf — p.3" in prompt
+    assert all(item["text"] in prompt for item in items)
+    assert "retrieval relevance hints, not proof" in prompt
+    assert "explicitly state which remaining requirements lack" in prompt
+    assert "retrieval_strategy" not in prompt
+
+
 def test_candidate_pool_reserves_local_results_before_global_fill() -> None:
     rankings = [
         [
@@ -581,7 +685,11 @@ def test_writer_and_deterministic_citation_validation_do_not_regress(
     state = _state_with(
         [requirement("R1", "Explain Self-RAG", ["Self-RAG"], "Self-RAG", "bm25")],
     )
-    state["evidence"] = sample_chunks[:1]
+    state["evidence"], state["evidence_board"] = _build_evidence_board(
+        [{**sample_chunks[0], "_requirement_scores": {"R1": 1.0}}],
+        state["plan"]["requirements"],
+        min_score=-1.0,
+    )
     llm = StubLLM(
         text="Supported [E1]. Unknown [E99]. Fabricated [Fake.pdf p.999].",
     )
@@ -593,7 +701,7 @@ def test_writer_and_deterministic_citation_validation_do_not_regress(
     assert draft["answer"] == "Supported [E1]. Unknown [E99]. Fabricated [Fake.pdf p.999]."
     assert validated["answer"] == "Supported [Self-RAG.pdf p.1]. Unknown. Fabricated."
     assert "Answer in English" in llm.last_prompt
-    assert "Requirements:" in llm.last_prompt
+    assert "Requirement–Evidence Blackboard:" in llm.last_prompt
     assert "do not add an introductory overview" in llm.last_prompt
     assert "Do not end with a summary or conclusion" in llm.last_prompt
     assert "A citation in a neighboring sentence never supports" in llm.last_prompt
