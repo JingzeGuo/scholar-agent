@@ -518,6 +518,63 @@ def test_candidate_pool_reserves_local_results_before_global_fill() -> None:
         assert f"q{query_index}-0" in {item["chunk_id"] for item in candidates}
 
 
+@pytest.mark.parametrize("filter_scores", [True, False])
+def test_researcher_records_pages_before_candidate_and_evidence_filtering(
+    filter_scores: bool,
+) -> None:
+    chunks = [
+        {
+            "chunk_id": str(index),
+            "paper": "A.pdf",
+            "page": index + 1,
+            "text": "evidence",
+            "score": 0.0,
+        }
+        for index in range(40)
+    ]
+    requests = [
+        requirement("R1", "Explain A", [], "q1", "hybrid", 10),
+        requirement("R2", "Explain B", [], "q2", "hybrid", 10),
+    ]
+    # Two chunks on the same page must not inflate page recall.
+    sparse = [chunks[0], {**chunks[0], "chunk_id": "duplicate"}, *chunks[1:19]]
+    engine = FakeEngine(
+        {"q1": sparse[:10], "q2": sparse[10:]},
+        {"q1": chunks[20:30], "q2": chunks[30:]},
+    )
+    observed_candidates = []
+
+    def rerank(queries: list[str], candidates: list[dict], model: str) -> list[dict]:
+        observed_candidates.extend(candidates)
+        return [
+            {
+                **item,
+                "score": 1.0 if index == 0 or not filter_scores else -10.0,
+                "_query_scores": [1.0 if index == 0 or not filter_scores else -10.0] * len(queries),
+            }
+            for index, item in enumerate(candidates)
+        ]
+
+    result = researcher_node(
+        _state_with(requests),  # type: ignore[arg-type]
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        rerank,
+    )
+
+    stages = result["retrieval_stages"]
+    assert len(observed_candidates) == 30
+    assert {item["page"] for item in stages["retrieval"]} == set(range(1, 20)) | set(range(21, 41))
+    assert len(stages["retrieval"]) == 39
+    assert stages["rerank"] == [
+        {"paper": "A.pdf", "page": page}
+        for page in sorted({item["page"] for item in observed_candidates})
+    ]
+    assert len(stages["rerank"]) < len(stages["retrieval"])
+    assert len(result["evidence"]) == (1 if filter_scores else 4)
+    assert len(stages["rerank"]) > len(result["evidence"])
+
+
 def test_writer_and_deterministic_citation_validation_do_not_regress(
     sample_chunks: list[dict],
 ) -> None:

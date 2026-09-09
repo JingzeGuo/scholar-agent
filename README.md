@@ -212,6 +212,12 @@ Accuracy, Citation Support, average latency, and average LLM calls. Each trace
 records the shared plan and the executed query, strategy, and depth per
 requirement. See [evals/README.md](evals/README.md).
 
+New runs also evaluate each gold requirement through **Retrieval Recall → Rerank
+Recall → Selected Evidence Recall → Answer Requirement Accuracy**. The first
+three metrics use the existing `gold_pages` automatically; the last reuses the
+answer review score. Summaries include both aggregate recall and a per-requirement
+stage table. Use a new run ID such as `adaptive_v3` to collect the stage traces.
+
 The benchmark uses 50 hand-authored English questions, 10,726 page-aware corpus
 chunks, and `deepseek-v4-flash` with temperature zero. Both variants use the same
 Planner, cross-encoder, requirement-aware evidence selection, Writer, and

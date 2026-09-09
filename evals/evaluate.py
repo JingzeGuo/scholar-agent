@@ -37,7 +37,7 @@ SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
 MODEL_NAME = "deepseek-v4-flash"
-PIPELINE_VERSION = "adaptive_v2_shared_plan"
+PIPELINE_VERSION = "adaptive_v3_retrieval_stages"
 EXPECTED_CORPUS_SIZE = 10_726
 EXPECTED_QUESTION_COUNT = 50
 DEFAULT_EVIDENCE_LIMIT = 8
@@ -47,6 +47,11 @@ VARIANTS = ("fixed_hybrid", "adaptive")
 VARIANT_LABELS = {
     "fixed_hybrid": "Fixed Hybrid",
     "adaptive": "Adaptive Retrieval",
+}
+RECALL_STAGES = {
+    "retrieval": "Retrieval Recall",
+    "rerank": "Rerank Recall",
+    "selected_evidence": "Selected Evidence Recall",
 }
 CATEGORY_COUNTS = {
     "single": 15,
@@ -292,6 +297,41 @@ def _public_evidence(evidence: Iterable[dict]) -> list[dict[str, Any]]:
     ]
 
 
+def requirement_stage_metrics(
+    question: dict[str, Any],
+    result: dict[str, Any],
+    requirement_scores: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """Measure each gold requirement against the shared pools, without aligning G/R IDs."""
+    stages = {
+        **result.get("trace", {}).get("retrieval_stages", {}),
+        "selected_evidence": result.get("evidence"),
+    }
+    pages_by_stage = {}
+    for stage in RECALL_STAGES:
+        pages = stages.get(stage)
+        pages_by_stage[stage] = (
+            {(item["paper"], item["page"]) for item in pages} if pages is not None else None
+        )
+    metrics = []
+    for requirement in question["requirements"]:
+        gold = {(item["paper"], item["page"]) for item in requirement["gold_pages"]}
+        metrics.append(
+            {
+                "requirement_id": requirement["id"],
+                "description": requirement["description"],
+                "gold_pages": requirement["gold_pages"],
+                **{
+                    f"{stage}_recall": len(gold & pages) / len(gold)
+                    if gold and pages is not None else None
+                    for stage, pages in pages_by_stage.items()
+                },
+                "answer_requirement_accuracy": (requirement_scores or {}).get(requirement["id"]),
+            },
+        )
+    return metrics
+
+
 def _trace(
     answer: str,
     state: dict[str, Any],
@@ -304,6 +344,7 @@ def _trace(
         "shared_planner_llm_calls": planner_llm_calls,
         "retrieval_mode": state.get("retrieval_mode"),
         "retrieval_decisions": state.get("retrieval_trace", []),
+        "retrieval_stages": state.get("retrieval_stages", {}),
         "cited_pages": [
             {"paper": paper, "page": page} for paper, page in cited_pages(answer)
         ],
@@ -393,10 +434,10 @@ def _resumable_results(
     for value in existing:
         if value.get("run_id", run_id) != run_id:
             raise EvaluationError(f"Existing results belong to run {value.get('run_id')}")
-        if value.get("pipeline_version", pipeline_version) != pipeline_version:
+        if value.get("pipeline_version") != pipeline_version:
             raise EvaluationError(
                 "Existing results use a different pipeline version: "
-                f"{value.get('pipeline_version')}",
+                f"{value.get('pipeline_version')}. Use a new --run-id.",
             )
     return latest_results(existing)
 
@@ -489,6 +530,7 @@ def run_evaluation(
                         planner_llm_calls,
                     ),
                 )
+                result["requirement_metrics"] = requirement_stage_metrics(question, result)
             except Exception as exc:
                 failed = _error_record(
                     run_id,
@@ -763,7 +805,7 @@ def score_review(
     *,
     variants: Sequence[str] = VARIANTS,
 ) -> dict[str, Any]:
-    """Validate human labels and aggregate resume-oriented metrics."""
+    """Combine gold-page stage recall with the existing human answer labels."""
     if len(variants) != 2 or len(set(variants)) != 2:
         raise EvaluationError("Scoring requires exactly two distinct variants")
     results = _complete_result_set(questions, results_path, variants)
@@ -794,6 +836,7 @@ def score_review(
         for variant in variants
     }
     seen_samples: set[tuple[str, str]] = set()
+    requirement_metrics: list[dict[str, Any]] = []
 
     for row in rows:
         review_id = row.get("review_id", "")
@@ -860,12 +903,16 @@ def score_review(
         total["strict_successes"] += int(strict_success)
         total["latency"] += float(result["latency_seconds"])
         total["llm_calls"] += int(result["llm_calls"])
+        requirement_metrics.extend(
+            {"question_id": question_id, "variant": variant, **metric}
+            for metric in requirement_stage_metrics(question, result, requirement_scores)
+        )
 
     expected_samples = {(item["id"], variant) for item in questions for variant in variants}
     if seen_samples != expected_samples:
         raise EvaluationError("Review sheet does not cover every question and variant")
 
-    metrics: dict[str, dict[str, float | int]] = {}
+    metrics: dict[str, dict[str, float | int | None]] = {}
     for variant, total in totals.items():
         if total["citations"] == 0:
             raise EvaluationError(f"Cannot compute citation support for {variant}: no citations")
@@ -877,6 +924,14 @@ def score_review(
             "average_latency_seconds": total["latency"] / total["questions"],
             "average_llm_calls": total["llm_calls"] / total["questions"],
         }
+        for stage in RECALL_STAGES:
+            recalls = [
+                item[f"{stage}_recall"]
+                for item in requirement_metrics
+                if item["variant"] == variant and item[f"{stage}_recall"] is not None
+            ]
+            metrics[variant][f"{stage}_recall"] = sum(recalls) / len(recalls) if recalls else None
+            metrics[variant][f"{stage}_requirements"] = len(recalls)
 
     baseline_name, treatment_name = variants
     baseline = metrics[baseline_name]
@@ -888,6 +943,10 @@ def score_review(
             "treatment": treatment_name,
         },
         "variants": metrics,
+        "requirement_metrics": sorted(
+            requirement_metrics,
+            key=lambda item: (item["question_id"], item["variant"], item["requirement_id"]),
+        ),
         "delta": {
             "strict_success_percentage_points": 100
             * (
@@ -910,6 +969,11 @@ def score_review(
             - float(baseline["average_llm_calls"]),
         },
     }
+    for stage in RECALL_STAGES:
+        before, after = baseline[f"{stage}_recall"], treatment[f"{stage}_recall"]
+        summary["delta"][f"{stage}_recall_percentage_points"] = (
+            100 * (after - before) if before is not None and after is not None else None
+        )
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -934,18 +998,59 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
         treatment_name.replace("_", " ").title(),
     )
 
-    def percent(value: float) -> str:
-        return f"{100 * value:.1f}%"
+    def percent(value: float | None) -> str:
+        return f"{100 * value:.1f}%" if value is not None else "N/A"
+
+    recall_rows = []
+    for stage, label in RECALL_STAGES.items():
+        change = delta[f"{stage}_recall_percentage_points"]
+        change_text = f"{change:+.1f} pp" if change is not None else "N/A"
+        recall_rows.append(
+            f"| {label} | {percent(baseline[f'{stage}_recall'])} | "
+            f"{percent(treatment[f'{stage}_recall'])} | {change_text} |",
+        )
+
+    def outcome(value: float | None) -> str:
+        if value is None:
+            return "N/A"
+        return "✓" if value == 1 else "✗" if value == 0 else percent(value)
+
+    requirement_rows = []
+    for item in summary["requirement_metrics"]:
+        values = [item[f"{stage}_recall"] for stage in RECALL_STAGES]
+        values.append(item["answer_requirement_accuracy"])
+        requirement_rows.append(
+            f"| {item['question_id']} | {item['variant']} | {item['requirement_id']} | "
+            + " | ".join(outcome(value) for value in values)
+            + " |",
+        )
+    recall_table = "\n".join(recall_rows)
+    requirement_table = "\n".join(requirement_rows)
 
     return f"""# Scholar-Agent evaluation summary
 
 | Metric | {baseline_label} | {treatment_label} | Delta |
 |---|---:|---:|---:|
 | Strict Success | {percent(baseline['strict_success_rate'])} | {percent(treatment['strict_success_rate'])} | {delta['strict_success_percentage_points']:+.1f} pp |
-| Requirement Accuracy | {percent(baseline['requirement_accuracy'])} | {percent(treatment['requirement_accuracy'])} | {delta['requirement_accuracy_percentage_points']:+.1f} pp |
+{recall_table}
+| Answer Requirement Accuracy | {percent(baseline['requirement_accuracy'])} | {percent(treatment['requirement_accuracy'])} | {delta['requirement_accuracy_percentage_points']:+.1f} pp |
 | Citation Support | {percent(baseline['citation_support_rate'])} | {percent(treatment['citation_support_rate'])} | {delta['citation_support_percentage_points']:+.1f} pp |
 | Average latency | {baseline['average_latency_seconds']:.2f}s | {treatment['average_latency_seconds']:.2f}s | {delta['average_latency_seconds']:+.2f}s |
 | Average LLM calls | {baseline['average_llm_calls']:.2f} | {treatment['average_llm_calls']:.2f} | {delta['average_llm_calls']:+.2f} |
+
+Recall is the macro-average of per-requirement gold-page coverage. Requirements without
+gold pages and stages missing from older traces are N/A and excluded from recall averages.
+Answer accuracy includes all requirements and uses the existing review labels.
+
+## Requirement-level stages
+
+✓ = all gold pages reached the stage (or the answer passed); ✗ = zero recall (or the
+answer failed). Partial gold-page coverage is shown as a percentage.
+Rerank Recall measures entry into the candidate pool, before score filtering and selection.
+
+| Question | Variant | Requirement | Retrieval Recall | Rerank Recall | Selected Evidence Recall | Answer Requirement Accuracy |
+|---|---|---|---:|---:|---:|---:|
+{requirement_table}
 """
 
 

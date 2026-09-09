@@ -17,6 +17,7 @@ class AgentState(TypedDict):
     plan: dict
     evidence: list[dict]
     retrieval_trace: list[dict]
+    retrieval_stages: dict[str, list[dict]]
     answer: str
 
 

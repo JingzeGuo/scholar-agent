@@ -59,6 +59,7 @@ def initial_state(question: str, retrieval_mode: str = "adaptive") -> AgentState
         },
         "evidence": [],
         "retrieval_trace": [],
+        "retrieval_stages": {},
         "answer": "",
     }
 

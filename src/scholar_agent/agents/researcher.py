@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from scholar_agent.agents.planner import (
     DEFAULT_TOP_K,
@@ -261,6 +261,13 @@ def _unique_count(rankings: list[list[dict]]) -> int:
     return len({item["chunk_id"] for ranking in rankings for item in ranking})
 
 
+def _page_refs(items: Iterable[dict]) -> list[dict]:
+    return [
+        {"paper": paper, "page": page}
+        for paper, page in sorted({(item["paper"], item["page"]) for item in items})
+    ]
+
+
 def _select_candidates_for_reranking(
     requirement_rankings: list[list[dict]],
     source_rankings: list[list[dict]] | None = None,
@@ -326,6 +333,10 @@ def researcher_node(
         requirement_rankings,
         source_rankings,
     )
+    retrieval_stages = {
+        "retrieval": _page_refs(item for ranking in source_rankings for item in ranking),
+        "rerank": _page_refs(candidates),
+    }
     LOGGER.info("[fusion] %d candidates for reranking", len(candidates))
     reranked = rerank_function(
         queries,
@@ -358,4 +369,5 @@ def researcher_node(
     return {
         "evidence": evidence,
         "retrieval_trace": requests,
+        "retrieval_stages": retrieval_stages,
     }

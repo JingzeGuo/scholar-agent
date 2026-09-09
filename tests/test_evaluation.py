@@ -13,6 +13,7 @@ from evals.evaluate import (
     evaluation_artifact_path,
     export_review_evidence,
     prepare_review,
+    requirement_stage_metrics,
     run_evaluation,
     score_review,
     validate_questions,
@@ -136,6 +137,10 @@ def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
                 },
             ],
             "evidence": sample_chunks[:1],
+            "retrieval_stages": {
+                "retrieval": [{"paper": "A.pdf", "page": 1}],
+                "rerank": [{"paper": "A.pdf", "page": 1}],
+            },
         }
 
     results_path = tmp_path / "results.jsonl"
@@ -169,6 +174,19 @@ def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
         },
     ]
     assert records[1]["trace"]["retrieval_decisions"][0]["retrieval_strategy"] == "bm25"
+    assert records[0]["trace"]["retrieval_stages"] == {
+        "retrieval": [{"paper": "A.pdf", "page": 1}],
+        "rerank": [{"paper": "A.pdf", "page": 1}],
+    }
+    assert records[0]["requirement_metrics"][0] == {
+        "requirement_id": "G1",
+        "description": "Explain Method A.",
+        "gold_pages": [{"paper": "A.pdf", "page": 1}],
+        "retrieval_recall": 1.0,
+        "rerank_recall": 1.0,
+        "selected_evidence_recall": 0.0,
+        "answer_requirement_accuracy": None,
+    }
     for removed in (
         "verification",
         "answer_verification",
@@ -276,8 +294,10 @@ def test_versioned_artifacts_stay_inside_the_run_directory() -> None:
         evaluation_artifact_path("results.jsonl", "../outside")
 
 
+@pytest.mark.parametrize("with_stage_trace", [True, False])
 def test_blind_review_preserves_scoring_definitions_and_cost_metrics(
     tmp_path: Path,
+    with_stage_trace: bool,
 ) -> None:
     questions = small_questions()
     results_path = tmp_path / "results.jsonl"
@@ -290,7 +310,7 @@ def test_blind_review_preserves_scoring_definitions_and_cost_metrics(
                 if question["id"] == "Q001"
                 else "The corpus lacks enough evidence."
             ),
-            "evidence": [],
+            "evidence": [{"paper": "A.pdf", "page": 1}],
             "latency_seconds": 2.0 if variant == "adaptive" else 1.0,
             "llm_calls": 2,
             "error": None,
@@ -298,6 +318,12 @@ def test_blind_review_preserves_scoring_definitions_and_cost_metrics(
         for question in questions
         for variant in evaluation.VARIANTS
     ]
+    if with_stage_trace:
+        for record in records:
+            record["trace"] = {"retrieval_stages": {
+                "retrieval": [{"paper": "A.pdf", "page": 1}],
+                "rerank": [{"paper": "A.pdf", "page": 1}],
+            }}
     results_path.write_text(
         "".join(json.dumps(item) + "\n" for item in records),
         encoding="utf-8",
@@ -354,6 +380,95 @@ def test_blind_review_preserves_scoring_definitions_and_cost_metrics(
     assert "| Metric | Fixed Hybrid | Adaptive Retrieval | Delta |" in (
         markdown_path.read_text(encoding="utf-8")
     )
+    for variant in evaluation.VARIANTS:
+        metrics = summary["variants"][variant]
+        assert metrics["retrieval_recall"] == (1.0 if with_stage_trace else None)
+        assert metrics["rerank_recall"] == (1.0 if with_stage_trace else None)
+        assert metrics["retrieval_requirements"] == int(with_stage_trace)
+        assert metrics["selected_evidence_recall"] == 1.0
+        assert metrics["selected_evidence_requirements"] == 1
+    assert summary["delta"]["retrieval_recall_percentage_points"] == (
+        0.0 if with_stage_trace else None
+    )
+    detail = next(
+        item for item in summary["requirement_metrics"]
+        if item["question_id"] == "Q001" and item["variant"] == "fixed_hybrid"
+    )
+    assert detail["selected_evidence_recall"] == 1.0
+    assert detail["answer_requirement_accuracy"] == 0
+    expected_stages = "✓ | ✓" if with_stage_trace else "N/A | N/A"
+    assert f"| Q001 | fixed_hybrid | G1 | {expected_stages} | ✓ | ✗ |" in (
+        markdown_path.read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize(
+    ("retrieved", "candidates", "selected", "answer", "expected"),
+    [
+        (False, False, False, 0, [0.0, 0.0, 0.0, 0]),
+        (True, False, False, 0, [1.0, 0.0, 0.0, 0]),
+        (True, True, False, 0, [1.0, 1.0, 0.0, 0]),
+        (True, True, True, 0, [1.0, 1.0, 1.0, 0]),
+        (True, True, True, 1, [1.0, 1.0, 1.0, 1]),
+    ],
+)
+def test_requirement_metrics_expose_the_stage_where_gold_pages_are_lost(
+    retrieved: bool,
+    candidates: bool,
+    selected: bool,
+    answer: int,
+    expected: list[float],
+) -> None:
+    question = small_questions()[0]
+    gold = question["requirements"][0]["gold_pages"]
+    result = {
+        "trace": {"retrieval_stages": {
+            "retrieval": gold if retrieved else [],
+            "rerank": gold if candidates else [],
+        }},
+        "evidence": gold if selected else [],
+    }
+
+    metric = requirement_stage_metrics(question, result, {"G1": answer})[0]
+
+    assert [metric[f"{stage}_recall"] for stage in evaluation.RECALL_STAGES] + [
+        metric["answer_requirement_accuracy"],
+    ] == expected
+
+
+def test_requirement_recall_deduplicates_pages_and_requires_matching_papers() -> None:
+    question = small_questions()[0]
+    gold = [{"paper": "A.pdf", "page": 1}, {"paper": "B.pdf", "page": 2}]
+    question["requirements"][0]["gold_pages"] = [*gold, gold[0]]
+    question["requirements"].append(small_questions()[1]["requirements"][0] | {"id": "G2"})
+    result = {
+        "trace": {"retrieval_stages": {
+            "retrieval": [*gold, gold[0]],
+            "rerank": [gold[0], gold[0], {"paper": "Wrong.pdf", "page": 2}],
+        }},
+        "evidence": [gold[0], gold[0]],
+    }
+
+    answerable, unanswerable = requirement_stage_metrics(question, result, {"G1": 0, "G2": 1})
+
+    assert answerable["retrieval_recall"] == 1.0
+    assert answerable["rerank_recall"] == 0.5
+    assert answerable["selected_evidence_recall"] == 0.5
+    assert all(unanswerable[f"{stage}_recall"] is None for stage in evaluation.RECALL_STAGES)
+    assert unanswerable["answer_requirement_accuracy"] == 1
+
+
+@pytest.mark.parametrize("version", ["adaptive_v2_shared_plan", None])
+def test_resume_rejects_results_without_the_new_pipeline_version(
+    tmp_path: Path,
+    version: str | None,
+) -> None:
+    path = tmp_path / "results.jsonl"
+    record = {"pipeline_version": version} if version else {}
+    path.write_text(json.dumps(record) + "\n")
+
+    with pytest.raises(evaluation.EvaluationError, match="different pipeline version"):
+        evaluation._resumable_results(path, "legacy", evaluation.PIPELINE_VERSION)
 
 
 def test_export_review_evidence_extracts_and_deduplicates_physical_pages(

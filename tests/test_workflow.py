@@ -82,6 +82,16 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
     assert engine.dense_calls == []
     assert "[Self-RAG.pdf p.1]" in result["answer"]
     assert "[CRAG.pdf p.2]" in result["answer"]
+    assert result["retrieval_stages"] == {
+        "retrieval": [
+            {"paper": "CRAG.pdf", "page": 2},
+            {"paper": "Self-RAG.pdf", "page": 1},
+        ],
+        "rerank": [
+            {"paper": "CRAG.pdf", "page": 2},
+            {"paper": "Self-RAG.pdf", "page": 1},
+        ],
+    }
     assert result["retrieval_trace"] == [
         {
             "requirement_id": "R1",
@@ -165,6 +175,7 @@ def test_empty_evidence_produces_deterministic_abstention() -> None:
     )
 
     assert result["evidence"] == []
+    assert result["retrieval_stages"] == {"retrieval": [], "rerank": []}
     assert result["answer"] == SAFE_ABSTENTION
 
 
@@ -202,6 +213,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "plan": {"requirements": []},
         "evidence": [],
         "retrieval_trace": [],
+        "retrieval_stages": {},
         "answer": "",
     }
 
@@ -232,5 +244,6 @@ def test_agent_state_contains_only_live_workflow_fields() -> None:
         "plan",
         "evidence",
         "retrieval_trace",
+        "retrieval_stages",
         "answer",
     }
