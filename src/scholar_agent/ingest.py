@@ -13,10 +13,46 @@ from scholar_agent.models import save_chunks
 
 LOGGER = logging.getLogger(__name__)
 SPACE_RE = re.compile(r"\s+")
+MIN_TITLE_SIZE = 13.0
 
 
 def clean_text(text: str) -> str:
     return SPACE_RE.sub(" ", text).strip()
+
+
+def _document_title(document: fitz.Document) -> str:
+    title = clean_text(document.metadata.get("title") or "")
+    if title and not (title.startswith("(") and title.endswith(")")):
+        return title
+
+    page = document[0]
+    lines = []
+    for block in page.get_text("dict")["blocks"]:
+        for line in block.get("lines", []):
+            text = clean_text("".join(span["text"] for span in line["spans"]))
+            if (
+                text
+                and "arxiv:" not in text.casefold()
+                and line["bbox"][1] < page.rect.height * 0.45
+            ):
+                lines.append(
+                    (
+                        line["bbox"][1],
+                        line["bbox"][0],
+                        max(span["size"] for span in line["spans"]),
+                        text,
+                    ),
+                )
+    title_size = max((size for _, _, size, _ in lines), default=0.0)
+    if title_size < MIN_TITLE_SIZE:
+        return ""
+    return clean_text(
+        " ".join(
+            text
+            for _, _, size, text in sorted(lines)
+            if size >= title_size - 0.2
+        ),
+    )
 
 
 def split_page(text: str, max_chars: int = 1200, overlap: int = 150) -> list[str]:
@@ -61,20 +97,24 @@ def ingest_pdf(
     """Extract and chunk one PDF while retaining its physical page number."""
     chunks: list[dict] = []
     with fitz.open(pdf_path) as document:
-        title = clean_text(document.metadata.get("title") or "")
+        title = _document_title(document)
+        chunk_index = 0
         for page_number, page in enumerate(document, start=1):
-            for position, text in enumerate(
+            for page_chunk_index, text in enumerate(
                 split_page(page.get_text("text"), max_chars, overlap),
             ):
                 chunks.append(
                     {
-                        "chunk_id": _chunk_id(pdf_path.name, page_number, position, text),
+                        "chunk_id": _chunk_id(pdf_path.name, page_number, page_chunk_index, text),
                         "paper": pdf_path.name,
                         "page": page_number,
+                        "chunk_index": chunk_index,
+                        "page_chunk_index": page_chunk_index,
                         "text": text,
                         **({"title": title} if title else {}),
                     },
                 )
+                chunk_index += 1
     return chunks
 
 

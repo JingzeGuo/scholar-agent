@@ -180,10 +180,11 @@ provenance to a retrieved page; it is not a semantic entailment verifier.
 
 PyMuPDF extracts each physical page independently. Character chunks are about
 1,200 characters with about 150 characters of overlap and never cross a page
-boundary. Every stored chunk has `chunk_id`, `paper`, `page`, and `text`.
-PDF metadata titles are retained during ingestion. Chunk records also accept an
-optional `section` when supplied; section headings are not inferred. Older chunk
-stores remain valid and display the filename when a title is absent.
+boundary. Every stored chunk has 0-based `chunk_index` and `page_chunk_index`
+positions in addition to `chunk_id`, `paper`, `page`, and `text`. PDF metadata
+titles are retained; when absent, the largest heading near the top of the first
+page is used. Chunk records accept an optional `section` when supplied, but
+section headings are not inferred.
 
 Indexing writes a BM25 token file plus a NumPy dense-embedding matrix and
 metadata. Both indexes store an ordered corpus fingerprint and refuse to load

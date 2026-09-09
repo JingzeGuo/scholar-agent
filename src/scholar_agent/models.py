@@ -30,6 +30,8 @@ class ChunkRecord(BaseModel):
     chunk_id: str = Field(min_length=1)
     paper: str = Field(min_length=1)
     page: int = Field(ge=1)
+    chunk_index: int = Field(ge=0)
+    page_chunk_index: int = Field(ge=0)
     text: str = Field(min_length=1)
     title: str | None = None
     section: str | None = None
