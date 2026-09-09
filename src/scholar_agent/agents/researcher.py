@@ -309,6 +309,41 @@ def _page_refs(items: Iterable[dict]) -> list[dict]:
     ]
 
 
+def recovery_trace_entry(
+    requirement_id: str,
+    action: str,
+    trigger: str,
+    round_number: int,
+    parameters: dict,
+    candidates: list[dict],
+    reranked: list[dict] | None = None,
+) -> dict:
+    """Record one recovery action without coupling tracing to retrieval tools."""
+    rerank = {
+        item["chunk_id"]: (rank, float(item["score"]))
+        for rank, item in enumerate(reranked or [], start=1)
+    }
+    results = []
+    for candidate_rank, item in enumerate(candidates, start=1):
+        result = {
+            "chunk_id": item["chunk_id"],
+            "paper": item["paper"],
+            "page": item["page"],
+            "candidate_rank": candidate_rank,
+        }
+        if item["chunk_id"] in rerank:
+            result["rerank_rank"], result["rerank_score"] = rerank[item["chunk_id"]]
+        results.append(result)
+    return {
+        "round": round_number,
+        "trigger": trigger,
+        "requirement_id": requirement_id,
+        "action": action,
+        "parameters": parameters,
+        "results": results,
+    }
+
+
 def _select_candidates_for_reranking(
     requirement_rankings: list[list[dict]],
     source_rankings: list[list[dict]] | None = None,

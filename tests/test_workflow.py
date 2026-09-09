@@ -230,6 +230,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "evidence": [],
         "evidence_board": {},
         "retrieval_trace": [],
+        "recovery_trace": [],
         "retrieval_stages": {},
         "answer": "",
     }
@@ -262,6 +263,7 @@ def test_agent_state_contains_only_live_workflow_fields() -> None:
         "evidence",
         "evidence_board",
         "retrieval_trace",
+        "recovery_trace",
         "retrieval_stages",
         "answer",
     }

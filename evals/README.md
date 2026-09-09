@@ -56,6 +56,25 @@ Every trace includes:
             "top_k": 8,
         }
     ],
+    "recovery_actions": [
+        {
+            "round": 1,
+            "trigger": "manual_failure_validation",
+            "requirement_id": "R1",
+            "action": "search_within_paper",
+            "parameters": {"paper": "2401.15884.pdf", "query": "...", "top_k": 4},
+            "results": [
+                {
+                    "chunk_id": "...",
+                    "paper": "2401.15884.pdf",
+                    "page": 4,
+                    "candidate_rank": 1,
+                    "rerank_rank": 1,
+                    "rerank_score": 5.2,
+                }
+            ],
+        }
+    ],
     "retrieval_stages": {
         "retrieval": [{"paper": "1908.10084.pdf", "page": 1}, ...],
         "rerank": [{"paper": "1908.10084.pdf", "page": 1}, ...],

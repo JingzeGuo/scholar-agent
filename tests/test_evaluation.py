@@ -136,6 +136,7 @@ def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
                     "top_k": 6,
                 },
             ],
+            "recovery_trace": [{"action": "search_within_paper"}],
             "evidence": [{**sample_chunks[0], "id": "E1", "paper_id": "Self-RAG.pdf",
                           "title": None, "section": None, "supports": ["R1"],
                           "requirement_scores": {"R1": 2.0}}],
@@ -183,6 +184,9 @@ def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
             "retrieval_strategy": "hybrid",
             "top_k": 6,
         },
+    ]
+    assert records[0]["trace"]["recovery_actions"] == [
+        {"action": "search_within_paper"},
     ]
     assert records[1]["trace"]["retrieval_decisions"][0]["retrieval_strategy"] == "bm25"
     assert records[0]["trace"]["retrieval_stages"] == {

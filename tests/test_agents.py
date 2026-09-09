@@ -18,6 +18,7 @@ from scholar_agent.agents.researcher import (
     _build_evidence_board,
     _select_candidates_for_reranking,
     _select_evidence,
+    recovery_trace_entry,
     researcher_node,
 )
 from scholar_agent.agents.writer import (
@@ -413,6 +414,51 @@ def test_one_question_can_mix_all_retrieval_strategies(sample_chunks: list[dict]
             "top_k": 8,
         },
     ]
+
+
+def test_recovery_trace_keeps_candidate_and_rerank_provenance(
+    sample_chunks: list[dict],
+) -> None:
+    reranked = [
+        {**sample_chunks[1], "score": 4.5},
+        {**sample_chunks[0], "score": 2.0},
+    ]
+
+    trace = recovery_trace_entry(
+        "R1",
+        "search_within_paper",
+        "manual_failure_validation",
+        1,
+        {"paper": "CRAG.pdf", "query": "correction", "top_k": 4},
+        sample_chunks[:2],
+        reranked,
+    )
+
+    assert trace == {
+        "round": 1,
+        "trigger": "manual_failure_validation",
+        "requirement_id": "R1",
+        "action": "search_within_paper",
+        "parameters": {"paper": "CRAG.pdf", "query": "correction", "top_k": 4},
+        "results": [
+            {
+                "chunk_id": "self-1",
+                "paper": "Self-RAG.pdf",
+                "page": 1,
+                "candidate_rank": 1,
+                "rerank_rank": 2,
+                "rerank_score": 2.0,
+            },
+            {
+                "chunk_id": "crag-1",
+                "paper": "CRAG.pdf",
+                "page": 2,
+                "candidate_rank": 2,
+                "rerank_rank": 1,
+                "rerank_score": 4.5,
+            },
+        ],
+    }
 
 
 def test_requirement_aware_evidence_selection_still_reserves_each_requirement() -> None:
