@@ -49,6 +49,8 @@ VARIANT_LABELS = {
     "adaptive": "Adaptive Retrieval",
     "flat": "Flat Evidence",
     "blackboard": "Evidence Blackboard",
+    "baseline": "Blackboard Baseline",
+    "controller": "Evidence-Gap Controller",
 }
 RECALL_STAGES = {
     "retrieval": "Retrieval Recall",

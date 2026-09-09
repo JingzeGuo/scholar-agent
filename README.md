@@ -243,6 +243,8 @@ make quality
 The [Writer ablation guide](evals/WRITER_ABLATION.md) provides commands to compare
 flat evidence against the Requirement–Evidence Blackboard using identical frozen
 plans, passages and answer instructions, with resumable generation and blind review.
+The [Controller ablation guide](evals/CONTROLLER_ABLATION.md) runs the next paired
+experiment: the Blackboard baseline against one bounded, observation-driven recovery round.
 
 The blinded 50-question evaluation pipeline supports two main findings from
 separate experiments:
