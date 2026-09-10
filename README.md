@@ -7,9 +7,9 @@ checks whether each requirement has enough support, performs bounded recovery
 when evidence is missing, and writes an answer with validated physical-page
 citations.
 
-The project is designed around a simple principle: retrieval is not complete
-when relevant text is found; it is complete when the system can show that every
-part of the question has enough evidence to be answered safely.
+The project is designed around a simple principle: retrieval is not treated as
+complete when relevant text is merely found; the system explicitly assesses
+whether each requirement has sufficient evidence before generation.
 
 ## Architecture
 
@@ -147,8 +147,9 @@ produce an action. Recovery is limited to one round and at most two actions:
 
 - `search_within_paper` searches a paper already identified by the Researcher;
 - `expand_neighbors` inspects adjacent chunks around selected evidence;
-- `increase_depth` repeats a planned retrieval route at the maximum supported
-  depth.
+- `increase_depth` combines the original requirement with a new
+  Controller-generated query, raises `top_k` to `MAX_TOP_K`, and reruns the
+  requirement's full retrieval route.
 
 Actions use stable candidate-paper selectors and chunk IDs. Retrieved
 candidates still pass through reranking and evidence selection before they can
