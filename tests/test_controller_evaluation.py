@@ -155,7 +155,7 @@ def test_controller_experiment_freezes_observation_and_runs_one_round(
 
 
 def test_controller_experiment_parser_uses_full_benchmark() -> None:
-    args = experiment._parser().parse_args(["--run-id", "controller_e3_v2", "prepare"])
+    args = experiment._parser().parse_args(["--run-id", "controller_e3_v3", "prepare"])
     assert args.source_run == "adaptive_v2"
     assert args.source_variant == "adaptive"
     assert experiment.VARIANTS == ("baseline", "controller")

@@ -24,7 +24,7 @@ from scholar_agent.retrieval import RetrievalEngine
 from scholar_agent.workflow import initial_state
 
 VARIANTS = ("baseline", "controller")
-PIPELINE_VERSION = "evidence_gap_controller_e3_v2"
+PIPELINE_VERSION = "evidence_gap_controller_e3_v3"
 
 
 def prepare_inputs(

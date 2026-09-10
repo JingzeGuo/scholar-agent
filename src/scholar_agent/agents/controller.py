@@ -15,11 +15,15 @@ MAX_ACTIONS = 2
 
 def _rejection(raw: object, reason: str) -> dict:
     action = raw if isinstance(raw, dict) else {}
-    return {
+    rejection = {
         "requirement_id": action.get("requirement_id"),
         "action": action.get("action"),
         "reason": reason,
     }
+    for key in ("candidate_id", "paper", "chunk_id"):
+        if key in action:
+            rejection[key] = action[key]
+    return rejection
 
 
 def _controller_prompt(state: AgentState) -> str:
@@ -38,9 +42,9 @@ def _controller_prompt(state: AgentState) -> str:
                 f"{item['requirement_scores'][requirement_id]:.3f}\n{item['text']}",
             )
         papers = "\n".join(
-            f"- {item.get('title') or 'Unknown title'} ({item['paper']}), "
+            f"- [P{index}] {item.get('title') or 'Unknown title'} ({item['paper']}), "
             f"best_score={item['best_score']:.3f}, selected={item['selected']}"
-            for item in board.get("candidate_papers", [])
+            for index, item in enumerate(board.get("candidate_papers", []), start=1)
         )
         blocks.append(
             f"Requirement {requirement_id}: {requirement['description']}\n"
@@ -60,7 +64,8 @@ An empty list means the current evidence is sufficient or no useful bounded acti
 Use at most one action per requirement. Every action must contain a requirement_id, one action
 from {sorted(ACTIONS)}, a concise evidence-seeking query, and a brief reason.
 
-- search_within_paper: also provide a paper from that requirement's observed candidate papers.
+- search_within_paper: provide `"candidate_id": "P1"` by copying a displayed [P#] ID for that
+  requirement; do not return a title or filename.
 - expand_neighbors: copy the exact evidence chunk_id shown for that requirement.
 - increase_depth: use only when its current top_k is below {MAX_TOP_K}; Python fixes top_k to
   {MAX_TOP_K}.
@@ -115,11 +120,16 @@ def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], li
             "query": query.strip(),
         }
         if action == "search_within_paper":
-            paper = raw.get("paper")
-            if paper not in {item["paper"] for item in board.get("candidate_papers", [])}:
-                rejections.append(_rejection(raw, "unobserved_paper"))
+            candidates = {
+                f"P{index}": item["paper"]
+                for index, item in enumerate(board.get("candidate_papers", []), start=1)
+            }
+            candidate_id = raw.get("candidate_id")
+            if candidate_id not in candidates:
+                rejections.append(_rejection(raw, "unknown_candidate"))
                 continue
-            clean["paper"] = paper
+            clean["candidate_id"] = candidate_id
+            clean["paper"] = candidates[candidate_id]
         elif action == "expand_neighbors":
             chunk_id = raw.get("chunk_id")
             allowed_ids = {

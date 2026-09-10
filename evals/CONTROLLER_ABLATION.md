@@ -1,4 +1,4 @@
-# E3 v2 evidence-gap Controller ablation
+# E3 v3 evidence-gap Controller ablation
 
 This paired 50-question experiment tests whether an LLM Controller can use the first Researcher
 observation to choose a useful follow-up action. Both variants reuse the same saved Planner plan and
@@ -13,14 +13,14 @@ The Controller may choose at most one action per requirement and two actions per
 to the Writer. Gold pages, answer keys, previous answers, critical chunk IDs, and question-specific
 rules are never included in its prompt.
 
-E3 v2 changes only the action interface and its observability: selected evidence now exposes the
-exact `chunk_id` required by `expand_neighbors`, and rejected actions retain their action type and
-rejection reason. Controller policy, action bounds, tools, evidence limits, and Writer are unchanged.
+E3 v3 replaces the free-form paper selector with displayed `P1`/`P2` candidate IDs and retains
+rejected selector values. Controller policy, action bounds, tools, evidence limits, and Writer are
+unchanged.
 
 Prepare the frozen observations without making LLM calls:
 
 ```bash
-uv run python -m evals.evaluate_controller --run-id controller_e3_v2 prepare \
+uv run python -m evals.evaluate_controller --run-id controller_e3_v3 prepare \
   --source-run adaptive_v2 --source-variant adaptive
 ```
 
@@ -28,22 +28,22 @@ Generate the paired answers. This step needs the local retrieval indexes because
 run against the corpus:
 
 ```bash
-uv run python -m evals.evaluate_controller --run-id controller_e3_v2 run
+uv run python -m evals.evaluate_controller --run-id controller_e3_v3 run
 ```
 
 Generation is resumable and alternates variant order by question. Then prepare the blinded review
 materials:
 
 ```bash
-uv run python -m evals.evaluate_controller --run-id controller_e3_v2 prepare-review
-uv run python -m evals.evaluate_controller --run-id controller_e3_v2 extract-pages
+uv run python -m evals.evaluate_controller --run-id controller_e3_v3 prepare-review
+uv run python -m evals.evaluate_controller --run-id controller_e3_v3 extract-pages
 ```
 
-Fill `evals/runs/controller_e3_v2/review.csv` using the same binary requirement and citation rubric,
+Fill `evals/runs/controller_e3_v3/review.csv` using the same binary requirement and citation rubric,
 then score it:
 
 ```bash
-uv run python -m evals.evaluate_controller --run-id controller_e3_v2 score
+uv run python -m evals.evaluate_controller --run-id controller_e3_v3 score
 ```
 
 The summary reports Strict Success, Requirement Accuracy, Citation Support, stage recall, latency,

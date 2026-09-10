@@ -57,7 +57,7 @@ def test_controller_keeps_two_bounded_actions_for_distinct_requirements(sample_c
     payload = {"actions": [
         {
             "requirement_id": "R1", "action": "search_within_paper",
-            "paper": "Self-RAG.pdf", "query": "reflection tokens", "reason": "detail missing",
+            "candidate_id": "P1", "query": "reflection tokens", "reason": "detail missing",
         },
         {
             "requirement_id": "R1", "action": "expand_neighbors",
@@ -73,10 +73,27 @@ def test_controller_keeps_two_bounded_actions_for_distinct_requirements(sample_c
 
     assert [item["action"] for item in actions] == ["search_within_paper", "expand_neighbors"]
     assert [item["requirement_id"] for item in actions] == ["R1", "R2"]
+    assert actions[0]["paper"] == "Self-RAG.pdf"
     assert rejections == [{
         "requirement_id": "R1",
         "action": "expand_neighbors",
         "reason": "duplicate_requirement",
+        "chunk_id": "self-1",
+    }]
+
+
+def test_controller_rejection_retains_invalid_selector(sample_chunks):
+    state = _controller_state(sample_chunks)
+
+    actions, rejections = sanitize_actions({"actions": [{
+        "requirement_id": "R1", "action": "search_within_paper",
+        "candidate_id": "P9", "query": "reflection tokens",
+    }]}, state)  # type: ignore[arg-type]
+
+    assert actions == []
+    assert rejections == [{
+        "requirement_id": "R1", "action": "search_within_paper",
+        "reason": "unknown_candidate", "candidate_id": "P9",
     }]
 
 
@@ -92,5 +109,7 @@ def test_controller_prompt_contains_observation_and_no_answer_labels(sample_chun
     assert "Self-RAG uses adaptive retrieval" in llm.prompt
     assert "chunk_id=self-1" in llm.prompt
     assert "Observed candidate papers" in llm.prompt
+    assert '[P1] Self-RAG' in llm.prompt
+    assert '`"candidate_id": "P1"`' in llm.prompt
     assert "gold_pages" not in llm.prompt
     assert "answer_key" not in llm.prompt
