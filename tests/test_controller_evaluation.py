@@ -30,12 +30,16 @@ class FakeLLM:
 
     def complete_json(self, prompt: str) -> dict:
         self.controller_prompts.append(prompt)
-        return {"actions": [{
+        return {"assessments": [{
             "requirement_id": "R1",
-            "action": "expand_neighbors",
-            "chunk_id": "self-1",
-            "query": "missing adjacent mechanism",
-            "reason": "The mechanism may continue in the adjacent passage.",
+            "status": "missing",
+            "covered": ["initial mechanism"],
+            "missing": ["adjacent mechanism"],
+            "action": {
+                "tool": "expand_neighbors",
+                "chunk_id": "self-1",
+                "query": "missing adjacent mechanism",
+            },
         }]}
 
     def complete(self, prompt: str) -> str:
@@ -150,12 +154,13 @@ def test_controller_experiment_freezes_observation_and_runs_one_round(
     assert diagnostics["retrieval_recovery_rate"] == 1
     assert diagnostics["rejected_action_rate"] == 0
     assert diagnostics["useful_action_rate"] == 1
+    assert diagnostics["assessment_status_distribution"] == {"missing": 1}
     assert diagnostics["answer_requirement_repairs"] == ["Q001/G1"]
     assert "Retrieval Recovery Rate" in note
 
 
 def test_controller_experiment_parser_uses_full_benchmark() -> None:
-    args = experiment._parser().parse_args(["--run-id", "controller_e3_v3", "prepare"])
-    assert args.source_run == "adaptive_v2"
+    args = experiment._parser().parse_args(["--run-id", "controller_e3_v5", "prepare"])
+    assert args.source_run == "adaptive_v3_benchmark_aligned"
     assert args.source_variant == "adaptive"
     assert experiment.VARIANTS == ("baseline", "controller")

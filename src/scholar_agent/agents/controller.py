@@ -10,19 +10,22 @@ from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
 ACTIONS = frozenset({"search_within_paper", "expand_neighbors", "increase_depth"})
+ASSESSMENT_STATUSES = frozenset({"sufficient", "missing", "unresolved"})
 MAX_ACTIONS = 2
 
 
 def _rejection(raw: object, reason: str) -> dict:
     action = raw if isinstance(raw, dict) else {}
+    nested = action.get("action")
+    selector = nested if isinstance(nested, dict) else action
     rejection = {
         "requirement_id": action.get("requirement_id"),
-        "action": action.get("action"),
+        "action": nested.get("tool") if isinstance(nested, dict) else nested,
         "reason": reason,
     }
     for key in ("candidate_id", "paper", "chunk_id"):
-        if key in action:
-            rejection[key] = action[key]
+        if key in selector:
+            rejection[key] = selector[key]
     return rejection
 
 
@@ -59,20 +62,27 @@ def _controller_prompt(state: AgentState) -> str:
 Inspect the first retrieval observation and decide whether one bounded follow-up action could
 recover evidence missing from a requirement. Do not answer the question.
 
-Return one JSON object with exactly one field, "actions", containing zero to {MAX_ACTIONS} objects.
-An empty list means the current evidence is sufficient or no useful bounded action is available.
-Use at most one action per requirement. Every action must contain a requirement_id, one action
-from {sorted(ACTIONS)}, a concise evidence-seeking query, and a brief reason.
+Return one JSON object with exactly one field, "assessments", containing one object per requirement.
+Each assessment must contain exactly: requirement_id, status, covered, missing, and action.
+"covered" and "missing" are lists of concise, distinct aspects from the requirement. Use these statuses:
+- sufficient: all explicitly requested aspects have direct support; missing is empty and action is null.
+- missing: support is missing and one bounded follow-up may help; missing and action are required.
+- unresolved: support is missing but no displayed bounded action can target it; action is null.
 
-- search_within_paper: provide `"candidate_id": "P1"` by copying a displayed [P#] ID for that
+Across all assessments, use at most {MAX_ACTIONS} non-null actions and at most one per requirement.
+Each action contains a tool from {sorted(ACTIONS)} and a concise evidence-seeking query.
+
+- search_within_paper: provide `"tool": "search_within_paper"` and `"candidate_id": "P1"` by
+  copying a displayed [P#] ID for that
   requirement; do not return a title or filename.
-- expand_neighbors: copy the exact evidence chunk_id shown for that requirement.
-- increase_depth: use only when its current top_k is below {MAX_TOP_K}; Python fixes top_k to
-  {MAX_TOP_K}.
+- expand_neighbors: provide `"tool": "expand_neighbors"` and copy the exact evidence chunk_id
+  shown for that requirement.
+- increase_depth: provide `"tool": "increase_depth"`; use it only when the current top_k is below
+  {MAX_TOP_K}. Python fixes top_k to {MAX_TOP_K}.
 
 Base decisions only on the question, requirements, selected passages, scores, and candidate-paper
-metadata below. A reason is for debugging only. Generate search terms that seek missing evidence;
-do not state an answer or assume that a relevance score proves support.
+metadata below. Generate search terms that seek missing evidence; do not state an answer or assume
+that a relevance score proves support.
 
 Question: {state['question']}
 
@@ -153,19 +163,95 @@ def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], li
     return actions, rejections
 
 
+def sanitize_assessments(
+    payload: object,
+    state: AgentState,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Retain per-requirement coverage decisions and extract valid recovery actions."""
+    raw_assessments = payload.get("assessments") if isinstance(payload, dict) else None
+    if not isinstance(raw_assessments, list):
+        return [], [], [_rejection(payload, "invalid_assessments_payload")]
+
+    requirement_order = [item["id"] for item in state["plan"]["requirements"]]
+    requirement_ids = set(requirement_order)
+    assessments = []
+    action_candidates = []
+    rejections = []
+    seen = set()
+    for raw in raw_assessments:
+        if not isinstance(raw, dict):
+            rejections.append(_rejection(raw, "invalid_assessment"))
+            continue
+        requirement_id = raw.get("requirement_id")
+        status = raw.get("status")
+        covered = raw.get("covered")
+        missing = raw.get("missing")
+        if requirement_id not in requirement_ids:
+            rejections.append(_rejection(raw, "unknown_requirement"))
+            continue
+        if requirement_id in seen:
+            rejections.append(_rejection(raw, "duplicate_assessment"))
+            continue
+        if status not in ASSESSMENT_STATUSES:
+            rejections.append(_rejection(raw, "unknown_status"))
+            continue
+        if not all(
+            isinstance(value, list)
+            and all(isinstance(item, str) and item.strip() for item in value)
+            for value in (covered, missing)
+        ):
+            rejections.append(_rejection(raw, "invalid_aspects"))
+            continue
+
+        assessment = {
+            "requirement_id": requirement_id,
+            "status": status,
+            "covered": [item.strip() for item in covered],
+            "missing": [item.strip() for item in missing],
+            "action": None,
+        }
+        assessments.append(assessment)
+        seen.add(requirement_id)
+        raw_action = raw.get("action")
+        if status == "missing" and isinstance(raw_action, dict):
+            action_candidates.append({
+                **raw_action,
+                "requirement_id": requirement_id,
+                "action": raw_action.get("tool"),
+            })
+        elif status == "missing":
+            rejections.append(_rejection(raw, "missing_action"))
+        elif raw_action is not None:
+            rejections.append(_rejection(raw, "unexpected_action"))
+
+    rejections.extend(
+        _rejection({"requirement_id": requirement_id}, "missing_assessment")
+        for requirement_id in requirement_order
+        if requirement_id not in seen
+    )
+    actions, action_rejections = sanitize_actions({"actions": action_candidates}, state)
+    rejections.extend(action_rejections)
+    actions_by_requirement = {item["requirement_id"]: item for item in actions}
+    for assessment in assessments:
+        assessment["action"] = actions_by_requirement.get(assessment["requirement_id"])
+    return assessments, actions, rejections
+
+
 def controller_node(state: AgentState, llm: LLMClient) -> dict:
     """Choose zero to two valid actions from one retrieval observation."""
     try:
         payload = llm.complete_json(_controller_prompt(state))
     except ValueError:
         LOGGER.warning("[controller] invalid JSON; continuing without recovery")
+        assessments = []
         actions = []
         rejections = [{"requirement_id": None, "action": None, "reason": "invalid_json"}]
     else:
-        actions, rejections = sanitize_actions(payload, state)
+        assessments, actions, rejections = sanitize_assessments(payload, state)
     LOGGER.info("[controller] actions=%d rejected=%d", len(actions), len(rejections))
     return {
         "controller_trace": {
+            "assessments": assessments,
             "actions": actions,
             "rejected_actions": len(rejections),
             "rejections": rejections,

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from scholar_agent.agents.controller import controller_node, sanitize_actions
+from scholar_agent.agents.controller import (
+    controller_node,
+    sanitize_actions,
+    sanitize_assessments,
+)
 from scholar_agent.workflow import initial_state
 
 
@@ -85,12 +89,24 @@ def test_controller_keeps_two_bounded_actions_for_distinct_requirements(sample_c
 def test_controller_rejection_retains_invalid_selector(sample_chunks):
     state = _controller_state(sample_chunks)
 
-    actions, rejections = sanitize_actions({"actions": [{
-        "requirement_id": "R1", "action": "search_within_paper",
-        "candidate_id": "P9", "query": "reflection tokens",
-    }]}, state)  # type: ignore[arg-type]
+    assessments, actions, rejections = sanitize_assessments({"assessments": [
+        {
+            "requirement_id": "R1", "status": "missing", "covered": [],
+            "missing": ["reflection-token details"],
+            "action": {
+                "tool": "search_within_paper", "candidate_id": "P9",
+                "query": "reflection tokens",
+            },
+        },
+        {
+            "requirement_id": "R2", "status": "sufficient",
+            "covered": ["CRAG mechanism"], "missing": [], "action": None,
+        },
+    ]}, state)  # type: ignore[arg-type]
 
     assert actions == []
+    assert assessments[0]["missing"] == ["reflection-token details"]
+    assert assessments[0]["action"] is None
     assert rejections == [{
         "requirement_id": "R1", "action": "search_within_paper",
         "reason": "unknown_candidate", "candidate_id": "P9",
@@ -99,17 +115,41 @@ def test_controller_rejection_retains_invalid_selector(sample_chunks):
 
 def test_controller_prompt_contains_observation_and_no_answer_labels(sample_chunks):
     state = _controller_state(sample_chunks)
-    llm = StubLLM({"actions": []})
+    llm = StubLLM({"assessments": [
+        {
+            "requirement_id": "R1", "status": "sufficient",
+            "covered": ["Self-RAG mechanism"], "missing": [], "action": None,
+        },
+        {
+            "requirement_id": "R2", "status": "unresolved", "covered": [],
+            "missing": ["CRAG correction details"], "action": None,
+        },
+    ]})
 
     result = controller_node(state, llm)  # type: ignore[arg-type]
 
     assert result == {
-        "controller_trace": {"actions": [], "rejected_actions": 0, "rejections": []},
+        "controller_trace": {
+            "assessments": [
+                {
+                    "requirement_id": "R1", "status": "sufficient",
+                    "covered": ["Self-RAG mechanism"], "missing": [], "action": None,
+                },
+                {
+                    "requirement_id": "R2", "status": "unresolved", "covered": [],
+                    "missing": ["CRAG correction details"], "action": None,
+                },
+            ],
+            "actions": [], "rejected_actions": 0, "rejections": [],
+        },
     }
     assert "Self-RAG uses adaptive retrieval" in llm.prompt
     assert "chunk_id=self-1" in llm.prompt
     assert "Observed candidate papers" in llm.prompt
     assert '[P1] Self-RAG' in llm.prompt
     assert '`"candidate_id": "P1"`' in llm.prompt
+    assert '"assessments"' in llm.prompt
+    assert "sufficient" in llm.prompt
+    assert "unresolved" in llm.prompt
     assert "gold_pages" not in llm.prompt
     assert "answer_key" not in llm.prompt

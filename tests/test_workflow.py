@@ -74,12 +74,16 @@ class ControllerLLM(FakeLLM):
     def complete_json(self, prompt: str) -> dict:
         self.json_calls += 1
         return {
-            "actions": [{
+            "assessments": [{
                 "requirement_id": "R1",
-                "action": "expand_neighbors",
-                "chunk_id": "self-1",
-                "query": "Self-RAG and adjacent correction evidence",
-                "reason": "The selected passage may need adjacent context.",
+                "status": "missing",
+                "covered": ["Self-RAG retrieval"],
+                "missing": ["adjacent correction evidence"],
+                "action": {
+                    "tool": "expand_neighbors",
+                    "chunk_id": "self-1",
+                    "query": "Self-RAG and adjacent correction evidence",
+                },
             }],
         }
 
@@ -240,6 +244,7 @@ def test_controller_workflow_executes_one_recovery_round(
 
     assert result["recovery_mode"] == "controller"
     assert llm.json_calls == llm.complete_calls == 1
+    assert result["controller_trace"]["assessments"][0]["status"] == "missing"
     assert result["controller_trace"]["actions"][0]["action"] == "expand_neighbors"
     assert len(result["recovery_trace"]) == 1
     assert result["recovery_trace"][0]["results"][1]["added"] is True
@@ -298,7 +303,12 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "evidence": [],
         "evidence_board": {},
         "retrieval_trace": [],
-        "controller_trace": {"actions": [], "rejected_actions": 0, "rejections": []},
+        "controller_trace": {
+            "assessments": [],
+            "actions": [],
+            "rejected_actions": 0,
+            "rejections": [],
+        },
         "recovery_trace": [],
         "retrieval_stages": {},
         "answer": "",

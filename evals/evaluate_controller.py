@@ -1,4 +1,4 @@
-"""Paired E3 ablation of a one-shot evidence-gap Controller."""
+"""Paired E3 ablation of a one-shot requirement-assessment Controller."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from scholar_agent.retrieval import RetrievalEngine
 from scholar_agent.workflow import initial_state
 
 VARIANTS = ("baseline", "controller")
-PIPELINE_VERSION = "evidence_gap_controller_e3_v3"
+PIPELINE_VERSION = "requirement_assessment_controller_e3_v5"
 
 
 def prepare_inputs(
@@ -221,6 +221,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
     rejected_actions = 0
     rejected_types: Counter = Counter()
     rejection_reasons: Counter = Counter()
+    assessment_statuses: Counter = Counter()
     triggered_questions = set()
     for question in questions:
         question_id = question["id"]
@@ -230,6 +231,10 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
         recovery_traces = treatment["trace"].get("recovery_actions", [])
         actions.extend(item["action"] for item in controller_actions)
         controller_trace = treatment["trace"]["controller"]
+        assessment_statuses.update(
+            item.get("status") or "unknown"
+            for item in controller_trace.get("assessments", [])
+        )
         rejected_actions += int(controller_trace.get("rejected_actions", 0))
         rejected_types.update(item.get("action") or "unknown" for item in controller_trace.get("rejections", []))
         rejection_reasons.update(item["reason"] for item in controller_trace.get("rejections", []))
@@ -281,6 +286,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
         ),
         "rejected_action_distribution": dict(sorted(rejected_types.items())),
         "rejection_reason_distribution": dict(sorted(rejection_reasons.items())),
+        "assessment_status_distribution": dict(sorted(assessment_statuses.items())),
         "action_distribution": action_distribution,
         "useful_action_rate": useful_actions / len(actions) if actions else None,
         "initially_missed_gold_pages": missed_pages,
@@ -302,6 +308,9 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
     reason_distribution = ", ".join(
         f"{key}: {value}" for key, value in rejection_reasons.items()
     ) or "none"
+    status_distribution = ", ".join(
+        f"{key}: {value}" for key, value in assessment_statuses.items()
+    ) or "none"
     return f"""\
 
 ## Controller diagnostics
@@ -317,6 +326,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
 | Requirement repairs / regressions | {len(repairs)} / {len(regressions)} |
 
 Action distribution: {distribution}.  
+Assessment status distribution: {status_distribution}.
 Rejected action distribution: {rejected_distribution}.
 Rejection reasons: {reason_distribution}.
 Repairs: {', '.join(repairs) or 'none'}.  
@@ -333,7 +343,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", required=True)
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("prepare", help="Freeze all initial observations; no LLM calls")
-    prepare.add_argument("--source-run", default="adaptive_v2")
+    prepare.add_argument("--source-run", default="adaptive_v3_benchmark_aligned")
     prepare.add_argument("--source-variant", choices=evaluation.VARIANTS, default="adaptive")
     commands.add_parser("run", help="Generate the paired baseline and Controller answers")
     review = commands.add_parser("prepare-review", help="Create the blinded review CSV")
