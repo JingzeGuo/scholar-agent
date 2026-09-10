@@ -313,7 +313,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
     assert state == {
         "question": "question",
         "retrieval_mode": "adaptive",
-        "recovery_mode": "none",
+        "recovery_mode": "controller",
         "plan": {"requirements": []},
         "evidence": [],
         "evidence_board": {},
@@ -328,6 +328,12 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "retrieval_stages": {},
         "answer": "",
     }
+
+
+def test_initial_state_can_explicitly_disable_controller() -> None:
+    state = initial_state("question", recovery_mode="none")
+
+    assert state["recovery_mode"] == "none"
 
 
 def test_workflow_requires_an_llm() -> None:

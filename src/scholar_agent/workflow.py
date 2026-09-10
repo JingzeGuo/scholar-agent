@@ -69,7 +69,7 @@ def build_workflow(
 def initial_state(
     question: str,
     retrieval_mode: str = "adaptive",
-    recovery_mode: str = "none",
+    recovery_mode: str = "controller",
 ) -> AgentState:
     if retrieval_mode not in {"fixed_hybrid", "adaptive"}:
         raise ValueError(f"Unknown retrieval mode: {retrieval_mode}")

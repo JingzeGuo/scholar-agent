@@ -503,7 +503,7 @@ def run_evaluation(
             planner_started = time.perf_counter()
             try:
                 shared_plan = planner_runner(
-                    initial_state(question["question"]),
+                    initial_state(question["question"], recovery_mode="none"),
                     llm,
                 )["plan"]
             except Exception as exc:

@@ -40,7 +40,7 @@ def prepare_inputs(
     samples = []
     for question in questions:
         saved = source[(question["id"], source_variant)]
-        state = initial_state(question["question"], source_variant)
+        state = initial_state(question["question"], source_variant, "none")
         state["plan"] = deepcopy(saved["trace"]["plan"])
         state.update(researcher_runner(state, engine, settings))
         current_refs = [(item["chunk_id"], item["paper"], item["page"]) for item in state["evidence"]]

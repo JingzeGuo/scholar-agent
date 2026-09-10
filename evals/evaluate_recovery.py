@@ -201,7 +201,7 @@ def prepare_inputs(
     for question in questions:
         spec = CASE_SPECS[question["id"]]
         saved = source[(question["id"], source_variant)]
-        baseline = initial_state(question["question"], source_variant)
+        baseline = initial_state(question["question"], source_variant, "none")
         baseline["plan"] = deepcopy(saved["trace"]["plan"])
         baseline.update(researcher_runner(baseline, engine, settings))
         current_refs = [item["chunk_id"] for item in baseline["evidence"]]
