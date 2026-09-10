@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from scholar_agent.agents.controller import (
     controller_node,
-    sanitize_actions,
     sanitize_assessments,
 )
 from scholar_agent.workflow import initial_state
@@ -58,32 +57,32 @@ def _controller_state(sample_chunks: list[dict]) -> dict:
 
 def test_controller_keeps_two_bounded_actions_for_distinct_requirements(sample_chunks):
     state = _controller_state(sample_chunks)
-    payload = {"actions": [
+    payload = {"assessments": [
         {
-            "requirement_id": "R1", "action": "search_within_paper",
-            "candidate_id": "P1", "query": "reflection tokens", "reason": "detail missing",
+            "requirement_id": "R1", "status": "missing", "covered": [],
+            "missing": ["reflection-token details"],
+            "action": {
+                "tool": "search_within_paper", "candidate_id": "P1",
+                "query": "reflection tokens",
+            },
         },
         {
-            "requirement_id": "R1", "action": "expand_neighbors",
-            "chunk_id": "self-1", "query": "duplicate requirement",
-        },
-        {
-            "requirement_id": "R2", "action": "expand_neighbors",
-            "chunk_id": "crag-1", "query": "correction details",
+            "requirement_id": "R2", "status": "missing", "covered": [],
+            "missing": ["correction details"],
+            "action": {
+                "tool": "expand_neighbors", "chunk_id": "crag-1",
+                "query": "correction details",
+            },
         },
     ]}
 
-    actions, rejections = sanitize_actions(payload, state)  # type: ignore[arg-type]
+    assessments, actions, rejections = sanitize_assessments(payload, state)  # type: ignore[arg-type]
 
     assert [item["action"] for item in actions] == ["search_within_paper", "expand_neighbors"]
     assert [item["requirement_id"] for item in actions] == ["R1", "R2"]
     assert actions[0]["paper"] == "Self-RAG.pdf"
-    assert rejections == [{
-        "requirement_id": "R1",
-        "action": "expand_neighbors",
-        "reason": "duplicate_requirement",
-        "chunk_id": "self-1",
-    }]
+    assert [item["action"] for item in assessments] == actions
+    assert rejections == []
 
 
 def test_controller_rejection_retains_invalid_selector(sample_chunks):

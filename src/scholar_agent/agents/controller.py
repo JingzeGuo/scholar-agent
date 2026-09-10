@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated, Literal, Self
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 
 from scholar_agent.agents.planner import MAX_TOP_K
 from scholar_agent.llm import LLMClient
@@ -10,8 +20,57 @@ from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
 ACTIONS = frozenset({"search_within_paper", "expand_neighbors", "increase_depth"})
-ASSESSMENT_STATUSES = frozenset({"sufficient", "missing", "unresolved"})
 MAX_ACTIONS = 2
+NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class _ControllerModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SearchWithinPaper(_ControllerModel):
+    tool: Literal["search_within_paper"]
+    candidate_id: NonEmptyString
+    query: NonEmptyString
+
+
+class ExpandNeighbors(_ControllerModel):
+    tool: Literal["expand_neighbors"]
+    chunk_id: NonEmptyString
+    query: NonEmptyString
+
+
+class IncreaseDepth(_ControllerModel):
+    tool: Literal["increase_depth"]
+    query: NonEmptyString
+
+
+RecoveryAction = Annotated[
+    SearchWithinPaper | ExpandNeighbors | IncreaseDepth,
+    Field(discriminator="tool"),
+]
+
+
+class RequirementAssessment(_ControllerModel):
+    requirement_id: NonEmptyString
+    status: Literal["sufficient", "missing", "unresolved"]
+    covered: list[NonEmptyString]
+    missing: list[NonEmptyString]
+    action: RecoveryAction | None
+
+    @model_validator(mode="after")
+    def validate_status(self) -> Self:
+        if self.status == "sufficient" and (self.missing or self.action):
+            raise ValueError("sufficient requirements cannot have missing aspects or actions")
+        if self.status == "missing" and (not self.missing or not self.action):
+            raise ValueError("missing requirements need missing aspects and an action")
+        if self.status == "unresolved" and (not self.missing or self.action):
+            raise ValueError("unresolved requirements need missing aspects and no action")
+        return self
+
+
+class ControllerPayload(_ControllerModel):
+    assessments: list[object]
 
 
 def _rejection(raw: object, reason: str) -> dict:
@@ -84,83 +143,50 @@ Base decisions only on the question, requirements, selected passages, scores, an
 metadata below. Generate search terms that seek missing evidence; do not state an answer or assume
 that a relevance score proves support.
 
-Question: {state['question']}
+Question: {state["question"]}
 
 {chr(10).join(blocks)}
 """
 
 
-def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], list[dict]]:
-    raw_actions = payload.get("actions") if isinstance(payload, dict) else None
-    if not isinstance(raw_actions, list):
-        return [], [_rejection(payload, "invalid_actions_payload")]
+def _resolve_action(
+    requirement_id: str,
+    action: RecoveryAction,
+    state: AgentState,
+) -> tuple[dict | None, dict | None]:
+    """Resolve one schema-valid action against the observed state."""
+    selector = action.model_dump()
+    raw = {"requirement_id": requirement_id, "action": dict(selector)}
+    clean = {
+        "requirement_id": requirement_id,
+        "action": action.tool,
+        "query": action.query,
+    }
+    board = state["evidence_board"][requirement_id]
 
-    requirements = {item["id"]: item for item in state["plan"]["requirements"]}
-    actions = []
-    used_requirements = set()
-    rejections = []
-    for raw in raw_actions:
-        if not isinstance(raw, dict):
-            rejections.append(_rejection(raw, "invalid_action_object"))
-            continue
-        requirement_id = raw.get("requirement_id")
-        action = raw.get("action")
-        query = raw.get("query")
-
-        if len(actions) >= MAX_ACTIONS:
-            rejections.append(_rejection(raw, "action_limit"))
-            continue
-        if requirement_id not in requirements:
-            rejections.append(_rejection(raw, "unknown_requirement"))
-            continue
-        if requirement_id in used_requirements:
-            rejections.append(_rejection(raw, "duplicate_requirement"))
-            continue
-        if action not in ACTIONS:
-            rejections.append(_rejection(raw, "unknown_action"))
-            continue
-        if not isinstance(query, str) or not query.strip():
-            rejections.append(_rejection(raw, "invalid_query"))
-            continue
-
-        board = state["evidence_board"][requirement_id]
-        clean = {
-            "requirement_id": requirement_id,
-            "action": action,
-            "query": query.strip(),
+    if clean["action"] == "search_within_paper":
+        candidates = {
+            f"P{index}": item["paper"]
+            for index, item in enumerate(board.get("candidate_papers", []), start=1)
         }
-        if action == "search_within_paper":
-            candidates = {
-                f"P{index}": item["paper"]
-                for index, item in enumerate(board.get("candidate_papers", []), start=1)
-            }
-            candidate_id = raw.get("candidate_id")
-            if candidate_id not in candidates:
-                rejections.append(_rejection(raw, "unknown_candidate"))
-                continue
-            clean["candidate_id"] = candidate_id
-            clean["paper"] = candidates[candidate_id]
-        elif action == "expand_neighbors":
-            chunk_id = raw.get("chunk_id")
-            allowed_ids = {
-                item["chunk_id"]
-                for item in state["evidence"]
-                if item["id"] in board["evidence_ids"]
-            }
-            if chunk_id not in allowed_ids:
-                rejections.append(_rejection(raw, "unlinked_chunk"))
-                continue
-            clean["chunk_id"] = chunk_id
-        elif requirements[requirement_id]["top_k"] >= MAX_TOP_K:
-            rejections.append(_rejection(raw, "depth_at_max"))
-            continue
-
-        reason = raw.get("reason")
-        if isinstance(reason, str) and reason.strip():
-            clean["reason"] = reason.strip()
-        actions.append(clean)
-        used_requirements.add(requirement_id)
-    return actions, rejections
+        candidate_id = selector["candidate_id"]
+        if candidate_id not in candidates:
+            return None, _rejection(raw, "unknown_candidate")
+        clean.update(candidate_id=candidate_id, paper=candidates[candidate_id])
+    elif clean["action"] == "expand_neighbors":
+        allowed_ids = {
+            item["chunk_id"] for item in state["evidence"] if item["id"] in board["evidence_ids"]
+        }
+        if selector["chunk_id"] not in allowed_ids:
+            return None, _rejection(raw, "unlinked_chunk")
+        clean["chunk_id"] = selector["chunk_id"]
+    else:
+        requirement = next(
+            item for item in state["plan"]["requirements"] if item["id"] == requirement_id
+        )
+        if requirement["top_k"] >= MAX_TOP_K:
+            return None, _rejection(raw, "depth_at_max")
+    return clean, None
 
 
 def sanitize_assessments(
@@ -168,72 +194,51 @@ def sanitize_assessments(
     state: AgentState,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Retain per-requirement coverage decisions and extract valid recovery actions."""
-    raw_assessments = payload.get("assessments") if isinstance(payload, dict) else None
-    if not isinstance(raw_assessments, list):
+    try:
+        raw_assessments = ControllerPayload.model_validate(payload).assessments
+    except ValidationError:
         return [], [], [_rejection(payload, "invalid_assessments_payload")]
 
     requirement_order = [item["id"] for item in state["plan"]["requirements"]]
     requirement_ids = set(requirement_order)
     assessments = []
-    action_candidates = []
+    actions = []
     rejections = []
     seen = set()
     for raw in raw_assessments:
-        if not isinstance(raw, dict):
+        try:
+            parsed = RequirementAssessment.model_validate(raw)
+        except ValidationError:
             rejections.append(_rejection(raw, "invalid_assessment"))
             continue
-        requirement_id = raw.get("requirement_id")
-        status = raw.get("status")
-        covered = raw.get("covered")
-        missing = raw.get("missing")
+        requirement_id = parsed.requirement_id
         if requirement_id not in requirement_ids:
             rejections.append(_rejection(raw, "unknown_requirement"))
             continue
         if requirement_id in seen:
             rejections.append(_rejection(raw, "duplicate_assessment"))
             continue
-        if status not in ASSESSMENT_STATUSES:
-            rejections.append(_rejection(raw, "unknown_status"))
-            continue
-        if not all(
-            isinstance(value, list)
-            and all(isinstance(item, str) and item.strip() for item in value)
-            for value in (covered, missing)
-        ):
-            rejections.append(_rejection(raw, "invalid_aspects"))
-            continue
-
-        assessment = {
-            "requirement_id": requirement_id,
-            "status": status,
-            "covered": [item.strip() for item in covered],
-            "missing": [item.strip() for item in missing],
-            "action": None,
-        }
+        assessment = parsed.model_dump(exclude={"action"})
+        assessment["action"] = None
         assessments.append(assessment)
         seen.add(requirement_id)
-        raw_action = raw.get("action")
-        if status == "missing" and isinstance(raw_action, dict):
-            action_candidates.append({
-                **raw_action,
-                "requirement_id": requirement_id,
-                "action": raw_action.get("tool"),
-            })
-        elif status == "missing":
-            rejections.append(_rejection(raw, "missing_action"))
-        elif raw_action is not None:
-            rejections.append(_rejection(raw, "unexpected_action"))
+        if not parsed.action:
+            continue
+        if len(actions) >= MAX_ACTIONS:
+            rejections.append(_rejection(raw, "action_limit"))
+            continue
+        action, rejection = _resolve_action(requirement_id, parsed.action, state)
+        if rejection:
+            rejections.append(rejection)
+        else:
+            assessment["action"] = action
+            actions.append(action)
 
     rejections.extend(
         _rejection({"requirement_id": requirement_id}, "missing_assessment")
         for requirement_id in requirement_order
         if requirement_id not in seen
     )
-    actions, action_rejections = sanitize_actions({"actions": action_candidates}, state)
-    rejections.extend(action_rejections)
-    actions_by_requirement = {item["requirement_id"]: item for item in actions}
-    for assessment in assessments:
-        assessment["action"] = actions_by_requirement.get(assessment["requirement_id"])
     return assessments, actions, rejections
 
 

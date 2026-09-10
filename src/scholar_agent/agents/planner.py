@@ -4,6 +4,16 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Annotated, Literal
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+)
 
 from scholar_agent.llm import LLMClient
 from scholar_agent.models import AgentState
@@ -16,16 +26,11 @@ RETRIEVAL_STRATEGIES = frozenset({"bm25", "dense", "hybrid"})
 MIN_TOP_K = 4
 MAX_TOP_K = 12
 DEFAULT_TOP_K = 8
+NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-def _unique_strings(values: object, limit: int) -> list[str]:
-    if not isinstance(values, list):
-        raise ValueError("Expected a list")
-    result: list[str] = []
-    for value in values:
-        if isinstance(value, str) and value.strip() and value.strip() not in result:
-            result.append(value.strip())
-    return result[:limit]
+def _unique_strings(values: list[str], limit: int) -> list[str]:
+    return list(dict.fromkeys(values))[:limit]
 
 
 def target_matches(target: str, text: str) -> bool:
@@ -51,7 +56,7 @@ def evidence_matches_target(target: str, item: dict) -> bool:
     )
 
 
-def _explicit_targets(values: object, question: str) -> list[str]:
+def _explicit_targets(values: list[str], question: str) -> list[str]:
     targets: list[str] = []
     for value in _unique_strings(values, MAX_TARGETS_PER_REQUIREMENT):
         aliases = re.findall(r"\(([A-Z][A-Z0-9-]{1,9})\)", value)
@@ -94,35 +99,56 @@ def sanitize_top_k(value: object) -> int:
     return min(MAX_TOP_K, max(MIN_TOP_K, value))
 
 
+class _PlannerModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlannedRequirement(_PlannerModel):
+    description: NonEmptyString
+    targets: list[NonEmptyString] = Field(max_length=MAX_TARGETS_PER_REQUIREMENT)
+    query: NonEmptyString | None = None
+    retrieval_strategy: Literal["bm25", "dense", "hybrid"] = "hybrid"
+    top_k: int = Field(default=DEFAULT_TOP_K, ge=MIN_TOP_K, le=MAX_TOP_K)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def empty_query_uses_description(cls, value: object) -> object:
+        return value if isinstance(value, str) and value.strip() else None
+
+    @field_validator("retrieval_strategy", mode="before")
+    @classmethod
+    def normalize_strategy(cls, value: object) -> str:
+        return sanitize_retrieval_strategy(value)
+
+    @field_validator("top_k", mode="before")
+    @classmethod
+    def bound_top_k(cls, value: object) -> int:
+        return sanitize_top_k(value)
+
+
+class PlannerPayload(_PlannerModel):
+    requirements: list[object]
+
+
 def _requirements(
-    values: object,
+    values: list[object],
     question: str,
     limit: int = MAX_REQUIREMENTS,
 ) -> list[dict]:
-    if not isinstance(values, list):
-        raise ValueError("Expected a list")
-
     requirements: list[dict] = []
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for value in values:
-        if not isinstance(value, dict):
-            continue
-        description = value.get("description")
-        query = value.get("query")
-        raw_targets = value.get("targets")
-        if not isinstance(description, str) or not description.strip():
-            continue
-        if not isinstance(raw_targets, list):
-            continue
-        if any(not isinstance(target, str) or not target.strip() for target in raw_targets):
+        try:
+            parsed = PlannedRequirement.model_validate(value)
+        except ValidationError:
             continue
 
-        supplied_targets = _unique_strings(raw_targets, MAX_TARGETS_PER_REQUIREMENT)
-        targets = _explicit_targets(raw_targets, question)
+        supplied_targets = _unique_strings(parsed.targets, MAX_TARGETS_PER_REQUIREMENT)
+        targets = _explicit_targets(parsed.targets, question)
         if len(targets) != len(supplied_targets):
             continue
 
-        description = description.strip()
+        description = parsed.description
         identity = (description.casefold(), tuple(target.casefold() for target in targets))
         if identity in seen:
             continue
@@ -132,13 +158,9 @@ def _requirements(
                 "id": f"R{len(requirements) + 1}",
                 "description": description,
                 "targets": targets,
-                "query": query.strip()
-                if isinstance(query, str) and query.strip()
-                else description,
-                "retrieval_strategy": sanitize_retrieval_strategy(
-                    value.get("retrieval_strategy"),
-                ),
-                "top_k": sanitize_top_k(value.get("top_k")),
+                "query": parsed.query or description,
+                "retrieval_strategy": parsed.retrieval_strategy,
+                "top_k": parsed.top_k,
             },
         )
         if len(requirements) >= limit:
@@ -196,16 +218,12 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
     """Return one compact retrieval and answer plan."""
     question = state["question"].strip()
     try:
-        payload = llm.complete_json(_planner_prompt(question))
+        payload = PlannerPayload.model_validate(llm.complete_json(_planner_prompt(question)))
     except ValueError as exc:
-        LOGGER.warning("[planner] invalid JSON; using the original question: %s", exc)
-        payload = {}
-    raw_requirements = payload.get("requirements") if isinstance(payload, dict) else None
-    requirements = (
-        _requirements(raw_requirements, question)
-        if isinstance(raw_requirements, list)
-        else []
-    )
+        LOGGER.warning("[planner] invalid response; using the original question: %s", exc)
+        requirements = []
+    else:
+        requirements = _requirements(payload.requirements, question)
     if not requirements:
         LOGGER.warning("[planner] no valid requirements; using the original question")
         requirements = [
