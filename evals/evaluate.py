@@ -45,6 +45,7 @@ MAX_RERANK_CANDIDATES = 30
 REVIEW_SEED = 20260906
 VARIANTS = ("fixed_hybrid", "adaptive")
 VARIANT_LABELS = {
+    "simple_rag": "Simple RAG",
     "fixed_hybrid": "Fixed Hybrid",
     "adaptive": "Adaptive Retrieval",
     "flat": "Flat Evidence",

@@ -248,14 +248,66 @@ plans, passages and answer instructions, with resumable generation and blind rev
 The [Controller ablation guide](evals/CONTROLLER_ABLATION.md) documents the paired
 experiment between the Blackboard baseline and one bounded, observation-driven
 recovery round.
+The [Simple RAG comparison guide](evals/SIMPLE_RAG_COMPARISON.md) compares the
+complete Controller-enabled system against a one-query BM25+Dense, RRF,
+cross-encoder, fixed-budget pipeline.
 
 The blinded 50-question evaluation pipeline supports two main findings from
 separate experiments:
 
 - **Adaptive retrieval reduced dense retrieval operations by 22.4%**, from 76
   to 59.
-- **Scholar-Agent improved Strict Success by 16.0 percentage points over a
-  conventional hybrid RAG baseline**, from 46% to 62%. 
+- **The complete Controller-enabled Scholar-Agent improved Strict Success by
+  20.0 percentage points over Simple RAG**, from 74% to 94%.
+
+### Current Controller pipeline vs Simple RAG (`controller_vs_simple_rag_v1`)
+
+This paired experiment compares the quality-oriented current configuration—an
+adaptive Planner, per-requirement retrieval and Blackboard, the assessment-first
+Controller with one bounded recovery round, Writer, and Citation Validator—with
+a Simple RAG pipeline using the original question, BM25 top-8 plus Dense top-8,
+RRF, the same cross-encoder threshold, a fixed maximum of eight flat evidence
+chunks, the same Writer policy, and the same Citation Validator.
+
+All 50 questions used freshly generated runtime states on the updated benchmark.
+Generation used `deepseek-v4-flash` at temperature zero, Writer order alternated
+25/25, and frozen input, state, and prompt hashes were verified. Blind primary
+review and independent cross-review of every paired disagreement were completed
+before variant identities were revealed.
+
+| Metric | Simple RAG | Current + Controller | Delta |
+|---|---:|---:|---:|
+| Strict Success | 74.0% (37/50) | **94.0% (47/50)** | **+20.0 pp** |
+| Requirement Accuracy | 80.3% (57/71) | **98.6% (70/71)** | **+18.3 pp** |
+| Citation Support | **100.0% (322/322)** | 99.8% (458/459) | -0.2 pp |
+| Initial Retrieval Recall | 49.0% | **76.5%** | **+27.5 pp** |
+| Selected Evidence Recall | 35.3% | **62.7%** | **+27.5 pp** |
+| Average staged latency | 12.06s | 34.39s | +22.33s |
+| Average LLM calls | 0.80 | 2.88 | +2.08 |
+| Average retrieval operations | 2.00 | 5.06 | +3.06 |
+
+There were 12 Strict repairs and 2 regressions (exact two-sided McNemar
+p=0.0129), plus 13 requirement repairs and no requirement regressions
+(p=0.000244). The observed improvements are statistically significant at the
+0.05 level within this benchmark, while the 50-question sample still limits
+claims about broader generalization.
+
+Four repairs—Q021, Q026, Q027, and Q034—completed the full causal chain from a
+missing assessment to an executed action, added and cited evidence, and a
+repaired answer. The remaining gains came mainly from requirement decomposition,
+targeted initial retrieval, evidence selection, and Blackboard/Writer use; this
+is therefore a full-system comparison, not a Controller-only ablation. The
+Controller triggered on 34/50 questions, executed 41 actions, and added evidence
+on 21. Its 55 `sufficient`, 41 `missing`, and 4 `unresolved` assessments included
+one False-Sufficiency Case, Q005/R1.
+
+The result supports the Controller-enabled pipeline as the quality-oriented
+main path, with Simple RAG as a lower-latency fallback. Because measured latency
+was 2.85× higher and only 4/41 actions caused an observed requirement repair,
+the next work should be selective Controller invocation and latency reduction.
+Detailed local artifacts are in `evals/runs/controller_vs_simple_rag_v1/`,
+including the summary, full analysis, blind adjudication, raw traces, hashes,
+and generation provenance.
 
 ### Assessment-first Controller (`controller_e3_v5`)
 
