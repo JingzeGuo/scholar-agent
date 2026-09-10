@@ -34,9 +34,11 @@ answer verifier and repair step reduced Strict Success from 88% to 78% and
 increased average latency from 17.99s to 50.32s, with no improvement in
 Requirement Accuracy. The production workflow therefore omits these steps.
 
-An optional bounded evidence-gap Controller can inspect the first Researcher observation and
-choose up to two recovery actions in one round before writing. It is disabled by default while its
-paired evaluation is pending.
+An optional bounded evidence-gap Controller can inspect the first Researcher
+observation and choose up to two recovery actions in one round before writing.
+Its E3 v5 paired evaluation found a positive but not statistically significant
+quality signal at substantial latency cost, so it remains disabled by default
+while selective invocation and latency optimization are evaluated.
 
 ## Adaptive retrieval planning
 
@@ -243,8 +245,9 @@ make quality
 The [Writer ablation guide](evals/WRITER_ABLATION.md) provides commands to compare
 flat evidence against the Requirement–Evidence Blackboard using identical frozen
 plans, passages and answer instructions, with resumable generation and blind review.
-The [Controller ablation guide](evals/CONTROLLER_ABLATION.md) runs the next paired
-experiment: the Blackboard baseline against one bounded, observation-driven recovery round.
+The [Controller ablation guide](evals/CONTROLLER_ABLATION.md) documents the paired
+experiment between the Blackboard baseline and one bounded, observation-driven
+recovery round.
 
 The blinded 50-question evaluation pipeline supports two main findings from
 separate experiments:
@@ -253,6 +256,54 @@ separate experiments:
   to 59.
 - **Scholar-Agent improved Strict Success by 16.0 percentage points over a
   conventional hybrid RAG baseline**, from 46% to 62%. 
+
+### Assessment-first Controller (`controller_e3_v5`)
+
+E3 v5 compares the Blackboard pipeline with and without one assessment-first
+Controller call. All 50 questions used newly generated Planner and initial
+retrieval observations after the Q014 and Q025 benchmark clarification. Within
+each pair, both variants started from the same frozen plan, retrieval results,
+rerank candidates, selected evidence, and Writer policy. Writer order alternated
+25/25, and the review, two independent crosschecks, and final adjudication were
+completed before variant identities were revealed.
+
+| Metric | Blackboard baseline | Controller | Delta |
+|---|---:|---:|---:|
+| Strict Success | 88.0% (44/50) | 96.0% (48/50) | +8.0 pp |
+| Requirement Accuracy | 94.4% (67/71) | 97.2% (69/71) | +2.8 pp |
+| Citation Support | 99.7% (396/397) | 100.0% (467/467) | +0.3 pp |
+| Initial Retrieval Recall | 74.5% (38/51) | 74.5% (38/51) | 0.0 pp |
+| Selected Evidence Recall | 62.7% (32/51) | 62.7% (32/51) | 0.0 pp |
+| Measured post-research latency | 14.40s | 28.52s | +14.12s |
+| Average LLM calls | 0.86 | 1.90 | +1.04 |
+| Average retrieval operations | 3.64 | 5.18 | +1.54 |
+
+The paired run had four Strict Success repairs and no regressions. The exact
+two-sided McNemar p-value is 0.125, so the observed +8-point result is not a
+statistically significant improvement at the 0.05 level. Requirement outcomes
+had two repairs and no regressions (p=0.500). Manual trace attribution found
+that Q025 and Q032 completed the full causal chain from missing assessment to
+new evidence, changed Writer context, and repaired answer. Q002 and Q018 were
+Strict-only changes caused by Writer or citation variation rather than the
+recovery target.
+
+The Controller stored 100 valid assessments for 103 Planner requirements:
+55 `sufficient`, 39 `missing`, and 6 `unresolved`. All 55 sufficient and all 6
+unresolved assessments correctly stored no action. Two sufficient assessments
+ended with an incorrect requirement: Q005 was a coverage-assessment failure,
+while Q019 was a Writer utilization failure. The Controller triggered on 36/50
+questions and executed 39 actions; 21/39 added evidence, but only two repaired a
+requirement. Gold-page Retrieval Recovery Rate was 0/13 because both genuine
+repairs used useful passages on non-gold pages, illustrating that gold pages are
+non-exhaustive diagnostic labels rather than complete evidence-sufficiency
+labels.
+
+The result supports retaining the Controller implementation but not enabling it
+universally from this 50-question sample. The next step is selective invocation
+and latency reduction, followed by a larger confirmatory paired run—not more
+retrieval tools or question-specific prompt patches. Detailed local artifacts
+are in `evals/runs/controller_e3_v5/`, including `summary.md`, `analysis.md`,
+`adjudication.json`, raw results, traces, labels, and input/prompt hashes.
 
 ### Adaptive retrieval (`adaptive_v2`)
 
