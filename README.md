@@ -21,6 +21,9 @@ Researcher
    ├── requirement- and target-aware evidence selection
    └── Requirement–Evidence Blackboard
    ↓
+Assessment-first Controller
+   └── zero to two bounded recovery actions in one round
+   ↓
 Writer
    ↓
 Deterministic physical-page citation validation
@@ -28,17 +31,20 @@ Deterministic physical-page citation validation
 Answer
 ```
 
-LangGraph connects four production nodes: Planner, Researcher, Writer, and
-Citation Validator. A paired 50-question ablation found that adding an LLM
+The default LangGraph path connects Planner, Researcher, the assessment-first
+Controller, optional Recovery execution, Writer, and Citation Validator. A
+paired 50-question ablation found that adding an LLM
 answer verifier and repair step reduced Strict Success from 88% to 78% and
 increased average latency from 17.99s to 50.32s, with no improvement in
 Requirement Accuracy. The production workflow therefore omits these steps.
 
-An optional bounded evidence-gap Controller can inspect the first Researcher
-observation and choose up to two recovery actions in one round before writing.
-Its E3 v5 paired evaluation found a positive but not statistically significant
-quality signal at substantial latency cost, so it remains disabled by default
-while selective invocation and latency optimization are evaluated.
+The bounded evidence-gap Controller always inspects the first Researcher
+observation in the default production path and can choose up to two recovery
+actions in one round before writing. Its E3 v5 isolated ablation found a
+positive but not statistically significant signal; the later full-system
+comparison against Simple RAG found a statistically significant quality gain.
+The Controller is therefore the default, while selective invocation and
+latency optimization remain the next production priorities.
 
 ## Adaptive retrieval planning
 
@@ -92,8 +98,8 @@ export SCHOLAR_AGENT_RETRIEVAL_MODE=adaptive
 # or
 export SCHOLAR_AGENT_RETRIEVAL_MODE=fixed_hybrid
 
-# Optional single-round evidence recovery
-export SCHOLAR_AGENT_RECOVERY_MODE=controller
+# Controller is the default; explicitly disable it only when needed
+export SCHOLAR_AGENT_RECOVERY_MODE=none
 ```
 
 The Python API also accepts an explicit override:
@@ -225,7 +231,7 @@ The CLI intentionally contains only `ingest`, `index`, and `ask`.
 | `SCHOLAR_AGENT_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | `-1.0` |
 | `SCHOLAR_AGENT_RETRIEVAL_MODE` | `adaptive` |
-| `SCHOLAR_AGENT_RECOVERY_MODE` | `none` |
+| `SCHOLAR_AGENT_RECOVERY_MODE` | `controller` |
 | `SCHOLAR_AGENT_DATA_DIR` | `data` |
 
 ## Tests

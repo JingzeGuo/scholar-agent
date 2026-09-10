@@ -21,7 +21,7 @@ class Settings:
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     min_rerank_score: float = -1.0
     retrieval_mode: str = "adaptive"
-    recovery_mode: str = "none"
+    recovery_mode: str = "controller"
     data_dir: Path = Path("data")
 
     def __post_init__(self) -> None:

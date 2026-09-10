@@ -65,4 +65,7 @@ and LLM calls, plus:
 
 Latency covers Controller, recovery, Writer, and citation validation after the frozen initial
 Researcher observation. The paired latency delta therefore isolates the follow-up overhead.
-Production keeps `SCHOLAR_AGENT_RECOVERY_MODE=none` until this experiment supports enabling it.
+This protocol originally kept `SCHOLAR_AGENT_RECOVERY_MODE=none` while the
+Controller was under evaluation. After the completed E3 v5 and full-system
+comparison, production defaults to `controller`; set the mode to `none`
+explicitly when reproducing the no-Controller baseline.

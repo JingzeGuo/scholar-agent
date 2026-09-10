@@ -49,6 +49,17 @@ def test_config_rejects_unknown_recovery_mode() -> None:
         Settings(recovery_mode="automatic")
 
 
+def test_controller_is_the_default_recovery_mode(monkeypatch) -> None:
+    monkeypatch.delenv("SCHOLAR_AGENT_RECOVERY_MODE", raising=False)
+
+    assert Settings().recovery_mode == "controller"
+    assert Settings.from_env().recovery_mode == "controller"
+
+    monkeypatch.setenv("SCHOLAR_AGENT_RECOVERY_MODE", "none")
+
+    assert Settings.from_env().recovery_mode == "none"
+
+
 def test_llm_client_uses_provider_specific_default_models(monkeypatch) -> None:
     clients: list[dict[str, str]] = []
 

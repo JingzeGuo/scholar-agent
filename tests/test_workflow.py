@@ -52,6 +52,16 @@ class FakeLLM:
 
     def complete_json(self, prompt: str) -> dict:
         self.json_calls += 1
+        if "Evidence-Gap Controller" in prompt:
+            return {
+                "assessments": [{
+                    "requirement_id": "R1",
+                    "status": "sufficient",
+                    "covered": ["The selected evidence covers the requirement"],
+                    "missing": [],
+                    "action": None,
+                }],
+            }
         return {
             "requirements": [
                 {
@@ -108,6 +118,7 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
     )
 
     assert result["retrieval_mode"] == "adaptive"
+    assert result["recovery_mode"] == "controller"
     assert engine.sparse_calls == [(["Self-RAG CRAG retrieval"], 6)]
     assert engine.dense_calls == []
     assert "[Self-RAG.pdf p.1]" in result["answer"]
@@ -132,7 +143,9 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
             ],
         },
     }
-    assert llm.json_calls == llm.complete_calls == 1
+    assert llm.json_calls == 2
+    assert llm.complete_calls == 1
+    assert result["controller_trace"]["assessments"][0]["status"] == "sufficient"
     assert "Requirement R1:" in llm.last_prompt
     assert "[E1] Self-RAG.pdf — p.1" in llm.last_prompt
     assert [item["supports"] for item in result["evidence"]] == [["R1"], ["R1"]]
@@ -212,7 +225,8 @@ def test_shared_plan_skips_planner_and_is_not_mutated(
         shared_plan=shared_plan,
     )
 
-    assert llm.json_calls == 0
+    assert llm.json_calls == 1
+    assert result["controller_trace"]["assessments"][0]["status"] == "sufficient"
     assert result["plan"] == shared_plan
     assert result["plan"] is not shared_plan
     assert shared_plan["requirements"][0]["retrieval_strategy"] == "bm25"
@@ -288,8 +302,9 @@ def test_run_question_starts_with_the_selected_initial_state(monkeypatch: Any) -
         FakeLLM(),  # type: ignore[arg-type]
     )
 
-    assert captured == [initial_state("question", "fixed_hybrid")]
+    assert captured == [initial_state("question", "fixed_hybrid", "controller")]
     assert result["retrieval_mode"] == "fixed_hybrid"
+    assert result["recovery_mode"] == "controller"
 
 
 def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
