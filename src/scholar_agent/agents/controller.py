@@ -26,7 +26,7 @@ def _rejection(raw: object, reason: str) -> dict:
     return rejection
 
 
-def _controller_prompt(state: AgentState) -> str:
+def _controller_prompt(state: AgentState, *, preserve_semantics: bool = False) -> str:
     evidence = {item["id"]: item for item in state["evidence"]}
     blocks = []
     for requirement in state["plan"]["requirements"]:
@@ -55,6 +55,10 @@ def _controller_prompt(state: AgentState) -> str:
             f"Selected evidence:\n" + "\n\n".join(passages or ["None"]),
         )
 
+    semantic_rule = """Preserve the requirement's scope, category, constraints, and requested
+cardinality when formulating a recovery query.
+
+""" if preserve_semantics else ""
     return f"""You are the Evidence-Gap Controller in an academic research workflow.
 Inspect the first retrieval observation and decide whether one bounded follow-up action could
 recover evidence missing from a requirement. Do not answer the question.
@@ -70,7 +74,7 @@ from {sorted(ACTIONS)}, a concise evidence-seeking query, and a brief reason.
 - increase_depth: use only when its current top_k is below {MAX_TOP_K}; Python fixes top_k to
   {MAX_TOP_K}.
 
-Base decisions only on the question, requirements, selected passages, scores, and candidate-paper
+{semantic_rule}Base decisions only on the question, requirements, selected passages, scores, and candidate-paper
 metadata below. A reason is for debugging only. Generate search terms that seek missing evidence;
 do not state an answer or assume that a relevance score proves support.
 
@@ -153,10 +157,17 @@ def sanitize_actions(payload: object, state: AgentState) -> tuple[list[dict], li
     return actions, rejections
 
 
-def controller_node(state: AgentState, llm: LLMClient) -> dict:
+def controller_node(
+    state: AgentState,
+    llm: LLMClient,
+    *,
+    preserve_semantics: bool = False,
+) -> dict:
     """Choose zero to two valid actions from one retrieval observation."""
     try:
-        payload = llm.complete_json(_controller_prompt(state))
+        payload = llm.complete_json(
+            _controller_prompt(state, preserve_semantics=preserve_semantics),
+        )
     except ValueError:
         LOGGER.warning("[controller] invalid JSON; continuing without recovery")
         actions = []

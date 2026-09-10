@@ -51,9 +51,19 @@ def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
     return "Requirement–Evidence Blackboard:\n" + "\n\n".join(blocks)
 
 
-def _writer_prompt(state: AgentState, *, use_evidence_board: bool = True) -> str:
+def _writer_prompt(
+    state: AgentState,
+    *,
+    use_evidence_board: bool = True,
+    coverage_principle: bool = False,
+) -> str:
     """Keep answer policy identical when ablating only the evidence layout."""
     context = _writer_context(state, use_evidence_board)
+    coverage = """
+Before drafting each requirement, check all assigned evidence for distinct,
+directly relevant points and ensure the answer covers them without silently collapsing multiple
+supported interpretations.
+""" if coverage_principle else " "
     return f"""You are the Writer in an evidence-grounded research workflow.
 
 Answer in English using only the supplied evidence.
@@ -73,7 +83,7 @@ Do not substitute related methods for explicitly named targets.
 Respect constraints in the original question only when supported by evidence.
 Answer only supported aspects and do not fill missing gaps from memory.
 Organize the answer around the user's question rather than around evidence chunks.
-Address each requirement using the supplied evidence. Any requirement–evidence links are
+Address each requirement using the supplied evidence.{coverage}Any requirement–evidence links are
 retrieval relevance hints, not proof that a passage supports every part of the requirement.
 Check the passage text before making a claim. The same evidence ID always identifies the same
 passage, even when it appears under multiple requirements. You may use any supplied passage
