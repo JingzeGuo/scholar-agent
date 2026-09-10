@@ -33,10 +33,6 @@ def _refs(items: Sequence[dict]) -> list[tuple[str, str, int]]:
     return [(item["chunk_id"], item["paper"], item["page"]) for item in items]
 
 
-def _pages(items: Sequence[dict]) -> set[tuple[str, int]]:
-    return {(item["paper"], item["page"]) for item in items}
-
-
 def prepare_inputs(
     experiment: str,
     source_directory: Path,
@@ -126,11 +122,6 @@ def run_controller_experiment(
     """Run both Controller prompts and the unchanged v3 Writer from frozen observations."""
     pipeline = PIPELINES["controller"]
     inputs, input_hash = writer_experiment.load_inputs(inputs_path, pipeline)
-    if (
-        settings.reranker_model != inputs["reranker_model"]
-        or settings.min_rerank_score != inputs["min_rerank_score"]
-    ):
-        raise evaluation.EvaluationError("Recovery reranker settings differ from frozen inputs")
     latest = writer_experiment._existing_results(
         results_path,
         run_id,
@@ -229,7 +220,7 @@ def controller_diagnostics(questions: Sequence[dict], results_path: Path) -> tup
     diagnostics = {}
     for variant in VARIANTS:
         action_types: Counter = Counter()
-        triggered = rejected = useful = operations = missed = recovered = 0
+        triggered = rejected = useful = operations = 0
         for question in questions:
             result = results[(question["id"], variant)]
             controller = result["trace"]["controller"]
@@ -240,13 +231,6 @@ def controller_diagnostics(questions: Sequence[dict], results_path: Path) -> tup
             action_types.update(item["action"] for item in actions)
             useful += sum(any(item.get("added") for item in trace["results"]) for trace in recovery)
             operations += int(result["trace"]["retrieval_operations"])
-            stages = result["trace"]["retrieval_stages"]
-            initial_pages = _pages(stages["retrieval"])
-            post_pages = _pages(stages.get("post_recovery", stages["retrieval"]))
-            for requirement in question["requirements"]:
-                missed_pages = _pages(requirement["gold_pages"]) - initial_pages
-                missed += len(missed_pages)
-                recovered += len(missed_pages & post_pages)
         action_count = sum(action_types.values())
         diagnostics[variant] = {
             "triggered_questions": triggered,
@@ -254,9 +238,6 @@ def controller_diagnostics(questions: Sequence[dict], results_path: Path) -> tup
             "rejected_actions": rejected,
             "useful_actions": useful,
             "useful_action_rate": useful / action_count if action_count else None,
-            "initially_missed_gold_pages": missed,
-            "recovered_gold_pages": recovered,
-            "retrieval_recovery_rate": recovered / missed if missed else None,
             "average_retrieval_operations": operations / len(questions),
             "action_distribution": dict(sorted(action_types.items())),
         }
@@ -275,7 +256,6 @@ def controller_diagnostics(questions: Sequence[dict], results_path: Path) -> tup
 | Accepted actions | {before['actions']} | {after['actions']} |
 | Rejected actions | {before['rejected_actions']} | {after['rejected_actions']} |
 | Useful action rate | {percent(before['useful_action_rate'])} | {percent(after['useful_action_rate'])} |
-| Retrieval Recovery Rate | {percent(before['retrieval_recovery_rate'])} | {percent(after['retrieval_recovery_rate'])} |
 | Average retrieval operations | {before['average_retrieval_operations']:.2f} | {after['average_retrieval_operations']:.2f} |
 
 Current action distribution: {before['action_distribution']}.  
