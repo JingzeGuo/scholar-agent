@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -157,14 +158,10 @@ def _resolve_action(
     """Resolve one schema-valid action against the observed state."""
     selector = action.model_dump()
     raw = {"requirement_id": requirement_id, "action": dict(selector)}
-    clean = {
-        "requirement_id": requirement_id,
-        "action": action.tool,
-        "query": action.query,
-    }
+    clean = {"tool": action.tool, "query": action.query}
     board = state["evidence_board"][requirement_id]
 
-    if clean["action"] == "search_within_paper":
+    if clean["tool"] == "search_within_paper":
         candidates = {
             f"P{index}": item["paper"]
             for index, item in enumerate(board.get("candidate_papers", []), start=1)
@@ -173,7 +170,7 @@ def _resolve_action(
         if candidate_id not in candidates:
             return None, _rejection(raw, "unknown_candidate")
         clean.update(candidate_id=candidate_id, paper=candidates[candidate_id])
-    elif clean["action"] == "expand_neighbors":
+    elif clean["tool"] == "expand_neighbors":
         allowed_ids = {
             item["chunk_id"] for item in state["evidence"] if item["id"] in board["evidence_ids"]
         }
@@ -189,11 +186,36 @@ def _resolve_action(
     return clean, None
 
 
+def _trace_action(requirement_id: str, action: dict) -> dict:
+    """Render a Blackboard action in the stable audit-trace shape."""
+    return {
+        "requirement_id": requirement_id,
+        "action": action["tool"],
+        **{key: value for key, value in action.items() if key not in {"tool", "state"}},
+    }
+
+
+def board_recovery_actions(state: AgentState) -> list[dict]:
+    """Return executable actions from the canonical requirement Blackboard."""
+    actions = []
+    for requirement in state["plan"]["requirements"]:
+        requirement_id = requirement["id"]
+        entry = state["evidence_board"][requirement_id]
+        action = entry.get("action")
+        if (
+            entry.get("status") == "missing"
+            and isinstance(action, dict)
+            and action.get("state", "pending") == "pending"
+        ):
+            actions.append(_trace_action(requirement_id, action))
+    return actions
+
+
 def sanitize_assessments(
     payload: object,
     state: AgentState,
 ) -> tuple[list[dict], list[dict], list[dict]]:
-    """Retain per-requirement coverage decisions and extract valid recovery actions."""
+    """Retain requirement-state updates and extract valid recovery audit entries."""
     try:
         raw_assessments = ControllerPayload.model_validate(payload).assessments
     except ValidationError:
@@ -226,13 +248,16 @@ def sanitize_assessments(
             continue
         if len(actions) >= MAX_ACTIONS:
             rejections.append(_rejection(raw, "action_limit"))
+            assessment["status"] = "unresolved"
             continue
         action, rejection = _resolve_action(requirement_id, parsed.action, state)
         if rejection:
             rejections.append(rejection)
+            assessment["status"] = "unresolved"
         else:
+            action["state"] = "pending"
             assessment["action"] = action
-            actions.append(action)
+            actions.append(_trace_action(requirement_id, action))
 
     rejections.extend(
         _rejection({"requirement_id": requirement_id}, "missing_assessment")
@@ -253,10 +278,19 @@ def controller_node(state: AgentState, llm: LLMClient) -> dict:
         rejections = [{"requirement_id": None, "action": None, "reason": "invalid_json"}]
     else:
         assessments, actions, rejections = sanitize_assessments(payload, state)
+    board = deepcopy(state["evidence_board"])
+    for assessment in assessments:
+        requirement_id = assessment["requirement_id"]
+        board[requirement_id].update(
+            status=assessment["status"],
+            covered=assessment["covered"],
+            missing=assessment["missing"],
+            action=assessment["action"],
+        )
     LOGGER.info("[controller] actions=%d rejected=%d", len(actions), len(rejections))
     return {
+        "evidence_board": board,
         "controller_trace": {
-            "assessments": assessments,
             "actions": actions,
             "rejected_actions": len(rejections),
             "rejections": rejections,

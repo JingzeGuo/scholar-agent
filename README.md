@@ -33,8 +33,7 @@ Answer
 LangGraph connects the Planner, Researcher, Controller, Recovery, Writer, and
 Citation Validator through one shared state. The state contains the original
 question, atomic requirements, selected evidence, the Requirement–Evidence
-Blackboard, Controller assessments and actions, recovery traces, and the final
-answer.
+Blackboard, Controller and recovery audit traces, and the final answer.
 
 ## Main components
 
@@ -106,17 +105,35 @@ evidence_board = {
         "requirement": "Explain Self-RAG retrieval control.",
         "evidence_ids": ["E1", "E3"],
         "candidate_papers": [...],
+        "status": "sufficient",
+        "covered": ["retrieval control", "reflection tokens"],
+        "missing": [],
+        "action": None,
     },
     "R2": {
         "requirement": "Explain Corrective RAG document repair.",
         "evidence_ids": ["E2"],
         "candidate_papers": [...],
+        "status": "missing",
+        "covered": ["document refinement is identified"],
+        "missing": ["the decompose-filter-recompose procedure"],
+        "action": {
+            "tool": "search_within_paper",
+            "candidate_id": "P1",
+            "paper": "CRAG.pdf",
+            "query": "decompose filter recompose document refinement",
+            "state": "pending",
+        },
     },
 }
 ```
 
 One passage may support multiple requirements. Requirements with no selected
 support remain visible with an empty evidence list instead of disappearing.
+The Researcher initializes `status` to `unknown`; the Controller then writes
+its coverage assessment and any sanitized recovery action directly into the
+Blackboard. Evidence items retain `supports` as the reverse evidence-to-
+requirement index and `requirement_scores` as the underlying relevance data.
 
 ### Assessment-first Controller and bounded Recovery
 
@@ -142,8 +159,10 @@ question. It returns one assessment for every planned requirement:
 - `unresolved` means evidence is missing and no valid bounded action is
   available.
 
-Every assessment is stored in the trace, including assessments that do not
-produce an action. Recovery is limited to one round and at most two actions:
+Every sanitized assessment is written to its requirement's Blackboard entry.
+The Controller trace keeps accepted actions and rejection metadata as an audit
+log, while workflow routing and Recovery read executable actions from the
+Blackboard. Recovery is limited to one round and at most two actions:
 
 - `search_within_paper` searches a paper already identified by the Researcher;
 - `expand_neighbors` inspects adjacent chunks around selected evidence;
@@ -153,7 +172,9 @@ produce an action. Recovery is limited to one round and at most two actions:
 
 Actions use stable candidate-paper selectors and chunk IDs. Retrieved
 candidates still pass through reranking and evidence selection before they can
-enter the Writer context.
+enter the Writer context. Recovery refreshes `evidence_ids` without discarding
+the Controller's requirement-level assessment and marks executed Blackboard
+actions so they cannot be selected twice.
 
 ### Writer and Citation Validator
 

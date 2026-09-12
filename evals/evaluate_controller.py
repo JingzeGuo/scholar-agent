@@ -14,7 +14,11 @@ from pathlib import Path
 
 from evals import evaluate as evaluation
 from evals import evaluate_writer as writer_experiment
-from scholar_agent.agents.controller import _controller_prompt, controller_node
+from scholar_agent.agents.controller import (
+    _controller_prompt,
+    board_recovery_actions,
+    controller_node,
+)
 from scholar_agent.agents.recovery import recovery_node
 from scholar_agent.agents.researcher import researcher_node
 from scholar_agent.agents.writer import SAFE_ABSTENTION, _writer_prompt, citation_validator_node
@@ -24,7 +28,7 @@ from scholar_agent.retrieval import RetrievalEngine
 from scholar_agent.workflow import initial_state
 
 VARIANTS = ("baseline", "controller")
-PIPELINE_VERSION = "requirement_assessment_controller_e3_v5"
+PIPELINE_VERSION = "requirement_blackboard_controller_e3_v6"
 
 
 def prepare_inputs(
@@ -138,7 +142,7 @@ def run_experiment(
                     phase = time.perf_counter()
                     state.update(controller_node(state, llm))
                     controller_latency = time.perf_counter() - phase
-                    if state["controller_trace"]["actions"]:
+                    if board_recovery_actions(state):
                         phase = time.perf_counter()
                         state.update(recovery_node(state, engine, settings))
                         recovery_latency = time.perf_counter() - phase
@@ -233,7 +237,7 @@ def controller_summary(summary: dict, questions: Sequence[dict], results_path: P
         controller_trace = treatment["trace"]["controller"]
         assessment_statuses.update(
             item.get("status") or "unknown"
-            for item in controller_trace.get("assessments", [])
+            for item in treatment["trace"].get("evidence_board", {}).values()
         )
         rejected_actions += int(controller_trace.get("rejected_actions", 0))
         rejected_types.update(item.get("action") or "unknown" for item in controller_trace.get("rejections", []))

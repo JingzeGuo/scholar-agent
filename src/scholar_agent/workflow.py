@@ -7,7 +7,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from scholar_agent.agents.controller import controller_node
+from scholar_agent.agents.controller import board_recovery_actions, controller_node
 from scholar_agent.agents.planner import planner_node
 from scholar_agent.agents.recovery import recovery_node
 from scholar_agent.agents.researcher import researcher_node
@@ -55,7 +55,7 @@ def build_workflow(
         workflow.add_edge("researcher", "controller")
         workflow.add_conditional_edges(
             "controller",
-            lambda state: "recovery" if state["controller_trace"]["actions"] else "writer",
+            lambda state: "recovery" if board_recovery_actions(state) else "writer",
             {"recovery": "recovery", "writer": "writer"},
         )
         workflow.add_edge("recovery", "writer")
@@ -86,7 +86,6 @@ def initial_state(
         "evidence_board": {},
         "retrieval_trace": [],
         "controller_trace": {
-            "assessments": [],
             "actions": [],
             "rejected_actions": 0,
             "rejections": [],

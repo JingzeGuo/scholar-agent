@@ -127,6 +127,10 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
         "R1": {
             "requirement": "Answer the requested evidence question",
             "evidence_ids": ["E1", "E2"],
+            "status": "sufficient",
+            "covered": ["The selected evidence covers the requirement"],
+            "missing": [],
+            "action": None,
             "candidate_papers": [
                 {
                     "paper": "CRAG.pdf",
@@ -145,7 +149,7 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
     }
     assert llm.json_calls == 2
     assert llm.complete_calls == 1
-    assert result["controller_trace"]["assessments"][0]["status"] == "sufficient"
+    assert result["evidence_board"]["R1"]["status"] == "sufficient"
     assert "Requirement R1:" in llm.last_prompt
     assert "[E1] Self-RAG.pdf — p.1" in llm.last_prompt
     assert [item["supports"] for item in result["evidence"]] == [["R1"], ["R1"]]
@@ -226,7 +230,7 @@ def test_shared_plan_skips_planner_and_is_not_mutated(
     )
 
     assert llm.json_calls == 1
-    assert result["controller_trace"]["assessments"][0]["status"] == "sufficient"
+    assert result["evidence_board"]["R1"]["status"] == "sufficient"
     assert result["plan"] == shared_plan
     assert result["plan"] is not shared_plan
     assert shared_plan["requirements"][0]["retrieval_strategy"] == "bm25"
@@ -258,7 +262,9 @@ def test_controller_workflow_executes_one_recovery_round(
 
     assert result["recovery_mode"] == "controller"
     assert llm.json_calls == llm.complete_calls == 1
-    assert result["controller_trace"]["assessments"][0]["status"] == "missing"
+    assert result["evidence_board"]["R1"]["status"] == "missing"
+    assert result["evidence_board"]["R1"]["action"]["tool"] == "expand_neighbors"
+    assert result["evidence_board"]["R1"]["action"]["state"] == "executed"
     assert result["controller_trace"]["actions"][0]["action"] == "expand_neighbors"
     assert len(result["recovery_trace"]) == 1
     assert result["recovery_trace"][0]["results"][1]["added"] is True
@@ -319,7 +325,6 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
         "evidence_board": {},
         "retrieval_trace": [],
         "controller_trace": {
-            "assessments": [],
             "actions": [],
             "rejected_actions": 0,
             "rejections": [],

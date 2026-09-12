@@ -31,9 +31,9 @@ indexes must be current. Evaluation uses `deepseek-v4-flash`.
 ```bash
 export DEEPSEEK_API_KEY=...
 export SCHOLAR_AGENT_LLM_MODEL=deepseek-v4-flash
-uv run python evals/evaluate.py --run-id adaptive_v4 run
-uv run python evals/evaluate.py --run-id adaptive_v4 prepare-review
-uv run python evals/evaluate.py --run-id adaptive_v4 extract-pages
+uv run python evals/evaluate.py --run-id adaptive_v5 run
+uv run python evals/evaluate.py --run-id adaptive_v5 prepare-review
+uv run python evals/evaluate.py --run-id adaptive_v5 extract-pages
 ```
 
 `run` writes one resumable record per question and mode to
@@ -46,8 +46,24 @@ Every trace includes:
 {
     "plan": {...},
     "evidence_board": {
-        "R1": {"requirement": "...", "evidence_ids": ["E1", "E3"]},
-        "R2": {"requirement": "...", "evidence_ids": []},
+        "R1": {
+            "requirement": "...",
+            "evidence_ids": ["E1", "E3"],
+            "candidate_papers": [...],
+            "status": "sufficient",
+            "covered": ["..."],
+            "missing": [],
+            "action": None,
+        },
+        "R2": {
+            "requirement": "...",
+            "evidence_ids": [],
+            "candidate_papers": [...],
+            "status": "unresolved",
+            "covered": [],
+            "missing": ["..."],
+            "action": None,
+        },
     },
     "shared_planner_latency_seconds": 1.23,
     "shared_planner_llm_calls": 1,
@@ -137,7 +153,7 @@ chunks. A page hit establishes page coverage; it does not guarantee that the
 selected chunk contains the supporting passage. Loss between Rerank Recall and
 Selected Evidence Recall includes both score filtering and evidence allocation.
 
-Use a new run ID for the new `adaptive_v4_evidence_board` pipeline version;
+Use a new run ID for the new `adaptive_v5_requirement_blackboard` pipeline version;
 resuming an older version is rejected to avoid mixing trace formats. Old results
 can still be scored: missing stage snapshots are `null`/`N/A`, not zero, and
 Selected Evidence Recall can be recovered from their saved evidence.
@@ -168,7 +184,7 @@ it. `--force` is available only when replacement is intentional.
 After all 100 answers are labeled, run:
 
 ```bash
-uv run python evals/evaluate.py --run-id adaptive_v4 score
+uv run python evals/evaluate.py --run-id adaptive_v5 score
 ```
 
 The scoring definitions are unchanged. A question is a Strict Success only

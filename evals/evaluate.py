@@ -37,7 +37,7 @@ SUMMARY_PATH = ROOT / "evals" / "summary.json"
 SUMMARY_MARKDOWN_PATH = ROOT / "evals" / "summary.md"
 
 MODEL_NAME = "deepseek-v4-flash"
-PIPELINE_VERSION = "adaptive_v4_evidence_board"
+PIPELINE_VERSION = "adaptive_v5_requirement_blackboard"
 EXPECTED_CORPUS_SIZE = 10_726
 EXPECTED_QUESTION_COUNT = 50
 DEFAULT_EVIDENCE_LIMIT = 8

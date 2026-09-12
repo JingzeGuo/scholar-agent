@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from scholar_agent.agents.controller import board_recovery_actions
 from scholar_agent.agents.planner import MAX_TOP_K, evidence_matches_target
 from scholar_agent.agents.researcher import (
     _attach_requirement_scores,
@@ -78,10 +79,11 @@ def recovery_node(
 ) -> dict:
     """Execute sanitized actions, rerank their results, and append bounded evidence."""
     requirements = {item["id"]: item for item in state["plan"]["requirements"]}
+    actions = board_recovery_actions(state)
     action_rankings = []
     traces = []
     all_candidates = []
-    for action in state["controller_trace"]["actions"]:
+    for action in actions:
         requirement = requirements[action["requirement_id"]]
         candidates, parameters = _candidates(action, requirement, state, engine)
         ranked = rerank_function([action["query"]], candidates, settings.reranker_model)
@@ -135,12 +137,15 @@ def recovery_node(
         *(merged[chunk_id] for chunk_id in added_ids),
     ]
     evidence, board = _build_evidence_board(
-        combined, state["plan"]["requirements"], settings.min_rerank_score,
+        combined,
+        state["plan"]["requirements"],
+        settings.min_rerank_score,
+        previous_board=state["evidence_board"],
     )
-    for requirement_id, entry in board.items():
-        entry["candidate_papers"] = state["evidence_board"][requirement_id].get(
-            "candidate_papers", [],
-        )
+    for action in actions:
+        board_action = board[action["requirement_id"]]["action"]
+        if board_action is not None:
+            board_action["state"] = "executed"
 
     selected_ids = {item["chunk_id"] for item in evidence}
     for trace in traces:

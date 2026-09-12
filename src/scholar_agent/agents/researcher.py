@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from collections.abc import Callable, Iterable
+from copy import deepcopy
 
 from scholar_agent.agents.planner import (
     DEFAULT_TOP_K,
@@ -45,12 +46,23 @@ def _build_evidence_board(
     items: list[dict],
     requirements: list[dict],
     min_score: float,
+    previous_board: dict[str, dict] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
-    """Link selected passages to requirements without changing selection or citation order."""
-    board = {
-        requirement["id"]: {"requirement": requirement["description"], "evidence_ids": []}
-        for requirement in requirements
-    }
+    """Build evidence links while preserving existing requirement-level research state."""
+    previous_board = previous_board or {}
+    board = {}
+    for requirement in requirements:
+        requirement_id = requirement["id"]
+        previous = previous_board.get(requirement_id, {})
+        board[requirement_id] = {
+            "requirement": requirement["description"],
+            "evidence_ids": [],
+            "candidate_papers": deepcopy(previous.get("candidate_papers", [])),
+            "status": previous.get("status", "unknown"),
+            "covered": list(previous.get("covered", [])),
+            "missing": list(previous.get("missing", [])),
+            "action": deepcopy(previous.get("action")),
+        }
     evidence = []
     for index, item in enumerate(items, start=1):
         evidence_id = f"E{index}"

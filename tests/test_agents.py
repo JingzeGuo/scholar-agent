@@ -562,10 +562,26 @@ def test_evidence_board_preserves_shared_matches_gaps_and_unassigned_evidence(
     evidence, board = _build_evidence_board(items, requirements, min_score=0.5)
 
     assert board == {
-        "R1": {"requirement": "Explain Self-RAG", "evidence_ids": ["E1"]},
-        "R2": {"requirement": "Explain limitations", "evidence_ids": ["E1"]},
-        "R3": {"requirement": "Explain CRAG", "evidence_ids": ["E2"]},
-        "R4": {"requirement": "Report unavailable results", "evidence_ids": []},
+        "R1": {
+            "requirement": "Explain Self-RAG", "evidence_ids": ["E1"],
+            "candidate_papers": [], "status": "unknown", "covered": [], "missing": [],
+            "action": None,
+        },
+        "R2": {
+            "requirement": "Explain limitations", "evidence_ids": ["E1"],
+            "candidate_papers": [], "status": "unknown", "covered": [], "missing": [],
+            "action": None,
+        },
+        "R3": {
+            "requirement": "Explain CRAG", "evidence_ids": ["E2"],
+            "candidate_papers": [], "status": "unknown", "covered": [], "missing": [],
+            "action": None,
+        },
+        "R4": {
+            "requirement": "Report unavailable results", "evidence_ids": [],
+            "candidate_papers": [], "status": "unknown", "covered": [], "missing": [],
+            "action": None,
+        },
     }
     assert [item["chunk_id"] for item in evidence] == [item["chunk_id"] for item in items]
     assert [item["id"] for item in evidence] == ["E1", "E2", "E3"]

@@ -4,9 +4,29 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class RequirementBlackboardEntry(TypedDict):
+    """Live research state for one planned requirement."""
+
+    requirement: str
+    evidence_ids: list[str]
+    candidate_papers: list[dict]
+    status: Literal["unknown", "sufficient", "missing", "unresolved"]
+    covered: list[str]
+    missing: list[str]
+    action: dict | None
+
+
+class ControllerTrace(TypedDict):
+    """Immutable audit metadata emitted by the Controller."""
+
+    actions: list[dict]
+    rejected_actions: int
+    rejections: list[dict]
 
 
 class AgentState(TypedDict):
@@ -17,9 +37,9 @@ class AgentState(TypedDict):
     recovery_mode: str
     plan: dict
     evidence: list[dict]
-    evidence_board: dict[str, dict]
+    evidence_board: dict[str, RequirementBlackboardEntry]
     retrieval_trace: list[dict]
-    controller_trace: dict
+    controller_trace: ControllerTrace
     recovery_trace: list[dict]
     retrieval_stages: dict[str, list[dict]]
     answer: str

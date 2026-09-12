@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from scholar_agent.agents.controller import (
+    board_recovery_actions,
     controller_node,
     sanitize_assessments,
 )
@@ -39,6 +40,7 @@ def _controller_state(sample_chunks: list[dict]) -> dict:
     state["evidence_board"] = {
         "R1": {
             "requirement": "Explain Self-RAG", "evidence_ids": ["E1"],
+            "status": "unknown", "covered": [], "missing": [], "action": None,
             "candidate_papers": [{
                 "paper": "Self-RAG.pdf", "title": "Self-RAG",
                 "best_score": 2.0, "selected": True,
@@ -46,6 +48,7 @@ def _controller_state(sample_chunks: list[dict]) -> dict:
         },
         "R2": {
             "requirement": "Explain CRAG", "evidence_ids": ["E2"],
+            "status": "unknown", "covered": [], "missing": [], "action": None,
             "candidate_papers": [{
                 "paper": "CRAG.pdf", "title": "CRAG",
                 "best_score": 2.0, "selected": True,
@@ -81,7 +84,9 @@ def test_controller_keeps_two_bounded_actions_for_distinct_requirements(sample_c
     assert [item["action"] for item in actions] == ["search_within_paper", "expand_neighbors"]
     assert [item["requirement_id"] for item in actions] == ["R1", "R2"]
     assert actions[0]["paper"] == "Self-RAG.pdf"
-    assert [item["action"] for item in assessments] == actions
+    assert [item["action"]["tool"] for item in assessments] == [
+        "search_within_paper", "expand_neighbors",
+    ]
     assert rejections == []
 
 
@@ -105,6 +110,7 @@ def test_controller_rejection_retains_invalid_selector(sample_chunks):
 
     assert actions == []
     assert assessments[0]["missing"] == ["reflection-token details"]
+    assert assessments[0]["status"] == "unresolved"
     assert assessments[0]["action"] is None
     assert rejections == [{
         "requirement_id": "R1", "action": "search_within_paper",
@@ -127,20 +133,22 @@ def test_controller_prompt_contains_observation_and_no_answer_labels(sample_chun
 
     result = controller_node(state, llm)  # type: ignore[arg-type]
 
-    assert result == {
-        "controller_trace": {
-            "assessments": [
-                {
-                    "requirement_id": "R1", "status": "sufficient",
-                    "covered": ["Self-RAG mechanism"], "missing": [], "action": None,
-                },
-                {
-                    "requirement_id": "R2", "status": "unresolved", "covered": [],
-                    "missing": ["CRAG correction details"], "action": None,
-                },
-            ],
-            "actions": [], "rejected_actions": 0, "rejections": [],
-        },
+    assert result["controller_trace"] == {
+        "actions": [], "rejected_actions": 0, "rejections": [],
+    }
+    assert result["evidence_board"]["R1"] == {
+        **state["evidence_board"]["R1"],
+        "status": "sufficient",
+        "covered": ["Self-RAG mechanism"],
+        "missing": [],
+        "action": None,
+    }
+    assert result["evidence_board"]["R2"] == {
+        **state["evidence_board"]["R2"],
+        "status": "unresolved",
+        "covered": [],
+        "missing": ["CRAG correction details"],
+        "action": None,
     }
     assert "Self-RAG uses adaptive retrieval" in llm.prompt
     assert "chunk_id=self-1" in llm.prompt
@@ -152,3 +160,30 @@ def test_controller_prompt_contains_observation_and_no_answer_labels(sample_chun
     assert "unresolved" in llm.prompt
     assert "gold_pages" not in llm.prompt
     assert "answer_key" not in llm.prompt
+
+
+def test_recovery_actions_are_read_from_blackboard_not_trace(sample_chunks):
+    state = _controller_state(sample_chunks)
+    state["evidence_board"]["R1"].update(
+        status="missing",
+        missing=["reflection-token details"],
+        action={
+            "tool": "search_within_paper",
+            "candidate_id": "P1",
+            "paper": "Self-RAG.pdf",
+            "query": "reflection tokens",
+            "state": "pending",
+        },
+    )
+    state["controller_trace"]["actions"] = []
+
+    assert board_recovery_actions(state) == [{
+        "requirement_id": "R1",
+        "action": "search_within_paper",
+        "candidate_id": "P1",
+        "paper": "Self-RAG.pdf",
+        "query": "reflection tokens",
+    }]
+
+    state["evidence_board"]["R1"]["action"]["state"] = "executed"
+    assert board_recovery_actions(state) == []
