@@ -127,7 +127,9 @@ class PlannedRequirement(_PlannerModel):
 
 
 class PlannerPayload(_PlannerModel):
-    requirements: list[object]
+    route: Literal["research", "conversation"] = "research"
+    direct_response: NonEmptyString | None = None
+    requirements: list[object] = Field(default_factory=list)
 
 
 def _requirements(
@@ -171,9 +173,8 @@ def _requirements(
 
 
 def _planner_prompt(question: str) -> str:
-    return f"""You plan retrieval for an evidence-grounded academic question-answering
-workflow. Transform the user's question into a compact retrieval plan; do not answer the
-question.
+    return f"""You route requests and plan retrieval for an evidence-grounded academic
+question-answering workflow. Do not answer factual or academic questions yourself.
 
 The plan is consumed as follows:
 - Every requirement is retrieved independently using the strategy and depth you choose.
@@ -181,8 +182,11 @@ The plan is consumed as follows:
 - Requirement queries and targets balance evidence selection and prevent method or aspect
   substitution.
 
-Return one JSON object with exactly one field:
-- "requirements": one to {MAX_REQUIREMENTS} objects, each with exactly these fields:
+Return one JSON object with exactly these three fields:
+- "route": exactly "research" or "conversation"
+- "direct_response": a concise response string for conversation, otherwise null
+- "requirements": an empty list for conversation; for research, one to {MAX_REQUIREMENTS}
+  objects, each with exactly these fields:
   - "description": one concise English statement of an atomic answer requirement
   - "targets": zero to {MAX_TARGETS_PER_REQUIREMENT} method or paper names explicitly written in
     the question that this requirement concerns
@@ -191,6 +195,14 @@ Return one JSON object with exactly one field:
   - "top_k": an integer from {MIN_TOP_K} to {MAX_TOP_K}
 
 Rules:
+- Use the conversation route only when no evidence-grounded factual answer is requested, such as
+  a greeting, thanks, farewell, casual social exchange, a question about this assistant's scope,
+  or a request that needs clarification before research can begin. Reply briefly and naturally in
+  the user's language, and return an empty requirements list. Do not use this route to answer
+  definitions, factual questions, advice, comparisons, summaries, or academic questions from
+  memory.
+- Otherwise use the research route, set direct_response to null, and create the retrieval plan
+  below.
 - Create only the minimum requirements needed to answer the user's actual question. A simple
   definition, fact, yes/no, terminology, or introductory question should normally remain one
   requirement. Do not turn a technical topic into a survey, history, comparison, benchmark review,
@@ -232,7 +244,7 @@ User question:
 
 
 def planner_node(state: AgentState, llm: LLMClient) -> dict:
-    """Return one compact retrieval and answer plan."""
+    """Route conversation or return one compact retrieval plan."""
     question = state["question"].strip()
     try:
         payload = PlannerPayload.model_validate(llm.complete_json(_planner_prompt(question)))
@@ -240,6 +252,13 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
         LOGGER.warning("[planner] invalid response; using the original question: %s", exc)
         requirements = []
     else:
+        if payload.route == "conversation" and payload.direct_response:
+            LOGGER.info("[planner] route=conversation requirements=0")
+            return {
+                "route": "conversation",
+                "plan": {"requirements": []},
+                "answer": payload.direct_response,
+            }
         requirements = _requirements(payload.requirements, question)
     if not requirements:
         LOGGER.warning("[planner] no valid requirements; using the original question")
@@ -258,7 +277,7 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
         "requirements": requirements,
     }
     LOGGER.info(
-        "[planner] requirements=%d targets=%d strategies=%s",
+        "[planner] route=research requirements=%d targets=%d strategies=%s",
         len(plan["requirements"]),
         len(requirement_targets(plan["requirements"])),
         ",".join(item["retrieval_strategy"] for item in plan["requirements"]),
@@ -269,4 +288,4 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
             requirement["id"],
             requirement["query"],
         )
-    return {"plan": plan}
+    return {"route": "research", "plan": plan}

@@ -33,6 +33,7 @@ class AgentState(TypedDict):
     """The only state passed through the LangGraph workflow."""
 
     question: str
+    route: Literal["research", "conversation"]
     retrieval_mode: str
     recovery_mode: str
     plan: dict

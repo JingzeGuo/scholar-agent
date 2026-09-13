@@ -48,7 +48,11 @@ def build_workflow(
     if shared_plan is None:
         workflow.add_node("planner", lambda state: planner_node(state, llm))
         workflow.set_entry_point("planner")
-        workflow.add_edge("planner", "researcher")
+        workflow.add_conditional_edges(
+            "planner",
+            lambda state: state["route"],
+            {"research": "researcher", "conversation": END},
+        )
     else:
         workflow.set_entry_point("researcher")
     if recovery == "controller":
@@ -77,6 +81,7 @@ def initial_state(
         raise ValueError(f"Unknown recovery mode: {recovery_mode}")
     return {
         "question": question,
+        "route": "research",
         "retrieval_mode": retrieval_mode,
         "recovery_mode": recovery_mode,
         "plan": {

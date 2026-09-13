@@ -124,6 +124,16 @@ class SimpleQuestionLLM(FakeLLM):
         }
 
 
+class ConversationLLM(FakeLLM):
+    def complete_json(self, prompt: str) -> dict:
+        self.json_calls += 1
+        return {
+            "route": "conversation",
+            "direct_response": "Hello! What would you like to research?",
+            "requirements": [],
+        }
+
+
 def test_adaptive_workflow_reaches_writer_and_validates_citations(
     sample_chunks: list[dict],
     monkeypatch: Any,
@@ -225,6 +235,28 @@ def test_simple_definition_uses_the_planned_retrieval_and_controller_stops(
     assert "Keep simple definitions,\nfacts, and introductory questions brief" in llm.last_prompt
     assert result["controller_trace"]["actions"] == []
     assert result["evidence_board"]["R1"]["status"] == "sufficient"
+
+
+def test_conversation_route_skips_the_research_workflow() -> None:
+    engine = FakeEngine([])
+    llm = ConversationLLM()
+
+    result = run_question(
+        "hello",
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        llm,  # type: ignore[arg-type]
+    )
+
+    assert result["route"] == "conversation"
+    assert result["answer"] == "Hello! What would you like to research?"
+    assert result["plan"] == {"requirements": []}
+    assert engine.sparse_calls == []
+    assert engine.dense_calls == []
+    assert llm.json_calls == 1
+    assert llm.complete_calls == 0
+    assert result["evidence"] == []
+    assert result["controller_trace"]["actions"] == []
 
 
 def test_fixed_hybrid_workflow_ignores_planner_strategy(
@@ -374,6 +406,7 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
 
     assert state == {
         "question": "question",
+        "route": "research",
         "retrieval_mode": "adaptive",
         "recovery_mode": "controller",
         "plan": {"requirements": []},
@@ -426,6 +459,7 @@ def test_workflow_rejects_unknown_recovery_mode() -> None:
 def test_agent_state_contains_only_live_workflow_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
+        "route",
         "retrieval_mode",
         "recovery_mode",
         "plan",

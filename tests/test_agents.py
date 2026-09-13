@@ -155,7 +155,7 @@ def test_planner_accepts_all_supported_retrieval_strategies() -> None:
     assert "do not predict the answer" in llm.last_prompt
 
 
-def test_planner_preserves_a_compact_definition_plan_without_routing_metadata() -> None:
+def test_planner_defaults_factual_questions_to_research() -> None:
     llm = StubLLM(
         {
             "requirements": [
@@ -170,8 +170,10 @@ def test_planner_preserves_a_compact_definition_plan_without_routing_metadata() 
         },
     )
 
-    plan = planner_node(initial_state("do u know agentic rag"), llm)["plan"]  # type: ignore[arg-type]
+    result = planner_node(initial_state("do u know agentic rag"), llm)  # type: ignore[arg-type]
+    plan = result["plan"]
 
+    assert result["route"] == "research"
     assert plan == {
         "requirements": [
             requirement(
@@ -186,6 +188,26 @@ def test_planner_preserves_a_compact_definition_plan_without_routing_metadata() 
     }
     assert "minimum requirements needed" in llm.last_prompt
     assert "should normally remain one" in llm.last_prompt
+
+
+def test_planner_routes_non_factual_conversation_without_requirements() -> None:
+    llm = StubLLM(
+        {
+            "route": "conversation",
+            "direct_response": "Hello! What would you like to research?",
+            "requirements": [],
+        },
+    )
+
+    result = planner_node(initial_state("hello"), llm)  # type: ignore[arg-type]
+
+    assert result == {
+        "route": "conversation",
+        "plan": {"requirements": []},
+        "answer": "Hello! What would you like to research?",
+    }
+    assert "only when no evidence-grounded factual answer is requested" in llm.last_prompt
+    assert "Do not use this route to answer\n  definitions, factual questions" in llm.last_prompt
 
 
 def test_planner_keeps_a_compound_question_plan() -> None:
