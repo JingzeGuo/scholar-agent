@@ -4,6 +4,7 @@ import importlib
 import os
 from importlib.metadata import version
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import scholar_agent
@@ -66,3 +67,28 @@ def test_llm_client_uses_provider_specific_default_models(monkeypatch) -> None:
     assert overridden is not None
     assert overridden.model == "custom-model"
     assert clients[-1] == {"api_key": "openai-key"}
+
+
+def test_llm_client_stream_yields_nonempty_content() -> None:
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return iter([
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="one"))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=" two"))]),
+        ])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+    )
+    llm = LLMClient(client, "test-model")  # type: ignore[arg-type]
+
+    assert list(llm.stream("prompt")) == ["one", " two"]
+    assert calls == [{
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "prompt"}],
+        "temperature": 0,
+        "stream": True,
+    }]

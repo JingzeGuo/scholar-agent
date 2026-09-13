@@ -879,6 +879,43 @@ def test_writer_and_deterministic_citation_validation_do_not_regress(
     assert "A citation supports only the sentence in which it appears" in llm.last_prompt
 
 
+def test_writer_streams_validated_citations_without_waiting_for_the_full_answer(
+    sample_chunks: list[dict],
+) -> None:
+    state = _state_with(
+        [requirement("R1", "Explain Self-RAG", ["Self-RAG"], "Self-RAG", "bm25")],
+    )
+    state["evidence"], state["evidence_board"] = _build_evidence_board(
+        [{**sample_chunks[0], "_requirement_scores": {"R1": 1.0}}],
+        state["plan"]["requirements"],
+        min_score=-1.0,
+    )
+
+    class StreamingLLM(StubLLM):
+        def stream(self, prompt: str):
+            self.last_prompt = prompt
+            yield "Self-RAG retrieves adaptively ["
+            yield "E1]. It uses reflection "
+            yield "tokens [E1]."
+
+    llm = StreamingLLM()
+    emitted: list[str] = []
+
+    draft = writer_node(state, llm, emitted.append)  # type: ignore[arg-type]
+    state.update(draft)
+
+    assert draft["answer"] == (
+        "Self-RAG retrieves adaptively [E1]. It uses reflection tokens [E1]."
+    )
+    streamed = "".join(emitted)
+    assert streamed == (
+        "Self-RAG retrieves adaptively [Self-RAG.pdf p.1]. "
+        "It uses reflection tokens [Self-RAG.pdf p.1].\n"
+    )
+    assert citation_validator_node(state)["answer"] == streamed.rstrip("\n")
+    assert llm.complete_calls == 0
+
+
 def test_writer_abstains_without_evidence_or_an_llm_call() -> None:
     state = initial_state("Missing evidence")
     llm = StubLLM(text="must not be used")

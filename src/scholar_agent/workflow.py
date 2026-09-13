@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -21,6 +22,8 @@ def build_workflow(
     engine: RetrievalEngine,
     settings: Settings,
     llm: LLMClient | None,
+    *,
+    writer_emit: Callable[[str], None] | None = None,
 ) -> Any:
     if llm is None:
         raise ValueError("llm is required")
@@ -32,7 +35,7 @@ def build_workflow(
     )
     workflow.add_node("controller", lambda state: controller_node(state, llm))
     workflow.add_node("recovery", lambda state: recovery_node(state, engine, settings))
-    workflow.add_node("writer", lambda state: writer_node(state, llm))
+    workflow.add_node("writer", lambda state: writer_node(state, llm, writer_emit))
     workflow.add_node("citation_validator", citation_validator_node)
     workflow.set_entry_point("planner")
     workflow.add_conditional_edges(
@@ -78,7 +81,9 @@ def run_question(
     engine: RetrievalEngine,
     settings: Settings,
     llm: LLMClient | None,
+    *,
+    writer_emit: Callable[[str], None] | None = None,
 ) -> AgentState:
     state = initial_state(question)
-    result = build_workflow(engine, settings, llm).invoke(state)
+    result = build_workflow(engine, settings, llm, writer_emit=writer_emit).invoke(state)
     return AgentState(**result)

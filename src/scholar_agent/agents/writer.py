@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Callable
 
 from scholar_agent.citations import (
     PAGE_CITATION_RE,
@@ -14,6 +16,7 @@ from scholar_agent.models import AgentState
 
 LOGGER = logging.getLogger(__name__)
 SAFE_ABSTENTION = "The supplied evidence is insufficient to provide a citation-grounded answer."
+STREAM_BOUNDARY_RE = re.compile(r"(?<=[.!?])(?:[ \t]+|\n+)|\n+")
 
 
 def _writer_context(state: AgentState) -> str:
@@ -106,23 +109,66 @@ def _writer_prompt(state: AgentState) -> str:
     return _render_writer_prompt(state["question"], _writer_context(state))
 
 
-def writer_node(state: AgentState, llm: LLMClient) -> dict:
+def _render_answer_citations(answer: str, evidence: list[dict]) -> str:
+    return validate_citations(PAGE_CITATION_RE.sub("", answer), evidence)
+
+
+def _stream_writer(
+    prompt: str,
+    llm: LLMClient,
+    evidence: list[dict],
+    emit: Callable[[str], None],
+) -> str:
+    raw_chunks = []
+    pending = ""
+    emitted = False
+    ends_with_newline = False
+
+    def send(text: str) -> None:
+        nonlocal emitted, ends_with_newline
+        emit(text)
+        emitted = True
+        ends_with_newline = text.endswith("\n")
+
+    for chunk in llm.stream(prompt):
+        raw_chunks.append(chunk)
+        pending += chunk
+        while match := STREAM_BOUNDARY_RE.search(pending):
+            rendered = _render_answer_citations(pending[:match.start()], evidence)
+            if rendered:
+                send(rendered + match.group(0))
+            pending = pending[match.end():]
+    rendered = _render_answer_citations(pending, evidence)
+    if rendered:
+        send(rendered)
+    if emitted and not ends_with_newline:
+        send("\n")
+    return "".join(raw_chunks).strip()
+
+
+def writer_node(
+    state: AgentState,
+    llm: LLMClient,
+    emit: Callable[[str], None] | None = None,
+) -> dict:
     """Write one grounded draft from the requirement–evidence board."""
     if not state["evidence"]:
         LOGGER.info("[writer] deterministic abstention without evidence")
         return {"answer": SAFE_ABSTENTION}
 
-    answer = llm.complete(_writer_prompt(state)).strip()
+    prompt = _writer_prompt(state)
+    answer = (
+        llm.complete(prompt).strip()
+        if emit is None
+        else _stream_writer(prompt, llm, state["evidence"], emit)
+    )
     LOGGER.info("[writer] produced draft")
     return {"answer": answer}
 
 
 def citation_validator_node(state: AgentState) -> dict:
     """Render known evidence IDs and remove fabricated page citations deterministically."""
-    answer = validate_citations(
-        PAGE_CITATION_RE.sub("", state["answer"]),
-        state["evidence"],
-    )
+    answer = _render_answer_citations(state["answer"], state["evidence"])
     summary = citation_summary(answer, state["evidence"])
     LOGGER.info(
         "[citations] citations=%d sources=%d",

@@ -136,6 +136,13 @@ class ConversationLLM(FakeLLM):
         }
 
 
+class StreamingQuestionLLM(SimpleQuestionLLM):
+    def stream(self, prompt: str):
+        self.last_prompt = prompt
+        yield "Agentic RAG retrieves iteratively ["
+        yield "E1]."
+
+
 def test_adaptive_workflow_reaches_writer_and_validates_citations(
     sample_chunks: list[dict],
     monkeypatch: Any,
@@ -235,6 +242,33 @@ def test_simple_definition_uses_the_planned_retrieval_and_controller_stops(
     assert "keeping simple definitions, facts, and introductory questions brief" in llm.last_prompt
     assert result["controller_trace"]["actions"] == []
     assert result["evidence_board"]["R1"]["status"] == "sufficient"
+
+
+def test_workflow_streams_the_writer_with_rendered_citations(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    engine = FakeEngine(sample_chunks[:1])
+    monkeypatch.setattr(
+        scholar_agent.reranker,
+        "_cross_encoder",
+        lambda model: FakeCrossEncoder(),
+    )
+    llm = StreamingQuestionLLM()
+    emitted: list[str] = []
+
+    result = run_question(
+        "do u know agentic rag",
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        llm,  # type: ignore[arg-type]
+        writer_emit=emitted.append,
+    )
+
+    expected = "Agentic RAG retrieves iteratively [Self-RAG.pdf p.1]."
+    assert "".join(emitted) == expected + "\n"
+    assert result["answer"] == expected
+    assert llm.complete_calls == 0
 
 
 def test_conversation_route_skips_the_research_workflow() -> None:

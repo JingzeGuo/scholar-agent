@@ -42,7 +42,7 @@ def test_cli_requires_online_dependencies_and_reports_failures(monkeypatch) -> N
     runner = CliRunner()
     captured: list[str] = []
 
-    def answer(question: str) -> str:
+    def answer(question: str, writer_emit=None) -> str:
         captured.append(question)
         return "answer"
 
@@ -58,7 +58,7 @@ def test_cli_requires_online_dependencies_and_reports_failures(monkeypatch) -> N
     monkeypatch.setattr(
         cli_module,
         "_ask",
-        lambda question: (_ for _ in ()).throw(MissingAPIKeyError()),
+        lambda question, writer_emit=None: (_ for _ in ()).throw(MissingAPIKeyError()),
     )
     missing = runner.invoke(app, ["ask", "question"])
     assert missing.exit_code == 2
@@ -68,7 +68,7 @@ def test_cli_requires_online_dependencies_and_reports_failures(monkeypatch) -> N
     monkeypatch.setattr(
         cli_module,
         "_ask",
-        lambda question: (_ for _ in ()).throw(OpenAIError("down")),
+        lambda question, writer_emit=None: (_ for _ in ()).throw(OpenAIError("down")),
     )
     unavailable = runner.invoke(app, ["ask", "question"])
     assert unavailable.exit_code == 1
@@ -77,7 +77,9 @@ def test_cli_requires_online_dependencies_and_reports_failures(monkeypatch) -> N
     monkeypatch.setattr(
         cli_module,
         "_ask",
-        lambda question: (_ for _ in ()).throw(ModelUnavailableError("model failed")),
+        lambda question, writer_emit=None: (_ for _ in ()).throw(
+            ModelUnavailableError("model failed"),
+        ),
     )
     model_failure = runner.invoke(app, ["ask", "question"])
     assert model_failure.exit_code == 1
@@ -93,3 +95,17 @@ def test_cli_requires_online_dependencies_and_reports_failures(monkeypatch) -> N
     assert index_failure.exit_code == 1
     assert "download failed" in index_failure.output
     assert "Traceback" not in index_failure.output
+
+
+def test_ask_streams_without_printing_the_final_answer_twice(monkeypatch) -> None:
+    def answer(question: str, writer_emit) -> str:
+        writer_emit("First sentence. ")
+        writer_emit("Second sentence.")
+        return "First sentence. Second sentence."
+
+    monkeypatch.setattr(cli_module, "_ask", answer)
+
+    result = CliRunner().invoke(app, ["ask", "question"])
+
+    assert result.exit_code == 0
+    assert result.output == "First sentence. Second sentence.\n"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -62,28 +63,50 @@ def build_indexes() -> None:
     typer.echo("Built BM25 and dense indexes")
 
 
-def _ask(question: str) -> str:
+def _ask(question: str, writer_emit: Callable[[str], None] | None = None) -> str:
     settings = _settings()
     llm = LLMClient.from_env(settings)
     if llm is None:
         raise MissingAPIKeyError
     engine = RetrievalEngine.load(settings)
-    state = run_question(question, engine, settings, llm)
+    state = run_question(question, engine, settings, llm, writer_emit=writer_emit)
     return state["answer"]
 
 
 @app.command()
 def ask(question: str) -> None:
     """Run the evidence-grounded research workflow."""
+    streamed = False
+    ends_with_newline = False
+
+    def emit(text: str) -> None:
+        nonlocal streamed, ends_with_newline
+        if not text:
+            return
+        typer.echo(text, nl=False)
+        streamed = True
+        ends_with_newline = text.endswith("\n")
+
+    def finish_stream() -> None:
+        if streamed and not ends_with_newline:
+            typer.echo()
+
     try:
-        typer.echo(_ask(question))
+        answer = _ask(question, emit)
+        if streamed:
+            finish_stream()
+        else:
+            typer.echo(answer)
     except MissingAPIKeyError:
+        finish_stream()
         typer.echo("LLM API key missing. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.", err=True)
         raise typer.Exit(code=2) from None
     except OpenAIError:
+        finish_stream()
         typer.echo("LLM API unavailable.", err=True)
         raise typer.Exit(code=1) from None
     except ModelUnavailableError as exc:
+        finish_stream()
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
 

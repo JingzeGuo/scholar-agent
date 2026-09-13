@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from typing import Any
 
 from openai import OpenAI
@@ -38,6 +39,18 @@ class LLMClient:
             temperature=0,
         )
         return response.choices[0].message.content or ""
+
+    def stream(self, prompt: str) -> Iterator[str]:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            stream=True,
+        )
+        for chunk in response:
+            content = chunk.choices[0].delta.content
+            if content:
+                yield content
 
     def complete_json(self, prompt: str) -> dict[str, Any]:
         response = self.client.chat.completions.create(
