@@ -158,34 +158,10 @@ def test_controller_prompt_contains_observation_and_no_answer_labels(sample_chun
     assert '"assessments"' in llm.prompt
     assert "sufficient" in llm.prompt
     assert "unresolved" in llm.prompt
+    assert "Do not request recovery merely because more detail or evidence might exist" in llm.prompt
+    assert "Missing peripheral background does not justify an action" in llm.prompt
     assert "gold_pages" not in llm.prompt
     assert "answer_key" not in llm.prompt
-
-
-def test_controller_skips_llm_and_recovery_when_plan_budget_is_zero(sample_chunks):
-    state = _controller_state(sample_chunks)
-    state["plan"]["max_recovery_actions"] = 0
-    state["evidence_board"]["R1"].update(
-        status="missing",
-        action={
-            "tool": "increase_depth",
-            "query": "more evidence",
-            "state": "pending",
-        },
-    )
-    llm = StubLLM({"assessments": []})
-
-    result = controller_node(state, llm)  # type: ignore[arg-type]
-
-    assert result == {
-        "controller_trace": {
-            "actions": [],
-            "rejected_actions": 0,
-            "rejections": [],
-        },
-    }
-    assert llm.prompt == ""
-    assert board_recovery_actions(state) == []  # type: ignore[arg-type]
 
 
 def test_recovery_actions_are_read_from_blackboard_not_trace(sample_chunks):

@@ -155,24 +155,15 @@ def test_planner_accepts_all_supported_retrieval_strategies() -> None:
     assert "do not predict the answer" in llm.last_prompt
 
 
-def test_planner_routes_simple_definition_to_one_low_budget_requirement() -> None:
+def test_planner_preserves_a_compact_definition_plan_without_routing_metadata() -> None:
     llm = StubLLM(
         {
-            "intent": "definition",
-            "complexity": "low",
             "requirements": [
                 {
                     "description": "Define agentic RAG briefly",
                     "targets": ["agentic rag"],
                     "query": "agentic RAG",
                     "retrieval_strategy": "bm25",
-                    "top_k": 12,
-                },
-                {
-                    "description": "Review the history of agentic RAG",
-                    "targets": ["agentic rag"],
-                    "query": "agentic RAG history",
-                    "retrieval_strategy": "hybrid",
                     "top_k": 12,
                 },
             ],
@@ -182,11 +173,6 @@ def test_planner_routes_simple_definition_to_one_low_budget_requirement() -> Non
     plan = planner_node(initial_state("do u know agentic rag"), llm)["plan"]  # type: ignore[arg-type]
 
     assert plan == {
-        "intent": "definition",
-        "complexity": "low",
-        "research_budget": "low",
-        "max_recovery_actions": 0,
-        "answer_length": "short",
         "requirements": [
             requirement(
                 "R1",
@@ -194,18 +180,17 @@ def test_planner_routes_simple_definition_to_one_low_budget_requirement() -> Non
                 ["agentic rag"],
                 "agentic RAG",
                 "bm25",
-                MIN_TOP_K,
+                12,
             ),
         ],
     }
-    assert "classify what the user is asking" in llm.last_prompt.casefold()
+    assert "minimum requirements needed" in llm.last_prompt
+    assert "should normally remain one" in llm.last_prompt
 
 
-def test_planner_keeps_llm_classified_compound_question_on_normal_budget() -> None:
+def test_planner_keeps_a_compound_question_plan() -> None:
     llm = StubLLM(
         {
-            "intent": "comparison",
-            "complexity": "medium",
             "requirements": [
                 {
                     "description": "Compare Alpha and Beta",
@@ -338,8 +323,6 @@ def test_planner_ignores_extra_payload_fields_instead_of_falling_back() -> None:
         initial_state("Define Alpha"),
         StubLLM(
             {
-                "intent": "definition",
-                "complexity": "low",
                 "reason": "The user asks for a short definition.",
                 "requirements": [
                     {
@@ -356,7 +339,7 @@ def test_planner_ignores_extra_payload_fields_instead_of_falling_back() -> None:
     )["plan"]
 
     assert plan["requirements"] == [
-        requirement("R1", "Define Alpha", ["Alpha"], "Alpha", "dense", MIN_TOP_K),
+        requirement("R1", "Define Alpha", ["Alpha"], "Alpha", "dense", 8),
     ]
 
 
@@ -786,6 +769,7 @@ def test_writer_uses_board_without_renumbering_or_hiding_selected_evidence(
     assert "Requirements are research scaffolding, not an answer outline" in prompt
     assert "use only\nthe subset needed to answer clearly and directly" in prompt
     assert "Do not mention a fact merely because supporting\nevidence is available" in prompt
+    assert "Match the depth and length of the answer to the user's actual request" in prompt
     assert "Do not select one identity merely because its passage has the highest score" in prompt
     assert "use it instead of redoing the initial coverage" in prompt
     assert "do not report peripheral gaps" in prompt

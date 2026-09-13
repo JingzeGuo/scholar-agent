@@ -78,16 +78,9 @@ def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
 def _writer_prompt(state: AgentState, *, use_evidence_board: bool = True) -> str:
     """Keep answer policy identical when ablating only the evidence layout."""
     context = _writer_context(state, use_evidence_board)
-    length_policy = ""
-    if state["plan"].get("answer_length") == "short":
-        length_policy = """
-This is a low-complexity definition question. Give the definition first, keep the entire answer
-to 2–5 sentences, and do not broaden it into history, surveys, benchmarks, or adjacent methods.
-"""
     return f"""You are the Writer in an evidence-grounded research workflow.
 
 Answer in English using only the supplied evidence.
-{length_policy}
 Output only directly supported factual answers. Mention an evidence gap only if it prevents you
 from answering an important part of the user's question; do not report peripheral gaps.
 Start with the first supported claim and its
@@ -108,6 +101,8 @@ Requirements are research scaffolding, not an answer outline. Structure the fina
 the original user question. Treat the supplied evidence as a candidate support pool and use only
 the subset needed to answer clearly and directly. Do not mention a fact merely because supporting
 evidence is available. Prefer the shortest answer that fully satisfies the user's intent.
+Match the depth and length of the answer to the user's actual request. Keep simple definitions,
+facts, and introductory questions brief; add detail only when the question requires it.
 If the question uses an acronym or named entity without disambiguating context and the candidate
 evidence supports multiple identities, state that it is ambiguous and briefly distinguish the
 relevant meanings. Do not select one identity merely because its passage has the highest score.

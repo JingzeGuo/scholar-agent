@@ -6,7 +6,6 @@ import pytest
 
 import scholar_agent.reranker
 import scholar_agent.workflow as workflow_module
-from scholar_agent.agents.planner import MIN_TOP_K
 from scholar_agent.agents.writer import SAFE_ABSTENTION
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
@@ -64,8 +63,6 @@ class FakeLLM:
                 }],
             }
         return {
-            "intent": "explanation",
-            "complexity": "medium",
             "requirements": [
                 {
                     "description": "Answer the requested evidence question",
@@ -101,14 +98,20 @@ class ControllerLLM(FakeLLM):
         }
 
 
-class DefinitionLLM(FakeLLM):
+class SimpleQuestionLLM(FakeLLM):
     def complete_json(self, prompt: str) -> dict:
         self.json_calls += 1
         if "Evidence-Gap Controller" in prompt:
-            raise AssertionError("low-budget definitions must skip the Controller LLM")
+            return {
+                "assessments": [{
+                    "requirement_id": "R1",
+                    "status": "sufficient",
+                    "covered": ["The selected evidence supports a direct answer"],
+                    "missing": [],
+                    "action": None,
+                }],
+            }
         return {
-            "intent": "definition",
-            "complexity": "low",
             "requirements": [
                 {
                     "description": "Define agentic RAG briefly",
@@ -196,7 +199,7 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
     ]
 
 
-def test_simple_definition_uses_one_small_retrieval_and_no_controller_call(
+def test_simple_definition_uses_the_planned_retrieval_and_controller_stops(
     sample_chunks: list[dict],
     monkeypatch: Any,
 ) -> None:
@@ -206,7 +209,7 @@ def test_simple_definition_uses_one_small_retrieval_and_no_controller_call(
         "_cross_encoder",
         lambda model: FakeCrossEncoder(),
     )
-    llm = DefinitionLLM()
+    llm = SimpleQuestionLLM()
 
     result = run_question(
         "do u know agentic rag",
@@ -215,14 +218,13 @@ def test_simple_definition_uses_one_small_retrieval_and_no_controller_call(
         llm,  # type: ignore[arg-type]
     )
 
-    assert result["plan"]["intent"] == "definition"
-    assert result["plan"]["complexity"] == "low"
-    assert result["plan"]["max_recovery_actions"] == 0
-    assert engine.sparse_calls == [(["agentic rag"], MIN_TOP_K)]
+    assert len(result["plan"]["requirements"]) == 1
+    assert engine.sparse_calls == [(["agentic rag"], 4)]
     assert engine.dense_calls == []
-    assert llm.json_calls == 1
-    assert "keep the entire answer\nto 2–5 sentences" in llm.last_prompt
+    assert llm.json_calls == 2
+    assert "Keep simple definitions,\nfacts, and introductory questions brief" in llm.last_prompt
     assert result["controller_trace"]["actions"] == []
+    assert result["evidence_board"]["R1"]["status"] == "sufficient"
 
 
 def test_fixed_hybrid_workflow_ignores_planner_strategy(

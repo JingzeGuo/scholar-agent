@@ -26,7 +26,6 @@ RETRIEVAL_STRATEGIES = frozenset({"bm25", "dense", "hybrid"})
 MIN_TOP_K = 4
 MAX_TOP_K = 12
 DEFAULT_TOP_K = 8
-LOW_COMPLEXITY_TOP_K = MIN_TOP_K
 NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
@@ -128,15 +127,7 @@ class PlannedRequirement(_PlannerModel):
 
 
 class PlannerPayload(_PlannerModel):
-    intent: Literal["definition", "simple_fact", "comparison", "explanation", "deep_research"] = (
-        "explanation"
-    )
-    complexity: Literal["low", "medium", "high"] = "medium"
     requirements: list[object]
-
-
-def _is_low_budget(intent: str, complexity: str) -> bool:
-    return complexity == "low" and intent in {"definition", "simple_fact"}
 
 
 def _requirements(
@@ -190,10 +181,7 @@ The plan is consumed as follows:
 - Requirement queries and targets balance evidence selection and prevent method or aspect
   substitution.
 
-Return one JSON object with exactly these fields:
-- "intent": exactly one of "definition", "simple_fact", "comparison", "explanation", or
-  "deep_research"
-- "complexity": exactly one of "low", "medium", or "high"
+Return one JSON object with exactly one field:
 - "requirements": one to {MAX_REQUIREMENTS} objects, each with exactly these fields:
   - "description": one concise English statement of an atomic answer requirement
   - "targets": zero to {MAX_TARGETS_PER_REQUIREMENT} method or paper names explicitly written in
@@ -203,13 +191,11 @@ Return one JSON object with exactly these fields:
   - "top_k": an integer from {MIN_TOP_K} to {MAX_TOP_K}
 
 Rules:
-- Classify what the user is asking, not how technical the named topic sounds. A familiarity prompt
-  such as "do you know X?" is normally a low-complexity definition, not deep research.
-- Use low complexity for one definition or fact that needs no synthesis. For a low-complexity
-  definition or simple fact, return exactly one concise requirement with top_k={MIN_TOP_K}.
-- Use medium complexity for bounded explanations or comparisons and high complexity only for
-  multi-part synthesis, surveys, literature reviews, or explicitly deep research.
-- Do not infer a request for history, related methods, benchmarks, or a survey from a topic name.
+- Create only the minimum requirements needed to answer the user's actual question. A simple
+  definition, fact, yes/no, terminology, or introductory question should normally remain one
+  requirement. Do not turn a technical topic into a survey, history, comparison, benchmark review,
+  or list of related methods unless the user asks for those things.
+- Use multiple requirements only for distinct requested aspects that need independent evidence.
 - Keep asymmetric requests separate instead of applying every aspect to every target.
 - A comparison requirement may name multiple targets; a global requirement may have no targets.
 - A comparison can be synthesized from separately supported facts about its targets. When those
@@ -232,6 +218,8 @@ Rules:
 - Exact paper titles, acronyms, and exact method names may favor BM25.
 - Conceptual mechanisms and semantic descriptions may favor dense retrieval.
 - Ambiguous comparisons or mixed lexical-semantic needs may favor hybrid retrieval.
+- Choose top_k from retrieval difficulty and ambiguity rather than expected answer length. A brief
+  answer may still need broader retrieval to resolve an ambiguous identity.
 - Broad exploratory requirements may use a larger top_k.
 - Choose retrieval that efficiently finds the evidence; do not predict the answer.
 - Keep the plan compact and directly grounded in the question.
@@ -246,19 +234,13 @@ User question:
 def planner_node(state: AgentState, llm: LLMClient) -> dict:
     """Return one compact retrieval and answer plan."""
     question = state["question"].strip()
-    intent = "explanation"
-    complexity = "medium"
     try:
         payload = PlannerPayload.model_validate(llm.complete_json(_planner_prompt(question)))
     except ValueError as exc:
         LOGGER.warning("[planner] invalid response; using the original question: %s", exc)
         requirements = []
     else:
-        intent = payload.intent
-        complexity = payload.complexity
-        limit = 1 if _is_low_budget(intent, complexity) else MAX_REQUIREMENTS
-        requirements = _requirements(payload.requirements, question, limit=limit)
-    low_budget = _is_low_budget(intent, complexity)
+        requirements = _requirements(payload.requirements, question)
     if not requirements:
         LOGGER.warning("[planner] no valid requirements; using the original question")
         requirements = [
@@ -267,25 +249,16 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
                 "description": question,
                 "targets": [],
                 "query": question,
-                "retrieval_strategy": "bm25" if low_budget else "hybrid",
-                "top_k": LOW_COMPLEXITY_TOP_K if low_budget else DEFAULT_TOP_K,
+                "retrieval_strategy": "hybrid",
+                "top_k": DEFAULT_TOP_K,
             },
         ]
-    elif low_budget:
-        requirements[0]["top_k"] = LOW_COMPLEXITY_TOP_K
 
     plan = {
-        "intent": intent,
-        "complexity": complexity,
-        "research_budget": "low" if low_budget else "normal",
-        "max_recovery_actions": 0 if low_budget else 2,
-        "answer_length": "short" if low_budget else "normal",
         "requirements": requirements,
     }
     LOGGER.info(
-        "[planner] intent=%s complexity=%s requirements=%d targets=%d strategies=%s",
-        plan["intent"],
-        plan["complexity"],
+        "[planner] requirements=%d targets=%d strategies=%s",
         len(plan["requirements"]),
         len(requirement_targets(plan["requirements"])),
         ",".join(item["retrieval_strategy"] for item in plan["requirements"]),
