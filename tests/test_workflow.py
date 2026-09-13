@@ -82,6 +82,8 @@ class FakeLLM:
 
 class ControllerLLM(FakeLLM):
     def complete_json(self, prompt: str) -> dict:
+        if "Evidence-Gap Controller" not in prompt:
+            return super().complete_json(prompt)
         self.json_calls += 1
         return {
             "assessments": [{
@@ -153,7 +155,6 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
         llm,  # type: ignore[arg-type]
     )
 
-    assert result["recovery_mode"] == "controller"
     assert engine.sparse_calls == [(["Self-RAG CRAG retrieval"], 6)]
     assert engine.dense_calls == []
     assert "[Self-RAG.pdf p.1]" in result["answer"]
@@ -231,7 +232,7 @@ def test_simple_definition_uses_the_planned_retrieval_and_controller_stops(
     assert engine.sparse_calls == [(["agentic rag"], 4)]
     assert engine.dense_calls == []
     assert llm.json_calls == 2
-    assert "Keep simple definitions,\nfacts, and introductory questions brief" in llm.last_prompt
+    assert "keeping simple definitions, facts, and introductory questions brief" in llm.last_prompt
     assert result["controller_trace"]["actions"] == []
     assert result["evidence_board"]["R1"]["status"] == "sufficient"
 
@@ -258,45 +259,6 @@ def test_conversation_route_skips_the_research_workflow() -> None:
     assert result["controller_trace"]["actions"] == []
 
 
-def test_shared_plan_skips_planner_and_is_not_mutated(
-    sample_chunks: list[dict],
-    monkeypatch: Any,
-) -> None:
-    engine = FakeEngine(sample_chunks[:1])
-    monkeypatch.setattr(
-        scholar_agent.reranker,
-        "_cross_encoder",
-        lambda model: FakeCrossEncoder(),
-    )
-    shared_plan = {
-        "requirements": [
-            {
-                "id": "R1",
-                "description": "Explain Self-RAG",
-                "targets": ["Self-RAG"],
-                "query": "Self-RAG retrieval",
-                "retrieval_strategy": "bm25",
-                "top_k": 6,
-            },
-        ],
-    }
-    llm = FakeLLM()
-
-    result = run_question(
-        "Explain Self-RAG",
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        llm,  # type: ignore[arg-type]
-        shared_plan=shared_plan,
-    )
-
-    assert llm.json_calls == 1
-    assert result["evidence_board"]["R1"]["status"] == "sufficient"
-    assert result["plan"] == shared_plan
-    assert result["plan"] is not shared_plan
-    assert shared_plan["requirements"][0]["retrieval_strategy"] == "bm25"
-
-
 def test_controller_workflow_executes_one_recovery_round(
     sample_chunks: list[dict],
     monkeypatch: Any,
@@ -307,22 +269,17 @@ def test_controller_workflow_executes_one_recovery_round(
         "_cross_encoder",
         lambda model: FakeCrossEncoder(),
     )
-    plan = {"requirements": [{
-        "id": "R1", "description": "Explain Self-RAG", "targets": ["Self-RAG"],
-        "query": "Self-RAG", "retrieval_strategy": "bm25", "top_k": 8,
-    }]}
     llm = ControllerLLM()
 
     result = run_question(
         "Explain Self-RAG",
         engine,  # type: ignore[arg-type]
-        Settings(recovery_mode="controller"),
+        Settings(),
         llm,  # type: ignore[arg-type]
-        shared_plan=plan,
     )
 
-    assert result["recovery_mode"] == "controller"
-    assert llm.json_calls == llm.complete_calls == 1
+    assert llm.json_calls == 2
+    assert llm.complete_calls == 1
     assert result["evidence_board"]["R1"]["status"] == "missing"
     assert result["evidence_board"]["R1"]["action"]["tool"] == "expand_neighbors"
     assert result["evidence_board"]["R1"]["action"]["state"] == "executed"
@@ -364,7 +321,7 @@ def test_run_question_starts_with_the_selected_initial_state(monkeypatch: Any) -
         lambda *args, **kwargs: FakeWorkflow(),
     )
 
-    result = run_question(
+    run_question(
         "question",
         FakeEngine([]),  # type: ignore[arg-type]
         Settings(),
@@ -372,7 +329,6 @@ def test_run_question_starts_with_the_selected_initial_state(monkeypatch: Any) -
     )
 
     assert captured == [initial_state("question")]
-    assert result["recovery_mode"] == "controller"
 
 
 def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
@@ -381,7 +337,6 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
     assert state == {
         "question": "question",
         "route": "research",
-        "recovery_mode": "controller",
         "plan": {"requirements": []},
         "evidence": [],
         "evidence_board": {},
@@ -397,29 +352,15 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
     }
 
 
-def test_initial_state_can_explicitly_disable_controller() -> None:
-    state = initial_state("question", recovery_mode="none")
-
-    assert state["recovery_mode"] == "none"
-
-
 def test_workflow_requires_an_llm() -> None:
     with pytest.raises(ValueError, match="llm is required"):
         build_workflow(FakeEngine([]), Settings(), None)  # type: ignore[arg-type]
-
-
-def test_workflow_rejects_unknown_recovery_mode() -> None:
-    with pytest.raises(ValueError, match="Unknown recovery mode"):
-        build_workflow(  # type: ignore[arg-type]
-            FakeEngine([]), Settings(), FakeLLM(), recovery_mode="automatic",  # type: ignore[arg-type]
-        )
 
 
 def test_agent_state_contains_only_live_workflow_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
         "route",
-        "recovery_mode",
         "plan",
         "evidence",
         "evidence_board",

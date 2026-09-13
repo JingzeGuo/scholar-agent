@@ -68,7 +68,7 @@ def _raw_evidence(item: dict) -> dict:
         **{
             key: value
             for key, value in item.items()
-            if key not in {"id", "paper_id", "supports", "requirement_scores"}
+            if key not in {"id", "supports", "requirement_scores"}
         },
         "_requirement_scores": dict(item["requirement_scores"]),
     }
@@ -201,7 +201,7 @@ def prepare_inputs(
     for question in questions:
         spec = CASE_SPECS[question["id"]]
         saved = source[(question["id"], source_variant)]
-        baseline = initial_state(question["question"], recovery_mode="none")
+        baseline = initial_state(question["question"])
         baseline["plan"] = deepcopy(saved["trace"]["plan"])
         baseline.update(researcher_runner(baseline, engine, settings))
         current_refs = [item["chunk_id"] for item in baseline["evidence"]]
@@ -210,7 +210,7 @@ def prepare_inputs(
                 f"Selected evidence differs from the source run for {question['id']}",
             )
 
-        requests = _retrieval_requests(baseline["plan"], source_variant)
+        requests = _retrieval_requests(baseline["plan"])
         _, source_rankings = _execute_retrieval(engine, requests)
         initial_ids = {
             item["chunk_id"] for ranking in source_rankings for item in ranking

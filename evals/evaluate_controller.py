@@ -48,7 +48,7 @@ def prepare_inputs(
     samples = []
     for question in questions:
         saved = source[(question["id"], source_variant)]
-        state = initial_state(question["question"], recovery_mode="none")
+        state = initial_state(question["question"])
         state["plan"] = deepcopy(saved["trace"]["plan"])
         state.update(researcher_runner(state, engine, settings))
         samples.append(
@@ -131,7 +131,6 @@ def run_experiment(
             state = deepcopy(sample["state"])
             if _writer_prompt(state) != sample["baseline_prompt"]:
                 raise evaluation.EvaluationError("Writer policy differs from frozen input")
-            state["recovery_mode"] = variant if variant == "controller" else "none"
             calls_before = llm.calls
             started = time.perf_counter()
             controller_latency = recovery_latency = 0.0

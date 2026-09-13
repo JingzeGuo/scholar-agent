@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -22,60 +21,41 @@ def build_workflow(
     engine: RetrievalEngine,
     settings: Settings,
     llm: LLMClient | None,
-    *,
-    recovery_mode: str | None = None,
-    shared_plan: dict | None = None,
 ) -> Any:
     if llm is None:
         raise ValueError("llm is required")
-    recovery = recovery_mode or settings.recovery_mode
-    if recovery not in {"none", "controller"}:
-        raise ValueError(f"Unknown recovery mode: {recovery}")
     workflow = StateGraph(AgentState)
+    workflow.add_node("planner", lambda state: planner_node(state, llm))
     workflow.add_node(
         "researcher",
         lambda state: researcher_node(state, engine, settings),
     )
+    workflow.add_node("controller", lambda state: controller_node(state, llm))
+    workflow.add_node("recovery", lambda state: recovery_node(state, engine, settings))
     workflow.add_node("writer", lambda state: writer_node(state, llm))
     workflow.add_node("citation_validator", citation_validator_node)
-    if recovery == "controller":
-        workflow.add_node("controller", lambda state: controller_node(state, llm))
-        workflow.add_node("recovery", lambda state: recovery_node(state, engine, settings))
-    if shared_plan is None:
-        workflow.add_node("planner", lambda state: planner_node(state, llm))
-        workflow.set_entry_point("planner")
-        workflow.add_conditional_edges(
-            "planner",
-            lambda state: state["route"],
-            {"research": "researcher", "conversation": END},
-        )
-    else:
-        workflow.set_entry_point("researcher")
-    if recovery == "controller":
-        workflow.add_edge("researcher", "controller")
-        workflow.add_conditional_edges(
-            "controller",
-            lambda state: "recovery" if board_recovery_actions(state) else "writer",
-            {"recovery": "recovery", "writer": "writer"},
-        )
-        workflow.add_edge("recovery", "writer")
-    else:
-        workflow.add_edge("researcher", "writer")
+    workflow.set_entry_point("planner")
+    workflow.add_conditional_edges(
+        "planner",
+        lambda state: state["route"],
+        {"research": "researcher", "conversation": END},
+    )
+    workflow.add_edge("researcher", "controller")
+    workflow.add_conditional_edges(
+        "controller",
+        lambda state: "recovery" if board_recovery_actions(state) else "writer",
+        {"recovery": "recovery", "writer": "writer"},
+    )
+    workflow.add_edge("recovery", "writer")
     workflow.add_edge("writer", "citation_validator")
     workflow.add_edge("citation_validator", END)
     return workflow.compile()
 
 
-def initial_state(
-    question: str,
-    recovery_mode: str = "controller",
-) -> AgentState:
-    if recovery_mode not in {"none", "controller"}:
-        raise ValueError(f"Unknown recovery mode: {recovery_mode}")
+def initial_state(question: str) -> AgentState:
     return {
         "question": question,
         "route": "research",
-        "recovery_mode": recovery_mode,
         "plan": {
             "requirements": [],
         },
@@ -98,19 +78,7 @@ def run_question(
     engine: RetrievalEngine,
     settings: Settings,
     llm: LLMClient | None,
-    *,
-    recovery_mode: str | None = None,
-    shared_plan: dict | None = None,
 ) -> AgentState:
-    recovery = recovery_mode or settings.recovery_mode
-    state = initial_state(question, recovery_mode=recovery)
-    if shared_plan is not None:
-        state["plan"] = deepcopy(shared_plan)
-    result = build_workflow(
-        engine,
-        settings,
-        llm,
-        recovery_mode=recovery,
-        shared_plan=shared_plan,
-    ).invoke(state)
+    state = initial_state(question)
+    result = build_workflow(engine, settings, llm).invoke(state)
     return AgentState(**result)

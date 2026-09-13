@@ -29,7 +29,7 @@ def _raw_evidence(item: dict) -> dict:
         **{
             key: value
             for key, value in item.items()
-            if key not in {"id", "paper_id", "supports", "requirement_scores"}
+            if key not in {"id", "supports", "requirement_scores"}
         },
         "_requirement_scores": dict(item["requirement_scores"]),
     }

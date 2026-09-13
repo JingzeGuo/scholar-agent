@@ -108,7 +108,7 @@ Planner's original choice remains in `plan`. These fields support analysis of
 strategy proportions, successes by requirement type, retrieval-cost savings,
 and failed routing choices.
 
-Saved `evidence` items also retain their stable `id`, `paper_id`, optional
+Saved `evidence` items also retain their stable `id`, optional
 `title`/`section`, `supports`, and `requirement_scores`, so the Writer's grouped
 context can be inspected alongside the board. Links use the per-requirement
 score threshold without requiring literal target-name matches; they are relevance

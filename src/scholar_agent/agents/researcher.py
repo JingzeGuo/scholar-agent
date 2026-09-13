@@ -75,7 +75,6 @@ def _build_evidence_board(
             {
                 **{key: value for key, value in item.items() if key != "_requirement_scores"},
                 "id": evidence_id,
-                "paper_id": item["paper"],
                 "title": item.get("title"),
                 "section": item.get("section"),
                 "supports": supports,

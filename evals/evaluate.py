@@ -19,13 +19,17 @@ from typing import Any
 
 import fitz
 
+from scholar_agent.agents.controller import board_recovery_actions, controller_node
 from scholar_agent.agents.planner import planner_node
+from scholar_agent.agents.recovery import recovery_node
+from scholar_agent.agents.researcher import researcher_node
+from scholar_agent.agents.writer import citation_validator_node, writer_node
 from scholar_agent.citations import cited_pages
 from scholar_agent.config import Settings
 from scholar_agent.llm import LLMClient
 from scholar_agent.reranker import rerank
 from scholar_agent.retrieval import RetrievalEngine, reciprocal_rank_fusion
-from scholar_agent.workflow import initial_state, run_question
+from scholar_agent.workflow import initial_state
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTIONS_PATH = ROOT / "evals" / "questions.jsonl"
@@ -298,7 +302,7 @@ def _public_evidence(evidence: Iterable[dict]) -> list[dict[str, Any]]:
             "score": round(float(item["score"]), 6),
             **{
                 key: item[key]
-                for key in ("id", "paper_id", "title", "section", "supports", "requirement_scores")
+                for key in ("id", "title", "section", "supports", "requirement_scores")
                 if key in item
             },
         }
@@ -354,7 +358,6 @@ def _trace(
         "shared_planner_latency_seconds": round(planner_latency, 4),
         "shared_planner_llm_calls": planner_llm_calls,
         "retrieval_mode": retrieval_variant,
-        "recovery_mode": state.get("recovery_mode", "none"),
         "retrieval_decisions": state.get("retrieval_trace", []),
         "controller": state.get("controller_trace", {}),
         "recovery_actions": state.get("recovery_trace", []),
@@ -473,13 +476,14 @@ def run_retrieval_variant(
     elif retrieval_mode != "adaptive":
         raise EvaluationError(f"Unknown evaluation retrieval variant: {retrieval_mode}")
 
-    state = run_question(
-        question,
-        engine,
-        settings,
-        llm,
-        shared_plan=effective_plan,
-    )
+    state = initial_state(question)
+    state["plan"] = effective_plan
+    state.update(researcher_node(state, engine, settings))
+    state.update(controller_node(state, llm))
+    if board_recovery_actions(state):
+        state.update(recovery_node(state, engine, settings))
+    state.update(writer_node(state, llm))
+    state.update(citation_validator_node(state))
     state["plan"] = deepcopy(shared_plan)
     return state
 
@@ -532,7 +536,7 @@ def run_evaluation(
             planner_started = time.perf_counter()
             try:
                 shared_plan = planner_runner(
-                    initial_state(question["question"], recovery_mode="none"),
+                    initial_state(question["question"]),
                     llm,
                 )["plan"]
             except Exception as exc:

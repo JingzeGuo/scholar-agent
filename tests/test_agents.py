@@ -670,7 +670,6 @@ def test_evidence_board_preserves_shared_matches_gaps_and_unassigned_evidence(
     assert [item["chunk_id"] for item in evidence] == [item["chunk_id"] for item in items]
     assert [item["id"] for item in evidence] == ["E1", "E2", "E3"]
     assert [item["supports"] for item in evidence] == [["R1", "R2"], ["R3"], []]
-    assert evidence[0]["paper_id"] == "Self-RAG.pdf"
     assert evidence[0]["title"] == "Self-RAG: Learning to Retrieve"
     assert evidence[0]["section"] == "2. Method"
     assert evidence[1]["title"] is None
@@ -762,12 +761,12 @@ def test_writer_uses_board_without_renumbering_or_hiding_selected_evidence(
     assert "Additional candidate evidence (not linked to a requirement):\n[E3] Other.pdf — p.3" in prompt
     assert all(item["text"] in prompt for item in items)
     assert "Requirements are research scaffolding, not an answer outline" in prompt
-    assert "use only\nthe subset needed to answer clearly and directly" in prompt
-    assert "Do not mention a fact merely because supporting\nevidence is available" in prompt
-    assert "Match the depth and length of the answer to the user's actual request" in prompt
+    assert "Use only the necessary subset of the candidate evidence" in prompt
+    assert "evidence availability alone is not" in prompt
+    assert "Stop when the request is\nanswered" in prompt
     assert "Do not select one identity merely because its passage has the highest score" in prompt
-    assert "use it instead of redoing the initial coverage" in prompt
-    assert "do not report peripheral gaps" in prompt
+    assert "Use a supplied Controller assessment instead of repeating its coverage analysis" in prompt
+    assert "Mention a gap only when it blocks an important" in prompt
     assert "explicitly state which remaining requirements lack" not in prompt
     assert "Inspect all evidence yourself" not in prompt
     assert "retrieval_strategy" not in prompt
@@ -875,9 +874,9 @@ def test_writer_and_deterministic_citation_validation_do_not_regress(
     assert validated["answer"] == "Supported [Self-RAG.pdf p.1]. Unknown. Fabricated."
     assert "Answer in English" in llm.last_prompt
     assert "Requirement–Evidence Blackboard:" in llm.last_prompt
-    assert "do not add an introductory overview" in llm.last_prompt
-    assert "Do not end with a summary or conclusion" in llm.last_prompt
-    assert "A citation in a neighboring sentence never supports" in llm.last_prompt
+    assert "infer the smallest set of claims needed" in llm.last_prompt
+    assert "evidence availability alone is not" in llm.last_prompt
+    assert "A citation supports only the sentence in which it appears" in llm.last_prompt
 
 
 def test_writer_abstains_without_evidence_or_an_llm_call() -> None:

@@ -341,7 +341,6 @@ Important environment variables:
 | `SCHOLAR_AGENT_EMBEDDING_MODEL` | Dense retrieval model | `sentence-transformers/all-MiniLM-L6-v2` |
 | `SCHOLAR_AGENT_RERANKER_MODEL` | Cross-encoder reranker | `cross-encoder/ms-marco-MiniLM-L6-v2` |
 | `SCHOLAR_AGENT_MIN_RERANK_SCORE` | Evidence retention threshold | `-1.0` |
-| `SCHOLAR_AGENT_RECOVERY_MODE` | Assessment and bounded recovery path | `controller` |
 | `SCHOLAR_AGENT_DATA_DIR` | Processed corpus and index directory | `data` |
 
 Run the quality suite with:

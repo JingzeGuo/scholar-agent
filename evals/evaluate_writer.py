@@ -13,7 +13,12 @@ from pathlib import Path
 
 from evals import evaluate as evaluation
 from scholar_agent.agents.researcher import researcher_node
-from scholar_agent.agents.writer import SAFE_ABSTENTION, _writer_prompt, citation_validator_node
+from scholar_agent.agents.writer import (
+    SAFE_ABSTENTION,
+    _render_writer_prompt,
+    _writer_prompt,
+    citation_validator_node,
+)
 from scholar_agent.config import Settings
 from scholar_agent.indexes import ModelUnavailableError
 from scholar_agent.retrieval import RetrievalEngine
@@ -21,6 +26,41 @@ from scholar_agent.workflow import initial_state
 
 VARIANTS = ("flat", "blackboard")
 PIPELINE_VERSION = "writer_board_ablation_v1"
+
+
+def _flat_writer_prompt(state: dict) -> str:
+    """Render the historical flat-evidence ablation outside production code."""
+    evidence_by_id = {item["id"]: item for item in state["evidence"]}
+
+    def passage(item: dict) -> str:
+        source = item["paper"]
+        if item.get("title"):
+            source = f"{item['title']} ({source})"
+        section = f" — {item['section']}" if item.get("section") else ""
+        return f"[{item['id']}] {source} — p.{item['page']}{section}\n{item['text']}"
+
+    requirements = []
+    for requirement in state["plan"]["requirements"]:
+        entry = state["evidence_board"].get(requirement["id"], {})
+        coverage = ""
+        if entry.get("status", "unknown") != "unknown":
+            covered = "; ".join(entry.get("covered", [])) or "None identified"
+            missing = "; ".join(entry.get("missing", [])) or "None"
+            coverage = (
+                "\nController coverage assessment:\n"
+                f"Status: {entry['status']}\nCovered: {covered}\nMissing: {missing}"
+            )
+        requirements.append(
+            f"Requirement {requirement['id']}:\n{requirement['description']}{coverage}",
+        )
+
+    context = (
+        "Requirements:\n"
+        + "\n\n".join(requirements)
+        + "\n\nEvidence:\n"
+        + "\n\n".join(passage(item) for item in evidence_by_id.values())
+    )
+    return _render_writer_prompt(state["question"], context)
 
 
 def prepare_inputs(
@@ -40,7 +80,7 @@ def prepare_inputs(
     samples = []
     for question in questions:
         saved = source[(question["id"], source_variant)]
-        state = initial_state(question["question"], recovery_mode="none")
+        state = initial_state(question["question"])
         state["plan"] = deepcopy(saved["trace"]["plan"])
         state.update(researcher_runner(state, engine, settings))
         current_refs = [(item["chunk_id"], item["paper"], item["page"]) for item in state["evidence"]]
@@ -54,7 +94,7 @@ def prepare_inputs(
                 "question_id": question["id"],
                 "state": state,
                 "prompts": {
-                    variant: _writer_prompt(state, use_evidence_board=variant == "blackboard")
+                    variant: _flat_writer_prompt(state) if variant == "flat" else _writer_prompt(state)
                     for variant in VARIANTS
                 },
             },

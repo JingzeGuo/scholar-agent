@@ -32,7 +32,7 @@ def _controller_state(sample_chunks: list[dict]) -> dict:
     ]}
     state["evidence"] = [
         {
-            **item, "id": f"E{index}", "paper_id": item["paper"],
+            **item, "id": f"E{index}",
             "supports": [f"R{index}"], "requirement_scores": {f"R{index}": 2.0},
         }
         for index, item in enumerate(sample_chunks[:2], start=1)
@@ -58,15 +58,16 @@ def _controller_state(sample_chunks: list[dict]) -> dict:
     return state
 
 
-def test_controller_keeps_two_bounded_actions_for_distinct_requirements(sample_chunks):
+def test_controller_ignores_extra_fields_and_keeps_two_bounded_actions(sample_chunks):
     state = _controller_state(sample_chunks)
-    payload = {"assessments": [
+    payload = {"reason": "harmless explanation", "assessments": [
         {
             "requirement_id": "R1", "status": "missing", "covered": [],
             "missing": ["reflection-token details"],
+            "reason": "the selected passage is incomplete",
             "action": {
                 "tool": "search_within_paper", "candidate_id": "P1",
-                "query": "reflection tokens",
+                "query": "reflection tokens", "reason": "search the likely paper",
             },
         },
         {

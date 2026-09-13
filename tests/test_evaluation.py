@@ -137,7 +137,7 @@ def test_evaluation_runs_and_resumes_fixed_hybrid_and_adaptive(
                 },
             ],
             "recovery_trace": [{"action": "search_within_paper"}],
-            "evidence": [{**sample_chunks[0], "id": "E1", "paper_id": "Self-RAG.pdf",
+            "evidence": [{**sample_chunks[0], "id": "E1",
                           "title": None, "section": None, "supports": ["R1"],
                           "requirement_scores": {"R1": 2.0}}],
             "evidence_board": {

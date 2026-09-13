@@ -20,7 +20,6 @@ class Settings:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     min_rerank_score: float = -1.0
-    recovery_mode: str = "controller"
     data_dir: Path = Path("data")
 
     def __post_init__(self) -> None:
@@ -32,8 +31,6 @@ class Settings:
             raise ValueError("reranker_model cannot be empty")
         if not math.isfinite(self.min_rerank_score):
             raise ValueError("min_rerank_score must be finite")
-        if self.recovery_mode not in {"none", "controller"}:
-            raise ValueError(f"Unknown recovery mode: {self.recovery_mode}")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -49,10 +46,6 @@ class Settings:
             ),
             min_rerank_score=float(
                 os.getenv("SCHOLAR_AGENT_MIN_RERANK_SCORE", str(cls.min_rerank_score)),
-            ),
-            recovery_mode=os.getenv(
-                "SCHOLAR_AGENT_RECOVERY_MODE",
-                cls.recovery_mode,
             ),
             data_dir=Path(os.getenv("SCHOLAR_AGENT_DATA_DIR", str(cls.data_dir))),
         )

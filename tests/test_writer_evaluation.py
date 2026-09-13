@@ -86,7 +86,7 @@ def test_prepare_freezes_identical_policy_sources_and_requirement_text(frozen_ex
     for sample in inputs["samples"]:
         flat, board = (sample["prompts"][variant] for variant in experiment.VARIANTS)
         assert flat.split("Question:")[0] == board.split("Question:")[0]
-        assert "Prefer the shortest answer that fully satisfies the user's intent" in flat
+        assert "infer the smallest set of claims needed" in flat
         assert "Candidate supporting evidence:" not in flat
         assert "Requirement–Evidence Blackboard:" not in flat
         assert "Requirement–Evidence Blackboard:" in board

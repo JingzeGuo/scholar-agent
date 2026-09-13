@@ -16,7 +16,7 @@ LOGGER = logging.getLogger(__name__)
 SAFE_ABSTENTION = "The supplied evidence is insufficient to provide a citation-grounded answer."
 
 
-def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
+def _writer_context(state: AgentState) -> str:
     evidence_by_id = {item["id"]: item for item in state["evidence"]}
 
     def passage(evidence_id: str) -> str:
@@ -47,14 +47,6 @@ def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
             f"Missing: {missing}{recovery}"
         )
 
-    if not use_evidence_board:
-        requirements = "\n\n".join(
-            f"Requirement {item['id']}:\n{item['description']}{assessment(item['id'])}"
-            for item in state["plan"]["requirements"]
-        )
-        evidence = "\n\n".join(passage(evidence_id) for evidence_id in evidence_by_id)
-        return f"Requirements:\n{requirements}\n\nEvidence:\n{evidence}"
-
     blocks = []
     assigned_ids: set[str] = set()
     for requirement_id, entry in state["evidence_board"].items():
@@ -75,55 +67,43 @@ def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
     return "Requirement–Evidence Blackboard:\n" + "\n\n".join(blocks)
 
 
-def _writer_prompt(state: AgentState, *, use_evidence_board: bool = True) -> str:
-    """Keep answer policy identical when ablating only the evidence layout."""
-    context = _writer_context(state, use_evidence_board)
+def _render_writer_prompt(question: str, context: str) -> str:
+    """Render the production answer policy around a prepared evidence context."""
     return f"""You are the Writer in an evidence-grounded research workflow.
 
 Answer in English using only the supplied evidence.
-Output only directly supported factual answers. Mention an evidence gap only if it prevents you
-from answering an important part of the user's question; do not report peripheral gaps.
-Start with the first supported claim and its
-citation; do not add an introductory overview, thesis sentence, or uncited opening summary.
-Every sentence that identifies, describes, compares, or concludes something factual must contain
-at least one directly supporting [E1], [E2], ... reference immediately before its punctuation.
-This rule also applies to short opening sentences, bullet items, transitions, and restatements.
-Do not end with a summary or conclusion that repeats factual claims. End after the last supported,
-cited detail. If a concluding sentence is essential, cite that sentence independently.
-For multiple sources, write adjacent references like [E1][E5].
-Use only citations that directly support the sentence, and repeat a citation whenever another
-factual sentence requires it.
-Do not use evidence IDs that were not supplied.
-Do not substitute related methods for explicitly named targets.
-Respect constraints in the original question only when supported by evidence.
-Answer only supported aspects and do not fill missing gaps from memory.
 Requirements are research scaffolding, not an answer outline. Structure the final answer around
-the original user question. Treat the supplied evidence as a candidate support pool and use only
-the subset needed to answer clearly and directly. Do not mention a fact merely because supporting
-evidence is available. Prefer the shortest answer that fully satisfies the user's intent.
-Match the depth and length of the answer to the user's actual request. Keep simple definitions,
-facts, and introductory questions brief; add detail only when the question requires it.
+the original question. Before writing, infer the smallest set of claims needed to satisfy it.
+Use only the necessary subset of the candidate evidence. Add a sentence only when it answers a
+distinct requested aspect that has not already been answered; evidence availability alone is not
+a reason to add background, benefits, implications, or paraphrases. Stop when the request is
+answered, keeping simple definitions, facts, and introductory questions brief.
+
+Every factual sentence must have a directly supporting [E1], [E2], ... reference immediately
+before its punctuation. Use only supplied evidence IDs; for multiple passages, write adjacent
+references such as [E1][E5]. A citation supports only the sentence in which it appears.
+Do not fill gaps from memory or substitute related methods for explicitly named targets.
 If the question uses an acronym or named entity without disambiguating context and the candidate
 evidence supports multiple identities, state that it is ambiguous and briefly distinguish the
 relevant meanings. Do not select one identity merely because its passage has the highest score.
-When a Controller coverage assessment is supplied, use it instead of redoing the initial coverage
-analysis. If recovery ran afterward, check only whether the recovered candidates resolve its listed
-gap. The status itself does not need to be mentioned. Check the cited passage before making each
-factual claim: requirement–evidence links identify candidates but do not prove textual support. The
-same evidence ID always identifies the same passage, and evidence linked elsewhere may be cited.
-Evidence-gap statements need no citation. Do not invent facts or evidence IDs to fill a gap, and
-do not turn missing support into a claim that the information does not exist in the corpus or
-elsewhere.
-Before returning, inspect every sentence: delete any factual sentence that lacks its own adjacent
-evidence reference. A citation in a neighboring sentence never supports an uncited sentence.
+Use a supplied Controller assessment instead of repeating its coverage analysis, while still
+checking that each cited passage directly supports your claim. If recovery ran, check only whether
+the recovered candidates resolve the listed gap. Mention a gap only when it blocks an important
+part of the requested answer; never claim that missing support means the information does not exist.
+Start directly with the first supported claim, without an overview, and do not repeat the answer in
+a conclusion. Before returning, delete any unsupported factual sentence.
 
 If no supplied evidence supports any requested factual answer, return exactly:
 {SAFE_ABSTENTION}
 
-Question: {state["question"]}
+Question: {question}
 
 {context}
 """
+
+
+def _writer_prompt(state: AgentState) -> str:
+    return _render_writer_prompt(state["question"], _writer_context(state))
 
 
 def writer_node(state: AgentState, llm: LLMClient) -> dict:

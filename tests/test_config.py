@@ -6,8 +6,6 @@ from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 import scholar_agent
 import scholar_agent.llm as llm_module
 from scholar_agent import config
@@ -34,22 +32,6 @@ def test_config_loads_dotenv_on_import(monkeypatch, tmp_path: Path) -> None:
 
     assert os.getenv("SCHOLAR_AGENT_TEST_DOTENV") == "loaded"
     assert config.Settings.from_env().min_rerank_score == 0.25
-
-
-def test_config_rejects_unknown_recovery_mode() -> None:
-    with pytest.raises(ValueError, match="Unknown recovery mode"):
-        Settings(recovery_mode="automatic")
-
-
-def test_controller_is_the_default_recovery_mode(monkeypatch) -> None:
-    monkeypatch.delenv("SCHOLAR_AGENT_RECOVERY_MODE", raising=False)
-
-    assert Settings().recovery_mode == "controller"
-    assert Settings.from_env().recovery_mode == "controller"
-
-    monkeypatch.setenv("SCHOLAR_AGENT_RECOVERY_MODE", "none")
-
-    assert Settings.from_env().recovery_mode == "none"
 
 
 def test_llm_client_uses_provider_specific_default_models(monkeypatch) -> None:
