@@ -54,9 +54,16 @@ def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
 def _writer_prompt(state: AgentState, *, use_evidence_board: bool = True) -> str:
     """Keep answer policy identical when ablating only the evidence layout."""
     context = _writer_context(state, use_evidence_board)
+    length_policy = ""
+    if state["plan"].get("answer_length") == "short":
+        length_policy = """
+This is a low-complexity definition question. Give the definition first, keep the entire answer
+to 2–5 sentences, and do not broaden it into history, surveys, benchmarks, or adjacent methods.
+"""
     return f"""You are the Writer in an evidence-grounded research workflow.
 
 Answer in English using only the supplied evidence.
+{length_policy}
 Output only directly supported factual answers and brief evidence-gap statements.
 Start with the first supported claim and its
 citation; do not add an introductory overview, thesis sentence, or uncited opening summary.

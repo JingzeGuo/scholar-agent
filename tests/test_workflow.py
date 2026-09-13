@@ -6,6 +6,7 @@ import pytest
 
 import scholar_agent.reranker
 import scholar_agent.workflow as workflow_module
+from scholar_agent.agents.planner import MIN_TOP_K
 from scholar_agent.agents.writer import SAFE_ABSTENTION
 from scholar_agent.config import Settings
 from scholar_agent.models import AgentState
@@ -63,6 +64,8 @@ class FakeLLM:
                 }],
             }
         return {
+            "intent": "explanation",
+            "complexity": "medium",
             "requirements": [
                 {
                     "description": "Answer the requested evidence question",
@@ -95,6 +98,26 @@ class ControllerLLM(FakeLLM):
                     "query": "Self-RAG and adjacent correction evidence",
                 },
             }],
+        }
+
+
+class DefinitionLLM(FakeLLM):
+    def complete_json(self, prompt: str) -> dict:
+        self.json_calls += 1
+        if "Evidence-Gap Controller" in prompt:
+            raise AssertionError("low-budget definitions must skip the Controller LLM")
+        return {
+            "intent": "definition",
+            "complexity": "low",
+            "requirements": [
+                {
+                    "description": "Define agentic RAG briefly",
+                    "targets": ["agentic rag"],
+                    "query": "agentic rag",
+                    "retrieval_strategy": "bm25",
+                    "top_k": 4,
+                },
+            ],
         }
 
 
@@ -171,6 +194,35 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
             "top_k": 6,
         },
     ]
+
+
+def test_simple_definition_uses_one_small_retrieval_and_no_controller_call(
+    sample_chunks: list[dict],
+    monkeypatch: Any,
+) -> None:
+    engine = FakeEngine(sample_chunks[:1])
+    monkeypatch.setattr(
+        scholar_agent.reranker,
+        "_cross_encoder",
+        lambda model: FakeCrossEncoder(),
+    )
+    llm = DefinitionLLM()
+
+    result = run_question(
+        "do u know agentic rag",
+        engine,  # type: ignore[arg-type]
+        Settings(),
+        llm,  # type: ignore[arg-type]
+    )
+
+    assert result["plan"]["intent"] == "definition"
+    assert result["plan"]["complexity"] == "low"
+    assert result["plan"]["max_recovery_actions"] == 0
+    assert engine.sparse_calls == [(["agentic rag"], MIN_TOP_K)]
+    assert engine.dense_calls == []
+    assert llm.json_calls == 1
+    assert "keep the entire answer\nto 2–5 sentences" in llm.last_prompt
+    assert result["controller_trace"]["actions"] == []
 
 
 def test_fixed_hybrid_workflow_ignores_planner_strategy(

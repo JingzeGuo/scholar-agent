@@ -150,6 +150,77 @@ def test_planner_accepts_all_supported_retrieval_strategies() -> None:
     assert "do not predict the answer" in llm.last_prompt
 
 
+def test_planner_routes_simple_definition_to_one_low_budget_requirement() -> None:
+    llm = StubLLM(
+        {
+            "intent": "definition",
+            "complexity": "low",
+            "requirements": [
+                {
+                    "description": "Define agentic RAG briefly",
+                    "targets": ["agentic rag"],
+                    "query": "agentic RAG",
+                    "retrieval_strategy": "bm25",
+                    "top_k": 12,
+                },
+                {
+                    "description": "Review the history of agentic RAG",
+                    "targets": ["agentic rag"],
+                    "query": "agentic RAG history",
+                    "retrieval_strategy": "hybrid",
+                    "top_k": 12,
+                },
+            ],
+        },
+    )
+
+    plan = planner_node(initial_state("do u know agentic rag"), llm)["plan"]  # type: ignore[arg-type]
+
+    assert plan == {
+        "intent": "definition",
+        "complexity": "low",
+        "research_budget": "low",
+        "max_recovery_actions": 0,
+        "answer_length": "short",
+        "requirements": [
+            requirement(
+                "R1",
+                "Define agentic RAG briefly",
+                ["agentic rag"],
+                "agentic RAG",
+                "bm25",
+                MIN_TOP_K,
+            ),
+        ],
+    }
+    assert "classify what the user is asking" in llm.last_prompt.casefold()
+
+
+def test_planner_keeps_llm_classified_compound_question_on_normal_budget() -> None:
+    llm = StubLLM(
+        {
+            "intent": "comparison",
+            "complexity": "medium",
+            "requirements": [
+                {
+                    "description": "Compare Alpha and Beta",
+                    "targets": ["Alpha", "Beta"],
+                    "query": "Alpha Beta comparison",
+                    "retrieval_strategy": "hybrid",
+                    "top_k": 8,
+                },
+            ],
+        },
+    )
+
+    planner_node(
+        initial_state("What is Alpha, and how does it compare with Beta?"),
+        llm,  # type: ignore[arg-type]
+    )["plan"]
+
+    assert "User question" in llm.last_prompt
+
+
 @pytest.mark.parametrize("strategy", [None, "sparse", "", 42])
 def test_planner_invalid_or_missing_strategy_falls_back_to_hybrid(
     strategy: object,

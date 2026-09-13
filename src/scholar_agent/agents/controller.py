@@ -74,6 +74,14 @@ class ControllerPayload(_ControllerModel):
     assessments: list[object]
 
 
+def _action_limit(state: AgentState) -> int:
+    """Return the plan's bounded recovery budget, defaulting to current behavior."""
+    value = state["plan"].get("max_recovery_actions", MAX_ACTIONS)
+    if not isinstance(value, int) or isinstance(value, bool):
+        return MAX_ACTIONS
+    return min(MAX_ACTIONS, max(0, value))
+
+
 def _rejection(raw: object, reason: str) -> dict:
     action = raw if isinstance(raw, dict) else {}
     nested = action.get("action")
@@ -90,6 +98,7 @@ def _rejection(raw: object, reason: str) -> dict:
 
 
 def _controller_prompt(state: AgentState) -> str:
+    action_limit = _action_limit(state)
     evidence = {item["id"]: item for item in state["evidence"]}
     blocks = []
     for requirement in state["plan"]["requirements"]:
@@ -129,7 +138,7 @@ Each assessment must contain exactly: requirement_id, status, covered, missing, 
 - missing: support is missing and one bounded follow-up may help; missing and action are required.
 - unresolved: support is missing but no displayed bounded action can target it; action is null.
 
-Across all assessments, use at most {MAX_ACTIONS} non-null actions and at most one per requirement.
+Across all assessments, use at most {action_limit} non-null actions and at most one per requirement.
 Each action contains a tool from {sorted(ACTIONS)} and a concise evidence-seeking query.
 
 - search_within_paper: provide `"tool": "search_within_paper"` and `"candidate_id": "P1"` by
@@ -197,6 +206,7 @@ def _trace_action(requirement_id: str, action: dict) -> dict:
 
 def board_recovery_actions(state: AgentState) -> list[dict]:
     """Return executable actions from the canonical requirement Blackboard."""
+    action_limit = _action_limit(state)
     actions = []
     for requirement in state["plan"]["requirements"]:
         requirement_id = requirement["id"]
@@ -208,7 +218,7 @@ def board_recovery_actions(state: AgentState) -> list[dict]:
             and action.get("state", "pending") == "pending"
         ):
             actions.append(_trace_action(requirement_id, action))
-    return actions
+    return actions[:action_limit]
 
 
 def sanitize_assessments(
@@ -227,6 +237,7 @@ def sanitize_assessments(
     actions = []
     rejections = []
     seen = set()
+    action_limit = _action_limit(state)
     for raw in raw_assessments:
         try:
             parsed = RequirementAssessment.model_validate(raw)
@@ -246,7 +257,7 @@ def sanitize_assessments(
         seen.add(requirement_id)
         if not parsed.action:
             continue
-        if len(actions) >= MAX_ACTIONS:
+        if len(actions) >= action_limit:
             rejections.append(_rejection(raw, "action_limit"))
             assessment["status"] = "unresolved"
             continue
@@ -269,6 +280,16 @@ def sanitize_assessments(
 
 def controller_node(state: AgentState, llm: LLMClient) -> dict:
     """Choose zero to two valid actions from one retrieval observation."""
+    if _action_limit(state) == 0:
+        LOGGER.info("[controller] skipped because recovery budget is zero")
+        return {
+            "controller_trace": {
+                "actions": [],
+                "rejected_actions": 0,
+                "rejections": [],
+            },
+        }
+
     try:
         payload = llm.complete_json(_controller_prompt(state))
     except ValueError:
