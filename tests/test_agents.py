@@ -147,6 +147,11 @@ def test_planner_accepts_all_supported_retrieval_strategies() -> None:
     assert "Exact paper titles, acronyms" in llm.last_prompt
     assert "Conceptual mechanisms" in llm.last_prompt
     assert "Ambiguous comparisons" in llm.last_prompt
+    assert "potentially ambiguous named entity" in llm.last_prompt
+    assert "domain-relevant meaning or meanings" in llm.last_prompt
+    assert "neutral entity-category terms" in llm.last_prompt
+    assert "surface competing identities" in llm.last_prompt
+    assert "what's CRAG" not in llm.last_prompt
     assert "do not predict the answer" in llm.last_prompt
 
 
@@ -781,6 +786,7 @@ def test_writer_uses_board_without_renumbering_or_hiding_selected_evidence(
     assert "Requirements are research scaffolding, not an answer outline" in prompt
     assert "use only\nthe subset needed to answer clearly and directly" in prompt
     assert "Do not mention a fact merely because supporting\nevidence is available" in prompt
+    assert "Do not select one identity merely because its passage has the highest score" in prompt
     assert "use it instead of redoing the initial coverage" in prompt
     assert "do not report peripheral gaps" in prompt
     assert "explicitly state which remaining requirements lack" not in prompt

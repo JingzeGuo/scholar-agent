@@ -221,6 +221,14 @@ Rules:
 - Open-ended discovery requirements may have an empty targets list.
 - Each query must target its own requirement rather than state a conclusion or answer the question.
 - Choose the strategy from the nature of the requirement rather than always choosing hybrid.
+- For a short acronym or potentially ambiguous named entity, do not assume one meaning when the
+  user provides no disambiguating context. Make the requirement identify and define its
+  domain-relevant meaning or meanings. Build the retrieval query from the original acronym, the
+  spelled-out domain, and neutral entity-category terms such as "method", "benchmark", "dataset",
+  or "framework" so retrieval can surface competing identities. Do not use only metalinguistic
+  words such as "meaning", "identity", or "expansion". The target must still be copied from the
+  question, but surrounding domain acronyms may be expanded in the retrieval query for
+  disambiguation.
 - Exact paper titles, acronyms, and exact method names may favor BM25.
 - Conceptual mechanisms and semantic descriptions may favor dense retrieval.
 - Ambiguous comparisons or mixed lexical-semantic needs may favor hybrid retrieval.
@@ -282,4 +290,10 @@ def planner_node(state: AgentState, llm: LLMClient) -> dict:
         len(requirement_targets(plan["requirements"])),
         ",".join(item["retrieval_strategy"] for item in plan["requirements"]),
     )
+    for requirement in plan["requirements"]:
+        LOGGER.info(
+            "[planner] %s query=%s",
+            requirement["id"],
+            requirement["query"],
+        )
     return {"plan": plan}

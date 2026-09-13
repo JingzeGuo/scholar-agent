@@ -108,6 +108,9 @@ Requirements are research scaffolding, not an answer outline. Structure the fina
 the original user question. Treat the supplied evidence as a candidate support pool and use only
 the subset needed to answer clearly and directly. Do not mention a fact merely because supporting
 evidence is available. Prefer the shortest answer that fully satisfies the user's intent.
+If the question uses an acronym or named entity without disambiguating context and the candidate
+evidence supports multiple identities, state that it is ambiguous and briefly distinguish the
+relevant meanings. Do not select one identity merely because its passage has the highest score.
 When a Controller coverage assessment is supplied, use it instead of redoing the initial coverage
 analysis. If recovery ran afterward, check only whether the recovered candidates resolve its listed
 gap. The status itself does not need to be mentioned. Check the cited passage before making each
