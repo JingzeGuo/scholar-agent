@@ -153,7 +153,6 @@ def test_adaptive_workflow_reaches_writer_and_validates_citations(
         llm,  # type: ignore[arg-type]
     )
 
-    assert result["retrieval_mode"] == "adaptive"
     assert result["recovery_mode"] == "controller"
     assert engine.sparse_calls == [(["Self-RAG CRAG retrieval"], 6)]
     assert engine.dense_calls == []
@@ -257,30 +256,6 @@ def test_conversation_route_skips_the_research_workflow() -> None:
     assert llm.complete_calls == 0
     assert result["evidence"] == []
     assert result["controller_trace"]["actions"] == []
-
-
-def test_fixed_hybrid_workflow_ignores_planner_strategy(
-    sample_chunks: list[dict],
-    monkeypatch: Any,
-) -> None:
-    engine = FakeEngine(sample_chunks[:2])
-    monkeypatch.setattr(
-        scholar_agent.reranker,
-        "_cross_encoder",
-        lambda model: FakeCrossEncoder(),
-    )
-
-    result = run_question(
-        "Compare Self-RAG and CRAG",
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        FakeLLM(),  # type: ignore[arg-type]
-        retrieval_mode="fixed_hybrid",
-    )
-
-    assert engine.sparse_calls == [(["Self-RAG CRAG retrieval"], 6)]
-    assert engine.dense_calls == [(["Self-RAG CRAG retrieval"], 6)]
-    assert result["retrieval_trace"][0]["retrieval_strategy"] == "hybrid"
 
 
 def test_shared_plan_skips_planner_and_is_not_mutated(
@@ -392,12 +367,11 @@ def test_run_question_starts_with_the_selected_initial_state(monkeypatch: Any) -
     result = run_question(
         "question",
         FakeEngine([]),  # type: ignore[arg-type]
-        Settings(retrieval_mode="fixed_hybrid"),
+        Settings(),
         FakeLLM(),  # type: ignore[arg-type]
     )
 
-    assert captured == [initial_state("question", "fixed_hybrid", "controller")]
-    assert result["retrieval_mode"] == "fixed_hybrid"
+    assert captured == [initial_state("question")]
     assert result["recovery_mode"] == "controller"
 
 
@@ -407,7 +381,6 @@ def test_initial_state_is_minimal_and_does_not_invent_requirements() -> None:
     assert state == {
         "question": "question",
         "route": "research",
-        "retrieval_mode": "adaptive",
         "recovery_mode": "controller",
         "plan": {"requirements": []},
         "evidence": [],
@@ -435,20 +408,6 @@ def test_workflow_requires_an_llm() -> None:
         build_workflow(FakeEngine([]), Settings(), None)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("entrypoint", ["build", "initial"])
-def test_workflow_rejects_unknown_retrieval_mode(entrypoint: str) -> None:
-    with pytest.raises(ValueError, match="Unknown retrieval mode"):
-        if entrypoint == "build":
-            build_workflow(  # type: ignore[arg-type]
-                FakeEngine([]),
-                Settings(),
-                FakeLLM(),  # type: ignore[arg-type]
-                retrieval_mode="automatic",
-            )
-        else:
-            initial_state("question", "automatic")
-
-
 def test_workflow_rejects_unknown_recovery_mode() -> None:
     with pytest.raises(ValueError, match="Unknown recovery mode"):
         build_workflow(  # type: ignore[arg-type]
@@ -460,7 +419,6 @@ def test_agent_state_contains_only_live_workflow_fields() -> None:
     assert set(AgentState.__annotations__) == {
         "question",
         "route",
-        "retrieval_mode",
         "recovery_mode",
         "plan",
         "evidence",

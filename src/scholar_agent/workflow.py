@@ -23,15 +23,11 @@ def build_workflow(
     settings: Settings,
     llm: LLMClient | None,
     *,
-    retrieval_mode: str | None = None,
     recovery_mode: str | None = None,
     shared_plan: dict | None = None,
 ) -> Any:
     if llm is None:
         raise ValueError("llm is required")
-    mode = retrieval_mode or settings.retrieval_mode
-    if mode not in {"fixed_hybrid", "adaptive"}:
-        raise ValueError(f"Unknown retrieval mode: {mode}")
     recovery = recovery_mode or settings.recovery_mode
     if recovery not in {"none", "controller"}:
         raise ValueError(f"Unknown recovery mode: {recovery}")
@@ -72,17 +68,13 @@ def build_workflow(
 
 def initial_state(
     question: str,
-    retrieval_mode: str = "adaptive",
     recovery_mode: str = "controller",
 ) -> AgentState:
-    if retrieval_mode not in {"fixed_hybrid", "adaptive"}:
-        raise ValueError(f"Unknown retrieval mode: {retrieval_mode}")
     if recovery_mode not in {"none", "controller"}:
         raise ValueError(f"Unknown recovery mode: {recovery_mode}")
     return {
         "question": question,
         "route": "research",
-        "retrieval_mode": retrieval_mode,
         "recovery_mode": recovery_mode,
         "plan": {
             "requirements": [],
@@ -107,20 +99,17 @@ def run_question(
     settings: Settings,
     llm: LLMClient | None,
     *,
-    retrieval_mode: str | None = None,
     recovery_mode: str | None = None,
     shared_plan: dict | None = None,
 ) -> AgentState:
-    mode = retrieval_mode or settings.retrieval_mode
     recovery = recovery_mode or settings.recovery_mode
-    state = initial_state(question, mode, recovery)
+    state = initial_state(question, recovery_mode=recovery)
     if shared_plan is not None:
         state["plan"] = deepcopy(shared_plan)
     result = build_workflow(
         engine,
         settings,
         llm,
-        retrieval_mode=mode,
         recovery_mode=recovery,
         shared_plan=shared_plan,
     ).invoke(state)

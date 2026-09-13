@@ -209,16 +209,13 @@ def _planned_queries(plan: dict) -> tuple[list[str], list[list[str]]]:
     return queries, query_requirement_ids
 
 
-def _retrieval_requests(plan: dict, retrieval_mode: str) -> list[dict]:
-    if retrieval_mode not in {"fixed_hybrid", "adaptive"}:
-        raise ValueError(f"Unknown retrieval mode: {retrieval_mode}")
-
+def _retrieval_requests(plan: dict) -> list[dict]:
     requests: list[dict] = []
     for requirement in plan["requirements"]:
         planned_strategy = requirement.get("retrieval_strategy")
         strategy = (
             planned_strategy
-            if retrieval_mode == "adaptive" and planned_strategy in RETRIEVAL_STRATEGIES
+            if planned_strategy in RETRIEVAL_STRATEGIES
             else "hybrid"
         )
         requests.append(
@@ -425,7 +422,7 @@ def researcher_node(
     """Execute each planned retrieval strategy, then rerank and select evidence."""
     plan = state["plan"]
     queries, query_requirement_ids = _planned_queries(plan)
-    requests = _retrieval_requests(plan, state["retrieval_mode"])
+    requests = _retrieval_requests(plan)
     requirement_rankings, source_rankings = _execute_retrieval(engine, requests)
     sparse_rankings = [
         ranking
@@ -438,9 +435,8 @@ def researcher_node(
         if request["retrieval_strategy"] == "dense"
     ]
     LOGGER.info(
-        "[researcher] mode=%s queries=%d single_bm25=%d single_dense=%d hybrid=%d "
+        "[researcher] queries=%d single_bm25=%d single_dense=%d hybrid=%d "
         "candidates=%d",
-        state["retrieval_mode"],
         len(queries),
         len(sparse_rankings),
         len(dense_rankings),

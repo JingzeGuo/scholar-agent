@@ -20,7 +20,6 @@ class Settings:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     min_rerank_score: float = -1.0
-    retrieval_mode: str = "adaptive"
     recovery_mode: str = "controller"
     data_dir: Path = Path("data")
 
@@ -33,8 +32,6 @@ class Settings:
             raise ValueError("reranker_model cannot be empty")
         if not math.isfinite(self.min_rerank_score):
             raise ValueError("min_rerank_score must be finite")
-        if self.retrieval_mode not in {"fixed_hybrid", "adaptive"}:
-            raise ValueError(f"Unknown retrieval mode: {self.retrieval_mode}")
         if self.recovery_mode not in {"none", "controller"}:
             raise ValueError(f"Unknown recovery mode: {self.recovery_mode}")
 
@@ -52,10 +49,6 @@ class Settings:
             ),
             min_rerank_score=float(
                 os.getenv("SCHOLAR_AGENT_MIN_RERANK_SCORE", str(cls.min_rerank_score)),
-            ),
-            retrieval_mode=os.getenv(
-                "SCHOLAR_AGENT_RETRIEVAL_MODE",
-                cls.retrieval_mode,
             ),
             recovery_mode=os.getenv(
                 "SCHOLAR_AGENT_RECOVERY_MODE",

@@ -391,40 +391,13 @@ def test_target_matching_preserves_method_identity() -> None:
     )
 
 
-def _state_with(requirements: list[dict], mode: str = "adaptive") -> dict:
-    state = initial_state("Compare Self-RAG and CRAG", mode)
+def _state_with(requirements: list[dict]) -> dict:
+    state = initial_state("Compare Self-RAG and CRAG")
     state["plan"] = {"requirements": requirements}
     return state
 
 
-def test_fixed_hybrid_mode_always_runs_bm25_and_dense(
-    sample_chunks: list[dict],
-) -> None:
-    requirements = [
-        requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self", "bm25", 4),
-        requirement("R2", "Explain CRAG", ["CRAG"], "crag", "dense", 4),
-    ]
-    engine = FakeEngine(
-        {"self": sample_chunks[:1], "crag": sample_chunks[1:2]},
-        {"self": sample_chunks[:1], "crag": sample_chunks[1:2]},
-    )
-
-    result = researcher_node(
-        _state_with(requirements, "fixed_hybrid"),  # type: ignore[arg-type]
-        engine,  # type: ignore[arg-type]
-        Settings(),
-        scored,
-    )
-
-    assert engine.sparse_calls == [(["self"], 4), (["crag"], 4)]
-    assert engine.dense_calls == [(["self", "crag"], 4)]
-    assert [item["retrieval_strategy"] for item in result["retrieval_trace"]] == [
-        "hybrid",
-        "hybrid",
-    ]
-
-
-def test_adaptive_bm25_requirement_does_not_call_dense(sample_chunks: list[dict]) -> None:
+def test_bm25_requirement_does_not_call_dense(sample_chunks: list[dict]) -> None:
     request = requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self", "bm25", 7)
     engine = FakeEngine({"self": sample_chunks[:1]}, {"self": sample_chunks[1:]})
 
@@ -440,7 +413,7 @@ def test_adaptive_bm25_requirement_does_not_call_dense(sample_chunks: list[dict]
     assert result["retrieval_trace"][0]["retrieval_strategy"] == "bm25"
 
 
-def test_adaptive_dense_requirement_does_not_call_bm25(sample_chunks: list[dict]) -> None:
+def test_dense_requirement_does_not_call_bm25(sample_chunks: list[dict]) -> None:
     request = requirement("R1", "Explain Self-RAG", ["Self-RAG"], "self", "dense", 6)
     engine = FakeEngine({"self": sample_chunks[1:]}, {"self": sample_chunks[:1]})
 
@@ -456,7 +429,7 @@ def test_adaptive_dense_requirement_does_not_call_bm25(sample_chunks: list[dict]
     assert result["retrieval_trace"][0]["retrieval_strategy"] == "dense"
 
 
-def test_adaptive_hybrid_requirement_runs_both_and_rrf(
+def test_hybrid_requirement_runs_both_and_rrf(
     sample_chunks: list[dict],
     monkeypatch: Any,
 ) -> None:

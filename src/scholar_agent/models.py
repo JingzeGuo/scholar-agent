@@ -34,7 +34,6 @@ class AgentState(TypedDict):
 
     question: str
     route: Literal["research", "conversation"]
-    retrieval_mode: str
     recovery_mode: str
     plan: dict
     evidence: list[dict]

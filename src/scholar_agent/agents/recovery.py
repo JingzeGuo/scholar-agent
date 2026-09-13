@@ -64,7 +64,7 @@ def _candidates(
         return engine.expand_neighbors(action["chunk_id"], radius=1), parameters
 
     recovered = {**requirement, "query": action["query"], "top_k": MAX_TOP_K}
-    requests = _retrieval_requests({"requirements": [recovered]}, state["retrieval_mode"])
+    requests = _retrieval_requests({"requirements": [recovered]})
     rankings, sources = _execute_retrieval(engine, requests)
     request = requests[0]
     parameters = {**request, "from_top_k": requirement["top_k"]}

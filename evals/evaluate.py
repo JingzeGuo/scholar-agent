@@ -346,13 +346,14 @@ def _trace(
     state: dict[str, Any],
     planner_latency: float,
     planner_llm_calls: int,
+    retrieval_variant: str | None = None,
 ) -> dict[str, Any]:
     return {
         "plan": state.get("plan"),
         "evidence_board": state.get("evidence_board", {}),
         "shared_planner_latency_seconds": round(planner_latency, 4),
         "shared_planner_llm_calls": planner_llm_calls,
-        "retrieval_mode": state.get("retrieval_mode"),
+        "retrieval_mode": retrieval_variant,
         "recovery_mode": state.get("recovery_mode", "none"),
         "retrieval_decisions": state.get("retrieval_trace", []),
         "controller": state.get("controller_trace", {}),
@@ -455,6 +456,34 @@ def _resumable_results(
     return latest_results(existing)
 
 
+def run_retrieval_variant(
+    question: str,
+    engine: RetrievalEngine,
+    settings: Settings,
+    llm: LLMClient,
+    *,
+    retrieval_mode: str,
+    shared_plan: dict,
+) -> dict:
+    """Reproduce the retired retrieval ablation without exposing it in production."""
+    effective_plan = deepcopy(shared_plan)
+    if retrieval_mode == "fixed_hybrid":
+        for requirement in effective_plan["requirements"]:
+            requirement["retrieval_strategy"] = "hybrid"
+    elif retrieval_mode != "adaptive":
+        raise EvaluationError(f"Unknown evaluation retrieval variant: {retrieval_mode}")
+
+    state = run_question(
+        question,
+        engine,
+        settings,
+        llm,
+        shared_plan=effective_plan,
+    )
+    state["plan"] = deepcopy(shared_plan)
+    return state
+
+
 def run_evaluation(
     questions: Sequence[dict[str, Any]],
     engine: RetrievalEngine,
@@ -464,7 +493,7 @@ def run_evaluation(
     *,
     run_id: str = "legacy",
     pipeline_version: str = PIPELINE_VERSION,
-    workflow_runner: Callable[..., dict] = run_question,
+    workflow_runner: Callable[..., dict] = run_retrieval_variant,
     planner_runner: Callable[..., dict] = planner_node,
 ) -> None:
     """Run both retrieval modes from one shared, sanitized plan per question."""
@@ -541,6 +570,7 @@ def run_evaluation(
                         state,
                         planner_latency,
                         planner_llm_calls,
+                        retrieval_mode,
                     ),
                 )
                 result["requirement_metrics"] = requirement_stage_metrics(question, result)
