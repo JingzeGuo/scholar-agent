@@ -101,12 +101,12 @@ def sanitize_top_k(value: object) -> int:
 
 
 class _PlannerModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
 
 class PlannedRequirement(_PlannerModel):
     description: NonEmptyString
-    targets: list[NonEmptyString] = Field(max_length=MAX_TARGETS_PER_REQUIREMENT)
+    targets: list[object] = Field(default_factory=list)
     query: NonEmptyString | None = None
     retrieval_strategy: Literal["bm25", "dense", "hybrid"] = "hybrid"
     top_k: int = Field(default=DEFAULT_TOP_K, ge=MIN_TOP_K, le=MAX_TOP_K)
@@ -152,10 +152,12 @@ def _requirements(
         except ValidationError:
             continue
 
-        supplied_targets = _unique_strings(parsed.targets, MAX_TARGETS_PER_REQUIREMENT)
-        targets = _explicit_targets(parsed.targets, question)
-        if len(targets) != len(supplied_targets):
-            continue
+        supplied_targets = [
+            value.strip()
+            for value in parsed.targets
+            if isinstance(value, str) and value.strip()
+        ]
+        targets = _explicit_targets(supplied_targets, question)
 
         description = parsed.description
         identity = (description.casefold(), tuple(target.casefold() for target in targets))

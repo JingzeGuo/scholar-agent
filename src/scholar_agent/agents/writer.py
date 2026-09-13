@@ -27,9 +27,29 @@ def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
         section = f" — {item['section']}" if item.get("section") else ""
         return f"[{evidence_id}] {source} — p.{item['page']}{section}\n{item['text']}"
 
+    def assessment(requirement_id: str) -> str:
+        entry = state["evidence_board"].get(requirement_id, {})
+        if entry.get("status", "unknown") == "unknown":
+            return ""
+        covered = "; ".join(entry.get("covered", [])) or "None identified"
+        missing = "; ".join(entry.get("missing", [])) or "None"
+        action = entry.get("action")
+        recovery = ""
+        if isinstance(action, dict) and action.get("state") == "executed":
+            recovery = (
+                "\nRecovery: executed after this assessment; check only whether the recovered "
+                "candidate passages resolve the listed missing aspect."
+            )
+        return (
+            "\nController coverage assessment:\n"
+            f"Status: {entry['status']}\n"
+            f"Covered: {covered}\n"
+            f"Missing: {missing}{recovery}"
+        )
+
     if not use_evidence_board:
         requirements = "\n\n".join(
-            f"Requirement {item['id']}:\n{item['description']}"
+            f"Requirement {item['id']}:\n{item['description']}{assessment(item['id'])}"
             for item in state["plan"]["requirements"]
         )
         evidence = "\n\n".join(passage(evidence_id) for evidence_id in evidence_by_id)
@@ -42,12 +62,16 @@ def _writer_context(state: AgentState, use_evidence_board: bool) -> str:
         assigned_ids.update(evidence_ids)
         supporting = "\n\n".join(passage(evidence_id) for evidence_id in evidence_ids)
         blocks.append(
-            f"Requirement {requirement_id}:\n{entry['requirement']}\n\nSupporting evidence:\n"
+            f"Requirement {requirement_id}:\n{entry['requirement']}"
+            f"{assessment(requirement_id)}\n\nCandidate supporting evidence:\n"
             + (supporting or "No matching evidence selected for this requirement."),
         )
     unassigned = [passage(evidence_id) for evidence_id in evidence_by_id if evidence_id not in assigned_ids]
     if unassigned:
-        blocks.append("Additional selected evidence (no requirement match):\n" + "\n\n".join(unassigned))
+        blocks.append(
+            "Additional candidate evidence (not linked to a requirement):\n"
+            + "\n\n".join(unassigned),
+        )
     return "Requirement–Evidence Blackboard:\n" + "\n\n".join(blocks)
 
 
@@ -64,7 +88,8 @@ to 2–5 sentences, and do not broaden it into history, surveys, benchmarks, or 
 
 Answer in English using only the supplied evidence.
 {length_policy}
-Output only directly supported factual answers and brief evidence-gap statements.
+Output only directly supported factual answers. Mention an evidence gap only if it prevents you
+from answering an important part of the user's question; do not report peripheral gaps.
 Start with the first supported claim and its
 citation; do not add an introductory overview, thesis sentence, or uncited opening summary.
 Every sentence that identifies, describes, compares, or concludes something factual must contain
@@ -79,18 +104,18 @@ Do not use evidence IDs that were not supplied.
 Do not substitute related methods for explicitly named targets.
 Respect constraints in the original question only when supported by evidence.
 Answer only supported aspects and do not fill missing gaps from memory.
-Organize the answer around the user's question rather than around evidence chunks.
-Address each requirement using the supplied evidence. Any requirement–evidence links are
-retrieval relevance hints, not proof that a passage supports every part of the requirement.
-Check the passage text before making a claim. The same evidence ID always identifies the same
-passage, even when it appears under multiple requirements. You may use any supplied passage
-that directly supports the claim, including evidence listed under another requirement.
-When some requirements are supported, explicitly state which remaining requirements lack
-support in the supplied evidence. These evidence-gap statements need no citation; do not
-invent facts or evidence IDs to fill the gaps, and do not turn an empty evidence list into a
-claim that the information does not exist in the corpus or elsewhere.
-Inspect all evidence yourself, and do not claim that an item is missing when any supplied
-evidence supports it.
+Requirements are research scaffolding, not an answer outline. Structure the final answer around
+the original user question. Treat the supplied evidence as a candidate support pool and use only
+the subset needed to answer clearly and directly. Do not mention a fact merely because supporting
+evidence is available. Prefer the shortest answer that fully satisfies the user's intent.
+When a Controller coverage assessment is supplied, use it instead of redoing the initial coverage
+analysis. If recovery ran afterward, check only whether the recovered candidates resolve its listed
+gap. The status itself does not need to be mentioned. Check the cited passage before making each
+factual claim: requirement–evidence links identify candidates but do not prove textual support. The
+same evidence ID always identifies the same passage, and evidence linked elsewhere may be cited.
+Evidence-gap statements need no citation. Do not invent facts or evidence IDs to fill a gap, and
+do not turn missing support into a claim that the information does not exist in the corpus or
+elsewhere.
 Before returning, inspect every sentence: delete any factual sentence that lacks its own adjacent
 evidence reference. A citation in a neighboring sentence never supports an uncited sentence.
 

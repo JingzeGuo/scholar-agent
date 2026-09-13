@@ -23,7 +23,7 @@ Researcher
 Assessment-first Controller
    ├── sufficient ─────────────────────→ Writer
    ├── missing ─→ bounded Recovery ───→ Writer
-   └── unresolved ─────────────────────→ Writer with an explicit evidence gap
+   └── unresolved ─────────────────────→ Writer
    ↓
 Citation Validator
    ↓
@@ -178,10 +178,13 @@ actions so they cannot be selected twice.
 
 ### Writer and Citation Validator
 
-The Writer receives each requirement together with its linked evidence. It may
-use only supplied passages, must cite factual claims with evidence IDs such as
-`[E1]`, and explicitly identifies requirements that remain unsupported. An
-empty evidence set produces a deterministic abstention without a Writer call.
+The Writer receives the original question, Controller coverage assessments,
+and the full candidate evidence pool. Requirements remain research scaffolding
+rather than an answer outline: the Writer selects only the evidence needed for
+the shortest sufficient answer. It may use only supplied passages, must cite
+factual claims with evidence IDs such as `[E1]`, and mentions an evidence gap
+only when it blocks an important part of the user's request. An empty evidence
+set produces a deterministic abstention without a Writer call.
 
 The Citation Validator replaces evidence IDs with physical-page citations:
 

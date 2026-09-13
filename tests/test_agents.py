@@ -283,7 +283,7 @@ def test_planner_clamps_or_falls_back_for_invalid_top_k(
     assert plan["requirements"][0]["top_k"] == expected
 
 
-def test_planner_sanitizes_empty_queries_duplicates_and_malformed_requirements() -> None:
+def test_planner_repairs_targets_without_discarding_valid_requirements() -> None:
     plan = planner_node(
         initial_state("Explain Alpha and Beta"),
         StubLLM(
@@ -309,6 +309,7 @@ def test_planner_sanitizes_empty_queries_duplicates_and_malformed_requirements()
                         "description": "Malformed targets",
                         "targets": [42],
                         "query": "bad",
+                        "reason": "harmless extra field",
                     },
                     {
                         "description": "Invent Gamma",
@@ -322,6 +323,35 @@ def test_planner_sanitizes_empty_queries_duplicates_and_malformed_requirements()
 
     assert plan["requirements"] == [
         requirement("R1", "Explain Alpha", ["Alpha"], "Explain Alpha", "dense", 9),
+        requirement("R2", "Malformed targets", [], "bad", "hybrid", DEFAULT_TOP_K),
+        requirement("R3", "Invent Gamma", [], "Gamma", "hybrid", DEFAULT_TOP_K),
+    ]
+
+
+def test_planner_ignores_extra_payload_fields_instead_of_falling_back() -> None:
+    plan = planner_node(
+        initial_state("Define Alpha"),
+        StubLLM(
+            {
+                "intent": "definition",
+                "complexity": "low",
+                "reason": "The user asks for a short definition.",
+                "requirements": [
+                    {
+                        "description": "Define Alpha",
+                        "targets": ["Alpha", "Unstated target", None],
+                        "query": "Alpha",
+                        "retrieval_strategy": "dense",
+                        "top_k": 8,
+                        "rationale": "A semantic definition query.",
+                    },
+                ],
+            },
+        ),  # type: ignore[arg-type]
+    )["plan"]
+
+    assert plan["requirements"] == [
+        requirement("R1", "Define Alpha", ["Alpha"], "Alpha", "dense", MIN_TOP_K),
     ]
 
 
@@ -715,6 +745,18 @@ def test_writer_uses_board_without_renumbering_or_hiding_selected_evidence(
     ]
     state = _state_with(requirements)
     state["evidence"], state["evidence_board"] = _build_evidence_board(items, requirements, -1.0)
+    state["evidence_board"]["R1"].update(
+        status="sufficient",
+        covered=["CRAG correction mechanism"],
+    )
+    state["evidence_board"]["R2"].update(
+        status="sufficient",
+        covered=["Self-RAG reflection mechanism"],
+    )
+    state["evidence_board"]["R3"].update(
+        status="unresolved",
+        missing=["requested results"],
+    )
     llm = StubLLM(text="CRAG corrects retrieval [E2]. Self-RAG reflects [E1].")
 
     state.update(writer_node(state, llm))  # type: ignore[arg-type]
@@ -723,13 +765,26 @@ def test_writer_uses_board_without_renumbering_or_hiding_selected_evidence(
     assert answer == "CRAG corrects retrieval [CRAG.pdf p.2]. Self-RAG reflects [Self-RAG.pdf p.1]."
     assert llm.complete_calls == 1
     prompt = llm.last_prompt
-    assert "Requirement R1:\nExplain CRAG\n\nSupporting evidence:\n[E2] CRAG.pdf — p.2" in prompt
+    assert (
+        "Requirement R1:\nExplain CRAG\nController coverage assessment:\n"
+        "Status: sufficient\nCovered: CRAG correction mechanism\nMissing: None\n\n"
+        "Candidate supporting evidence:\n[E2] CRAG.pdf — p.2"
+    ) in prompt
     assert "[E1] Self-RAG: Learning to Retrieve (Self-RAG.pdf) — p.1 — 2. Method" in prompt
-    assert "Requirement R3:\nReport unavailable results\n\nSupporting evidence:\nNo matching evidence" in prompt
-    assert "Additional selected evidence (no requirement match):\n[E3] Other.pdf — p.3" in prompt
+    assert (
+        "Requirement R3:\nReport unavailable results\nController coverage assessment:\n"
+        "Status: unresolved\nCovered: None identified\nMissing: requested results\n\n"
+        "Candidate supporting evidence:\nNo matching evidence"
+    ) in prompt
+    assert "Additional candidate evidence (not linked to a requirement):\n[E3] Other.pdf — p.3" in prompt
     assert all(item["text"] in prompt for item in items)
-    assert "retrieval relevance hints, not proof" in prompt
-    assert "explicitly state which remaining requirements lack" in prompt
+    assert "Requirements are research scaffolding, not an answer outline" in prompt
+    assert "use only\nthe subset needed to answer clearly and directly" in prompt
+    assert "Do not mention a fact merely because supporting\nevidence is available" in prompt
+    assert "use it instead of redoing the initial coverage" in prompt
+    assert "do not report peripheral gaps" in prompt
+    assert "explicitly state which remaining requirements lack" not in prompt
+    assert "Inspect all evidence yourself" not in prompt
     assert "retrieval_strategy" not in prompt
 
 

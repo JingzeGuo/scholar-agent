@@ -321,6 +321,8 @@ def test_controller_workflow_executes_one_recovery_round(
     assert len(result["recovery_trace"]) == 1
     assert result["recovery_trace"][0]["results"][1]["added"] is True
     assert [item["chunk_id"] for item in result["evidence"]] == ["self-1", "crag-1"]
+    assert "Recovery: executed after this assessment" in llm.last_prompt
+    assert "check only whether the recovered candidate passages resolve" in llm.last_prompt
 
 
 def test_empty_evidence_produces_deterministic_abstention() -> None:
